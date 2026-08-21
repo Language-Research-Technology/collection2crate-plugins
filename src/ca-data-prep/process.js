@@ -68,6 +68,22 @@ export function mergeContinuationLines(text) {
   return merged;
 }
 
+export function splitSpeakerNameAndAffiliation(speakerText) {
+  const trimmed = String(speakerText || "").trim();
+  if (!trimmed) return { name: "", affiliation: null };
+
+  const withoutCode = trimmed.replace(/\s*#\S+\s*$/, "").trim();
+  const match = withoutCode.match(/^(.*?)(?:\s*\(([^()]+)\))\s*$/);
+
+  if (!match) {
+    return { name: withoutCode, affiliation: null };
+  }
+
+  const baseName = match[1].trim();
+  const affiliation = match[2].trim();
+  return { name: baseName, affiliation: affiliation ? `(${affiliation})` : null };
+}
+
 export function parseSpeakerBlock(lines, warnings = []) {
   const speakers = new Map();
   let inSpeakerSection = false;
@@ -95,8 +111,11 @@ export function parseSpeakerBlock(lines, warnings = []) {
     const speakerText = speakerMatch[2].trim();
     const optionalCode = speakerText.match(/(#\S+)/)?.[1] ?? null;
     const resolvedSpeakerID = optionalCode || speakerID;
+    const { name, affiliation } = splitSpeakerNameAndAffiliation(speakerText);
     speakers.set(speakerID, {
-      label: speakerText.replace(/\s*#\S+\s*$/, "").trim(),
+      label: name || speakerText.replace(/\s*#\S+\s*$/, "").trim(),
+      name,
+      affiliation,
       optionalCode,
       resolvedSpeakerID,
     });
@@ -115,9 +134,10 @@ export function buildSpeakerPersonEntities(speakerMap) {
     const entity = {
       "@id": entityId,
       "@type": "Person",
-      name: details.label || speakerID,
+      name: details.name || details.label || speakerID,
     };
 
+    if (details.affiliation) entity.affiliation = details.affiliation;
     if (details.optionalCode) entity.identifier = details.optionalCode;
     entities.push(entity);
   }

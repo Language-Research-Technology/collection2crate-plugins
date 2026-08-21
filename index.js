@@ -10,6 +10,7 @@
 import { createPlugin as createXlsxCrateInput } from "./src/xlsx-crate-input/index.js";
 import { createPlugin as createAustlang } from "./src/austlang/index.js";
 import { createPlugin as createCaDataPrep } from "./src/ca-data-prep/index.js";
+import { createPlugin as createChatExport } from "./src/chat-export/index.js";
 import { createPlugin as createMerge } from "./src/merge/index.js";
 import { createPlugin as createValidateCrate } from "./src/validate-crate/index.js";
 import { createPlugin as createJsonOutput } from "./src/ro-crate-json-output/index.js";
@@ -28,6 +29,7 @@ export const REGISTRY = {
   "xlsx-crate-input": createXlsxCrateInput,
   "austlang": createAustlang,
   "ca-data-prep": createCaDataPrep,
+  "chat-export": createChatExport,
   "merge": createMerge,
   "validate-crate": createValidateCrate,
   "ro-crate-json-output": createJsonOutput,

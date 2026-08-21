@@ -1,4 +1,10 @@
-import { buildRoCrateMetadata, processTranscriptText, extractDocumentText, buildSpeakerPersonEntities } from "./process.js";
+import {
+  buildRoCrateMetadata,
+  processTranscriptText,
+  extractDocumentText,
+  buildSpeakerPersonEntities,
+  toCsv,
+} from "./process.js";
 
 // Hook names are literal strings and writeFileAtPath (fs_helpers.js) arrives
 // via createPlugin(deps) — see this repo's README.
@@ -36,8 +42,10 @@ const plugin = {
       if (!files.length) return;
 
       const documentRecords = [];
-      for (const file of files) {
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
         const filePath = file.relativePath || file.fileName || file.name || "";
+        ctx.log(`Processing transcript document: ${index + 1}/${files.length} file(s)…`, "muted");
         let buffer = file.arrayBuffer ? await file.arrayBuffer() : null;
         if (!buffer && ctx.dirHandle && filePath) {
           buffer = await readDocxFileBytesFromDirHandle(ctx.dirHandle, filePath);
@@ -49,11 +57,7 @@ const plugin = {
         const text = await extractDocumentText(buffer);
         const result = processTranscriptText(text, ctx.options || {});
         const baseName = (file.fileName || file.name).replace(/\.docx$/i, "");
-        const csvText = (() => {
-          const lines = ["speakerID,text,section"];
-          for (const row of result.rows) lines.push(`${row.speakerID},${row.text},${row.section}`);
-          return lines.join("\n") + "\n";
-        })();
+        const csvText = toCsv(result.rows);
         const outputDirName = "c2c-output";
 
         const speakerRefs = Array.from(result.speakerMap.entries()).map(([speakerID, details]) => ({

@@ -91,6 +91,7 @@ export function generateChatText(text, config = {}) {
 const plugin = {
   name: "chat-export",
   generateChatText,
+  outputPaths: [{ path: "c2c-output", kind: "dir" }],
   optionSchema: {
     key: "generateChatFiles",
     label: "Generate CHAT (.cha) outputs",

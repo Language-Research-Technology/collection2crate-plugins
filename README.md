@@ -79,11 +79,50 @@ export function createPlugin(deps) {
 const plugin = {
   name: "my-thing",
   optionSchema: { key: "enableMyThing", label: "…", default: false },
+  // Declare every file/directory this plugin may write directly into the
+  // picked folder (root-relative path; "/" for one nested under a directory
+  // this plugin owns outright, e.g. "my-thing-output/report.csv" — not for a
+  // single file buried inside someone else's tree). See "Declaring output
+  // paths" below.
+  outputPaths: [{ path: "my-thing-output", kind: "dir" }],
   hooks: {
     "crate:built": (ctx) => { /* ... */ },
   },
 };
 ```
+
+### Declaring output paths
+
+A plugin that writes into the picked folder (rather than only reading from it,
+or only mutating `ctx.crate` in memory) should declare `outputPaths`: an array
+of `{ path, kind }`, `kind` being `"file"` or `"dir"`. chaos2crate composes
+these across every registered plugin (`composeOutputPaths()` in its
+`src/plugins/index.js`, generated alongside `composeOptionSchema`/
+`composeSettingsSchema`) for two things: excluding a previous build's own
+output from being rescanned as corpus content on the next build (the same job
+`GENERATED_FILENAMES` in chaos2crate's `crate.js` already does for the core
+JSON/xlsx/HTML outputs), and an opt-in Settings toggle that deletes all of it
+before a build runs, so stale output from a renamed or removed source file
+never lingers.
+
+Rules of thumb:
+
+- **Declare every top-level entry you write, even ones gated behind an
+  option.** The declaration describes what the plugin *may* produce across
+  its lifetime, not just what a specific run's options enable — a stale file
+  from a run where the option was on should still be found and skipped/
+  cleaned when a later run has it off. `ro-crate-html-output` declares both
+  `ro-crate-preview.html` and `ro-crate-preview_html` even though the latter
+  only appears for a multipage template.
+- **Two plugins writing into the same shared directory both declare it** —
+  `chat-export` and `ca-data-prep` both declare `{ path: "c2c-output", kind:
+  "dir" }`; chaos2crate's composition dedupes by `path`.
+- **`kind: "dir"` means chaos2crate may delete the whole subtree.** Only
+  declare a directory path when the plugin owns everything under it — don't
+  declare a directory that content files might also legitimately live in.
+- **No `outputPaths` at all is correct for a plugin that never writes to the
+  folder** — `merge`, `austlang`, `validate-crate`, and the input-analysis
+  half of every plugin all fall here; only the writing side declares.
 
 Then register it in this repo's `index.js` (`REGISTRY` for an additive
 plugin, `INPUT_REGISTRY` for a mutually-exclusive input mode), and in

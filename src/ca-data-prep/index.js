@@ -29,6 +29,7 @@ export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
 
 const plugin = {
   name: "ca-data-prep",
+  outputPaths: [{ path: "c2c-output", kind: "dir" }],
   optionSchema: {
     key: "processTranscriptDocuments",
     label: "Process plain transcript documents (.docx)",

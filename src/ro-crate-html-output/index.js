@@ -406,6 +406,10 @@ async function fetchTemplateBundle(owner, repo, ref, folderPath) {
 
 const plugin = {
   name: "ro-crate-html-output",
+  outputPaths: [
+    { path: HTML_FILE, kind: "file" },
+    { path: MULTIPAGE_DIR, kind: "dir" },
+  ],
   optionSchema: {
     key: "makeHtml", label: "Generate ro-crate-preview.html", default: true,
     children: [

@@ -16,6 +16,7 @@ export function createPlugin(deps) {
 
 const plugin = {
   name: "ro-crate-xlsx-output",
+  outputPaths: [{ path: XLSX_FILE, kind: "file" }],
   settingsSchema: {
     key: "makeXlsx", label: "Generate ro-crate-metadata.xlsx", default: true,
   },

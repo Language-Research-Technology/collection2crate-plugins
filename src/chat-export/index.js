@@ -143,8 +143,11 @@ const plugin = {
       const { documentRecords } = ctx.chatExport;
       if (!documentRecords.length) return;
 
-      for (const doc of documentRecords) {
+      const total = documentRecords.length;
+      for (let i = 0; i < total; i++) {
+        const doc = documentRecords[i];
         await writeFileAtPath(ctx.dirHandle, `${doc.outputDirName}/${doc.chatName}`, doc.chatText);
+        ctx.log(`Writing CHAT export: ${i + 1}/${total} file(s)…`, "muted");
       }
 
       ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");

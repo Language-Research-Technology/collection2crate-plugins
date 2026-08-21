@@ -19,6 +19,7 @@ export function createPlugin(deps) {
 
 const plugin = {
   name: "ro-crate-json-output",
+  outputPaths: [{ path: JSON_FILE, kind: "file" }],
   hooks: {
     "output:write": async (ctx) => {
       const { dirHandle, options, crate, log } = ctx;

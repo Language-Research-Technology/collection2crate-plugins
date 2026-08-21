@@ -13,10 +13,21 @@
 // (writeFileAtPath) — createPlugin(deps) holds onto deps and hands it to
 // docx_crate.js's configure() once the dynamic import resolves, rather than
 // importing fs_helpers.js directly (see this repo's README).
+// Mirrors docx_crate.js's own (module-private) OUTPUT_FILES_DIR_NAME — kept
+// as a literal here rather than imported, since importing docx_crate.js
+// statically would defeat the whole point of dynamic-importing it below (it
+// evaluates its mammoth/cheerio imports regardless of which export is used).
+const OUTPUT_FILES_DIR_NAME = "ro-crate-preview_files";
+
 export function createPlugin(deps) {
   return {
     name: "docx-input",
     inputMode: "docx",
+    // docx_crate.js already wipes and recreates this directory unconditionally
+    // on every build (buildCrateFromDocxFolder), so declaring it here is about
+    // scan-exclusion and the folder-wide "delete plugin output" build setting
+    // — not about docx-input needing help cleaning up after itself.
+    outputPaths: [{ path: OUTPUT_FILES_DIR_NAME, kind: "dir" }],
     async buildCrate(ctx) {
       ctx.log("Parsing structured Word documents (Heading 1/2/3 → Collections/Chapters)…", "info");
       const { buildCrateFromDocxFolder, scanDocxFolder, configure } = await import("./docx_crate.js");

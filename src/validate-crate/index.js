@@ -21,8 +21,18 @@ const plugin = {
       const { crate, selectedProfileData, log } = ctx;
       if (!selectedProfileData) return;
       try {
+        const graph = crate?.getJson?.()["@graph"] || [];
+        const entityCount = Array.isArray(graph) ? graph.length : 0;
+        log(`Validating crate against profile (${entityCount} entities)…`, "muted");
         const { validateBuiltCrate } = await loadMasp();
-        const result = await validateBuiltCrate(selectedProfileData.validator, crate);
+        // ro-crate-masp's onProgress fires once per profile class rule (not
+        // per entity — see that repo's validateTargetCrateGraph), so this
+        // stays a handful of lines even on a large crate, matching the
+        // (done/total) log convention austlang's language matcher uses to
+        // drive chaos2crate's sub-progress bar.
+        const result = await validateBuiltCrate(selectedProfileData.validator, crate, (progress) => {
+          log(`Validating crate against profile: ${progress.current}/${progress.total} rule(s)…`, "muted");
+        });
         if (result.ok) {
           log("Profile validation passed — crate conforms to the selected profile.", "ok");
         } else {

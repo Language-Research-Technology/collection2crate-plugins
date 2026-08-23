@@ -102,7 +102,13 @@ const plugin = {
         await writeFileAtPath(ctx.dirHandle, `${document.logDirName}/${document.baseName}.log.txt`, document.logText);
       }
 
-      ctx.crate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords);
+      // ctx.crate is about to be replaced wholesale below — read the selected
+      // profile's own conformsTo (already assembled by processFolder into
+      // ctx.config.rootDataset) before that happens, so the crate this
+      // builds still reflects whichever profile the user actually picked
+      // instead of silently reverting to buildRoCrateMetadata's own default.
+      const selectedConformsTo = ctx.config?.rootDataset?.conformsTo?.["@id"];
+      ctx.crate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
       ctx.sourceCount = files.length;
       ctx.log(`Built transcript crate from ${files.length} .docx file(s).`, "ok");
     },

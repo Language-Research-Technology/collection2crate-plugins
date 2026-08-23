@@ -462,7 +462,13 @@ export async function extractDocumentText(docxSource) {
   return result.value || "";
 }
 
-export function buildRoCrateMetadata(collectionName, documents) {
+// conformsTo defaults to the LDAC Collection profile's own identity (this
+// function always builds a RepositoryCollection root) rather than hardcoding
+// it — the caller (ca-data-prep's "crate:built" hook) passes through
+// whichever profile the user actually selected, so a crate built here still
+// reflects that choice instead of silently overwriting it. The default only
+// matters when nothing was selected (e.g. calling this directly, as tests do).
+export function buildRoCrateMetadata(collectionName, documents, conformsTo = "https://w3id.org/ldac/profile#Collection") {
   const crate = new ROCrate({ array: true, link: true });
   crate.addContext({ ldac: "https://w3id.org/ldac/terms#" });
   crate.addContext({ pcdm: "http://pcdm.org/models#" });
@@ -470,7 +476,7 @@ export function buildRoCrateMetadata(collectionName, documents) {
   crate.rootDataset["@id"] = "./";
   crate.rootDataset["@type"] = ["Dataset", "RepositoryCollection"];
   crate.rootDataset.name = collectionName;
-  crate.rootDataset.conformsTo = { "@id": "https://w3id.org/ldac/profile" };
+  crate.rootDataset.conformsTo = { "@id": conformsTo };
   crate.descriptor.about = { "@id": "./" };
 
   const collectionEntity = {

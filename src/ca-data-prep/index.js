@@ -29,7 +29,10 @@ export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
 
 const plugin = {
   name: "ca-data-prep",
-  outputPaths: [{ path: "c2c-output", kind: "dir" }],
+  outputPaths: [
+    { path: "c2c-output/csv", kind: "dir" },
+    { path: "c2c-output/logs", kind: "dir" },
+  ],
   optionSchema: {
     key: "processTranscriptDocuments",
     label: "Process plain transcript documents (.docx)",
@@ -59,7 +62,8 @@ const plugin = {
         const result = processTranscriptText(text, ctx.options || {});
         const baseName = (file.fileName || file.name).replace(/\.docx$/i, "");
         const csvText = toCsv(result.rows);
-        const outputDirName = "c2c-output";
+        const csvDirName = "c2c-output/csv";
+        const logDirName = "c2c-output/logs";
 
         const speakerRefs = Array.from(result.speakerMap.entries()).map(([speakerID, details]) => ({
           "@id": details.optionalCode || `#${speakerID}`,
@@ -69,11 +73,12 @@ const plugin = {
           baseName,
           docxName: file.fileName || file.name,
           csvName: `${baseName}.csv`,
-          outputDirName,
+          csvDirName,
+          logDirName,
           sourcePath: file.relativePath,
-          objectId: `./${outputDirName}/${baseName}`,
+          objectId: `./c2c-output/${baseName}`,
           docxId: file.relativePath,
-          csvId: `./${outputDirName}/${baseName}.csv`,
+          csvId: `./${csvDirName}/${baseName}.csv`,
           annotationId: `#annotation-${baseName}`,
           speakerRefs,
           persons: buildSpeakerPersonEntities(result.speakerMap),
@@ -93,8 +98,8 @@ const plugin = {
       if (!documentRecords.length) return;
 
       for (const document of documentRecords) {
-        await writeFileAtPath(ctx.dirHandle, `${document.outputDirName}/${document.baseName}.csv`, document.csvText);
-        await writeFileAtPath(ctx.dirHandle, `${document.outputDirName}/${document.baseName}.log.txt`, document.logText);
+        await writeFileAtPath(ctx.dirHandle, `${document.csvDirName}/${document.baseName}.csv`, document.csvText);
+        await writeFileAtPath(ctx.dirHandle, `${document.logDirName}/${document.baseName}.log.txt`, document.logText);
       }
 
       ctx.crate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords);

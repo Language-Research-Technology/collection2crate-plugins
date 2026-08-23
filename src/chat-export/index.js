@@ -91,7 +91,7 @@ export function generateChatText(text, config = {}) {
 const plugin = {
   name: "chat-export",
   generateChatText,
-  outputPaths: [{ path: "c2c-output", kind: "dir" }],
+  outputPaths: [{ path: "c2c-output/chat", kind: "dir" }],
   optionSchema: {
     key: "generateChatFiles",
     label: "Generate CHAT (.cha) outputs",
@@ -128,7 +128,7 @@ const plugin = {
         documentRecords.push({
           baseName,
           docxName: file.fileName || file.name,
-          outputDirName: "c2c-output",
+          chatDirName: "c2c-output/chat",
           sourcePath: filePath,
           chatText,
           chatName: `${baseName}.cha`,
@@ -147,7 +147,7 @@ const plugin = {
       const total = documentRecords.length;
       for (let i = 0; i < total; i++) {
         const doc = documentRecords[i];
-        await writeFileAtPath(ctx.dirHandle, `${doc.outputDirName}/${doc.chatName}`, doc.chatText);
+        await writeFileAtPath(ctx.dirHandle, `${doc.chatDirName}/${doc.chatName}`, doc.chatText);
         ctx.log(`Writing CHAT export: ${i + 1}/${total} file(s)…`, "muted");
       }
 

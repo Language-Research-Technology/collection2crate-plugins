@@ -151,7 +151,39 @@ const plugin = {
         ctx.log(`Writing CHAT export: ${i + 1}/${total} file(s)…`, "muted");
       }
 
+      if (ctx.crate) addChatFilesToCrate(ctx.crate, documentRecords);
+
       ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");
     },
   },
 };
+
+// Registers each .cha as a File entity so it's actually part of the RO-Crate,
+// not just a file sitting next to it. ca-data-prep runs before chat-export
+// (see src/plugins/index.js's registration order) and, when it processes the
+// same source .docx, will already have added a RepositoryObject at
+// "./c2c-output/<baseName>" with the docx/csv as hasPart — chat-export
+// computes that same id independently (both derive baseName from the source
+// .docx filename the same way) so it can add the .cha into that object's
+// hasPart alongside them. If ca-data-prep didn't run this build (chat export
+// used on its own), there's no such object to join, so the File entity is
+// just added standalone.
+export function addChatFilesToCrate(crate, documentRecords) {
+  for (const doc of documentRecords) {
+    const chatId = `./${doc.chatDirName}/${doc.chatName}`;
+    const objectId = `./c2c-output/${doc.baseName}`;
+    const hasObject = crate.hasEntity(objectId);
+    crate.addEntity({
+      "@id": chatId,
+      "@type": "File",
+      name: doc.chatName,
+      encodingFormat: "text/plain",
+      ...(hasObject ? { isPartOf: { "@id": objectId } } : {}),
+    });
+    if (hasObject) {
+      const parts = crate.getProperty(objectId, "hasPart");
+      if (parts) parts.push({ "@id": chatId });
+      else crate.setProperty(objectId, "hasPart", { "@id": chatId });
+    }
+  }
+}

@@ -59,7 +59,7 @@ const plugin = {
           continue;
         }
         const text = await extractDocumentText(buffer);
-        const result = processTranscriptText(text, ctx.options || {});
+        const result = await processTranscriptText(text, ctx.options || {});
         const baseName = (file.fileName || file.name).replace(/\.docx$/i, "");
         const csvText = toCsv(result.rows);
         const csvDirName = "c2c-output/csv";

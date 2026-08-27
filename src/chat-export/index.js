@@ -47,8 +47,8 @@ export function formatChatIdLine(languageIso, corpusId, speakerCode, extra = {})
   return `@ID: ${fields.join("|")}|`;
 }
 
-export function generateChatText(text, config = {}) {
-  const result = processTranscriptText(text, {
+export async function generateChatText(text, config = {}) {
+  const result = await processTranscriptText(text, {
     headerRows: config.headerRows ?? 0,
     footerRows: config.footerRows ?? 0,
   });
@@ -118,7 +118,7 @@ const plugin = {
 
         const text = await extractDocumentText(buffer);
         const baseName = (file.fileName || file.name || "document").replace(/\.docx$/i, "");
-        const chatText = generateChatText(text, {
+        const chatText = await generateChatText(text, {
           languageIso: ctx.options.languageIso || "",
           corpusId: ctx.dirHandle && ctx.dirHandle.name ? ctx.dirHandle.name : baseName,
           headerRows: ctx.options.headerRows || 0,

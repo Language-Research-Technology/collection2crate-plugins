@@ -1,9 +1,9 @@
-// Identifies each file's format by content, against a bundled, offline copy
-// of the PRONOM/DROID signature registry (matcher.js + pronom-signatures.json,
-// both in this folder). Dynamically imported only when this plugin's option
-// is on, so the ~800kB data pack stays out of the main bundle regardless of
-// whether the plugin file itself is statically imported into the registry —
-// same shape as the austlang plugin.
+// Identifies each file's format by content, using siegfried's own official
+// WASM build (matcher.js + sf.wasm + wasm_exec.js, all in this folder — see
+// matcher.js for details). Dynamically imported only when this plugin's
+// option is on, so the ~8.8MB wasm binary stays out of the main bundle
+// regardless of whether the plugin file itself is statically imported into
+// the registry — same shape as the austlang plugin.
 // Hook names are literal strings and core chaos2crate functions arrive via
 // createPlugin(deps) — see this repo's README.
 let graphEntityById, coreDeps;
@@ -14,7 +14,7 @@ export function createPlugin(deps) {
   return plugin;
 }
 
-// matcher.js needs readFileBytesFromDirectory too — configure() hands it
+// matcher.js needs getFileHandleAtPath too — configure() hands it
 // coreDeps every time it's freshly imported, since a dynamic import() only
 // re-runs module init once per module (cached after that), not once per
 // call site. Same pattern as xlsx-crate-input's loadXlsxCrate().

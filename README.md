@@ -51,7 +51,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 |---|---|
 | `xlsx-crate-input` | `readFileBytes`, `readJsonFromFolder`, `loadMasp`, `statFile` (handed to `xlsx_crate.js`'s own `configure(deps)` on each dynamic import) |
 | `austlang` | `addLanguageEntities` |
-| `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `readFileBytesFromDirectory`) |
+| `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath` |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `validate-crate` | `loadMasp` |

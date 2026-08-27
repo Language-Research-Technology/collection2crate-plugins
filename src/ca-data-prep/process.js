@@ -293,14 +293,15 @@ export function formatUnresolvedSpeakerRows(rows) {
   return lines.join("\n");
 }
 
-export function formatCharacterInventory(rows) {
+export async function formatCharacterInventory(rows) {
   const chars = collectCharacterInventory(rows);
   const lines = ["Character inventory:"];
+  const { unicodeName } = await import("unicode-name");
 
   for (const char of chars) {
     const code = `U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
-    const name = (globalThis.__TRANSCRIPT_CHAR_NAMES__ && globalThis.__TRANSCRIPT_CHAR_NAMES__[char]) || "";
-    lines.push(`${JSON.stringify(char)}  ${code}  ${name || char}`);
+    const name = unicodeName(char) || char;
+    lines.push(`${JSON.stringify(char)}  ${code}  ${name}`);
   }
 
   return lines.join("\n");
@@ -332,7 +333,7 @@ export function escapeCsv(value) {
   return stringValue;
 }
 
-export function processTranscriptText(text, config = {}) {
+export async function processTranscriptText(text, config = {}) {
   const warnings = [];
   const removedTimecodes = [];
   const normalized = normalizeText(text);
@@ -355,7 +356,7 @@ export function processTranscriptText(text, config = {}) {
     "",
     formatUnresolvedSpeakerRows(rows),
     "",
-    formatCharacterInventory(rows),
+    await formatCharacterInventory(rows),
   ];
 
   if (removedTimecodes.length) {

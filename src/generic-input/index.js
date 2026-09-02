@@ -11,10 +11,10 @@
 // runs per build, dispatched by pipeline.js on ctx.options.inputMode.
 // Core chaos2crate functions arrive via createPlugin(deps) — see this
 // repo's README.
-let buildFileMetadata, buildCrate;
+let buildFileMetadata, buildCrate, readJsonFromFolder;
 
 export function createPlugin(deps) {
-  ({ buildFileMetadata, buildCrate } = deps);
+  ({ buildFileMetadata, buildCrate, readJsonFromFolder } = deps);
   return plugin;
 }
 
@@ -31,13 +31,21 @@ const plugin = {
     ctx.sourceCount = ctx.filesWithMeta.length;
   },
 
-  buildCrate(ctx) {
+  // If the folder already has a crate, this build reconciles against it
+  // (SPEC.md §6.1a) instead of replacing it — buildCrate() (crate.js) only
+  // needs the parsed JSON to know that; everything else is unchanged.
+  // "Existing crate" here means the file this same JSON output plugin
+  // writes, not xlsx-crate-input's additional-ro-crate-metadata.xlsx (a
+  // deliberately separate, opt-in source — see that plugin's own hooks).
+  async buildCrate(ctx) {
+    const existingJson = await readJsonFromFolder(ctx.dirHandle, "ro-crate-metadata.json");
     ctx.crate = buildCrate(ctx.filesWithMeta, ctx.config, ctx.log, {
       topLevelFolderType: ctx.options.topLevelFolderType,
       // ctx.xlsxCrate is set at config:prepare, before this runs: a spreadsheet
       // already describes the entries and what belongs to what, so the folder
       // scan shouldn't invent a parallel structure alongside it.
       structureFromMetadata: !!ctx.xlsxCrate,
+      existingJson,
     });
   },
 };

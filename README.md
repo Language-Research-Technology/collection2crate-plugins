@@ -54,6 +54,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath` |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
+| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath` |
 | `validate-crate` | `loadMasp` |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
@@ -65,6 +66,15 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 function itself, so `ro-crate-masp` (a heavy validator library) stays
 dynamically imported from chaos2crate's own tree instead of becoming a
 static import anywhere in this package.
+
+`crate2tables` depends on [`roctable`](https://github.com/ptsefton/roctable),
+a WIP library not yet on npm — installed here as a git dependency
+(`"roctable": "github:ptsefton/roctable"`). It reuses roctable's own
+crate-walking functions directly (`ctx.crate` is already an `ro-crate`
+`ROCrate` instance, the same shape roctable expects), but not its config/CSV
+file I/O, which is Node-`fs`-only — see `src/crate2tables/index.js` and
+`chaos2crate/docs/crate2tables-spec.md` for what's adapted and what's
+deliberately unsupported for now (`load_text`).
 
 ## Writing a new plugin here
 

@@ -54,7 +54,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath` |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
-| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
+| `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `validate-crate` | `loadMasp` |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
@@ -67,22 +67,23 @@ function itself, so `ro-crate-masp` (a heavy validator library) stays
 dynamically imported from chaos2crate's own tree instead of becoming a
 static import anywhere in this package.
 
-`crate2tables` depends on [`roctable`](https://github.com/ptsefton/roctable),
-a WIP library not yet on npm — installed as `"roctable": "file:../roctable"`
-while both are under active development (swap to a `github:ptsefton/roctable`
-git dependency, pinned to a commit, once roctable's own PR lands). It reuses
-roctable's own crate-walking functions directly (`ctx.crate` is already an
-`ro-crate` `ROCrate` instance, the same shape roctable expects) — including
+The `roctable` plugin (`src/roctable/`) takes its name from the
+[`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
+library not yet on npm — installed as `"roctable": "file:../roctable"` while
+both are under active development (swap to a `github:ptsefton/roctable` git
+dependency, pinned to a commit, once roctable's own PR lands). It reuses the
+library's own crate-walking functions directly (`ctx.crate` is already an
+`ro-crate` `ROCrate` instance, the same shape it expects) — including
 `load_text`, via a `fileReader` this plugin injects
-(`browserFileReader` in `src/crate2tables/index.js`, wrapping
-`readFileTextFromDirectory`) rather than roctable's own Node-`fs`-based
-default (see roctable's `lib/io.js` and its `SPEC.md` §9.0). Its config
-load/save and CSV file writing stay this plugin's own job either way —
-roctable's `lib/config.js`/`lib/csv.js` file I/O is Node-`fs`-only and simply
-isn't called from here; see `chaos2crate/docs/crate2tables-spec.md`.
+(`browserFileReader` in `src/roctable/index.js`, wrapping
+`readFileTextFromDirectory`) rather than the library's own Node-`fs`-based
+default (see its `lib/io.js` and `SPEC.md` §9.0). Its config load/save and
+CSV file writing stay this plugin's own job either way — the library's
+`lib/config.js`/`lib/csv.js` file I/O is Node-`fs`-only and simply isn't
+called from here; see `chaos2crate/docs/roctable-spec.md`.
 
-`crate2tables` is split across three files: `index.js` (the plugin itself —
-hooks, the `optionSchema`, the `crate2tablesConfigure` action), `discover.js`
+The plugin is split across three files: `index.js` (the plugin itself —
+hooks, the `optionSchema`, the `roctableConfigure` action), `discover.js`
 (inspect the crate and merge onto whatever config already exists — the one
 code path both the build-time hook and the standalone action call, plus the
 `ldac:mainText`/`indexableText` default-seeding rule), and `config-tree-ui.js`
@@ -155,7 +156,7 @@ Rules of thumb:
   chaos2crate's "Delete plugin output before rebuilding" skips deleting it**
   — those two are meant to persist across builds (standing configuration,
   changed-file backups), unlike `_outputs/<slug>/`, which is exactly the
-  disposable generated content that setting exists to clear. `crate2tables`
+  disposable generated content that setting exists to clear. `roctable`
   is the first plugin here to use this: config at `_config/roctable/`,
   CSVs at `_outputs/roctable/`.
 

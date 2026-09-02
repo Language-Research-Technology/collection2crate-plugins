@@ -56,7 +56,7 @@ function includedCount(properties) {
 }
 
 // A one-hop expanded sub-property row: include only (rename exists in the
-// config format but has no UI control yet — see docs/crate2tables-spec.md).
+// config format but has no UI control yet — see docs/roctable-spec.md).
 function renderSubPropertyRow(properties, name) {
   const propConfig = properties[name];
   const wrap = document.createElement("div");

@@ -68,9 +68,11 @@ dynamically imported from chaos2crate's own tree instead of becoming a
 static import anywhere in this package.
 
 `crate2tables` depends on [`roctable`](https://github.com/ptsefton/roctable),
-a WIP library not yet on npm — installed as `"roctable": "file:../roctable"`
-while both are under active development (swap to a `github:ptsefton/roctable`
-git dependency, pinned to a commit, once roctable's own PR lands). It reuses
+a WIP library not yet on npm — installed as a git dependency pinned to a
+commit (`"roctable": "github:ptsefton/roctable#<sha>"`), since it isn't
+tagged/released. Bump the pinned commit deliberately, not by dropping the
+pin — an unpinned `github:ptsefton/roctable` would silently pick up whatever
+that repo's default branch has on the next `npm install`. It reuses
 roctable's own crate-walking functions directly (`ctx.crate` is already an
 `ro-crate` `ROCrate` instance, the same shape roctable expects) — including
 `load_text`, via a `fileReader` this plugin injects

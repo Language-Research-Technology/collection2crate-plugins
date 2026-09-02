@@ -54,7 +54,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath` |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
-| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath` |
+| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory` |
 | `validate-crate` | `loadMasp` |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
@@ -68,13 +68,18 @@ dynamically imported from chaos2crate's own tree instead of becoming a
 static import anywhere in this package.
 
 `crate2tables` depends on [`roctable`](https://github.com/ptsefton/roctable),
-a WIP library not yet on npm — installed here as a git dependency
-(`"roctable": "github:ptsefton/roctable"`). It reuses roctable's own
-crate-walking functions directly (`ctx.crate` is already an `ro-crate`
-`ROCrate` instance, the same shape roctable expects), but not its config/CSV
-file I/O, which is Node-`fs`-only — see `src/crate2tables/index.js` and
-`chaos2crate/docs/crate2tables-spec.md` for what's adapted and what's
-deliberately unsupported for now (`load_text`).
+a WIP library not yet on npm — installed as `"roctable": "file:../roctable"`
+while both are under active development (swap to a `github:ptsefton/roctable`
+git dependency, pinned to a commit, once roctable's own PR lands). It reuses
+roctable's own crate-walking functions directly (`ctx.crate` is already an
+`ro-crate` `ROCrate` instance, the same shape roctable expects) — including
+`load_text`, via a `fileReader` this plugin injects
+(`browserFileReader` in `src/crate2tables/index.js`, wrapping
+`readFileTextFromDirectory`) rather than roctable's own Node-`fs`-based
+default (see roctable's `lib/io.js` and its `SPEC.md` §9.0). Its config
+load/save and CSV file writing stay this plugin's own job either way —
+roctable's `lib/config.js`/`lib/csv.js` file I/O is Node-`fs`-only and simply
+isn't called from here; see `chaos2crate/docs/crate2tables-spec.md`.
 
 ## Writing a new plugin here
 

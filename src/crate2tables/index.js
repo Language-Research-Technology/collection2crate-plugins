@@ -20,11 +20,10 @@
 // reruns the build to get output. See docs/crate2tables-spec.md.
 //
 // load_text (roctable's "read this property's referenced file into the row"
-// feature) is deliberately unsupported here for now: roctable's extractTables
-// reads that file with Node's `fs`, which isn't available in chaos2crate's
-// browser build. Any property configured with load_text is disabled with a
-// warning rather than passed through — see stripUnsupportedFeatures below
-// and the spec's "Known limitations" section.
+// feature) reads through an injected fileReader (ptsefton/roctable#1) rather
+// than roctable's own Node-fs default — browserFileReader below wraps
+// chaos2crate's readFileTextFromDirectory, which already returns null for
+// "not found", matching what extractTables' loadText expects from a reader.
 import { inspectCrate, mergeDiscovered, discoverExpandedProperties } from "roctable/lib/inspect.js";
 import { extractTables } from "roctable/lib/extract.js";
 import { tablesToCsvStrings } from "roctable/lib/csv.js";
@@ -35,33 +34,15 @@ const OUTPUT_DIR = "crate2tables-output";
 
 // Hook names are literal strings and core chaos2crate functions arrive via
 // createPlugin(deps) — see this repo's README.
-let readJsonFromFolder, writeFileAtPath, getFileHandleAtPath;
+let readJsonFromFolder, writeFileAtPath, getFileHandleAtPath, readFileTextFromDirectory;
 
 export function createPlugin(deps) {
-  ({ readJsonFromFolder, writeFileAtPath, getFileHandleAtPath } = deps);
+  ({ readJsonFromFolder, writeFileAtPath, getFileHandleAtPath, readFileTextFromDirectory } = deps);
   return plugin;
 }
 
-// Recursively clears load_text off every property (including expand's own
-// nested sub-properties), returning the dotted entityType.property paths it
-// touched so the caller can log one clear warning instead of one per field.
-function stripUnsupportedFeatures(config) {
-  const touched = [];
-  for (const [entityType, tableConfig] of Object.entries(config.tables || {})) {
-    for (const [prop, propConfig] of Object.entries(tableConfig.properties || {})) {
-      if (propConfig.load_text) {
-        propConfig.load_text = false;
-        touched.push(`${entityType}.${prop}`);
-      }
-      for (const [exProp, exPropConfig] of Object.entries(propConfig.properties || {})) {
-        if (exPropConfig.load_text) {
-          exPropConfig.load_text = false;
-          touched.push(`${entityType}.${prop}.${exProp}`);
-        }
-      }
-    }
-  }
-  return touched;
+function browserFileReader(dirHandle) {
+  return { readFile: (relPath) => readFileTextFromDirectory(dirHandle, relPath) };
 }
 
 async function existsAtPath(dirHandle, relativePath) {
@@ -110,11 +91,6 @@ const plugin = {
         return;
       }
 
-      const unsupported = stripUnsupportedFeatures(config);
-      if (unsupported.length) {
-        log(`crate2tables: load_text isn't supported yet in the browser build — disabled on ${unsupported.join(", ")}.`, "warn");
-      }
-
       ctx.crate2tables = { config, configSource };
 
       const tableNames = Object.keys(config.tables || {});
@@ -124,7 +100,8 @@ const plugin = {
       }
 
       try {
-        ctx.crate2tables.csv = tablesToCsvStrings(extractTables(crate, config));
+        const data = await extractTables(crate, config, { fileReader: browserFileReader(dirHandle) });
+        ctx.crate2tables.csv = tablesToCsvStrings(data);
         log(`crate2tables: built ${tableNames.length} table(s) — ${tableNames.join(", ")}.`, "ok");
       } catch (e) {
         log(`crate2tables: failed to extract tables — ${e.message}`, "warn");

@@ -54,7 +54,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath` |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
-| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory` |
+| `crate2tables` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `validate-crate` | `loadMasp` |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
@@ -80,6 +80,17 @@ default (see roctable's `lib/io.js` and its `SPEC.md` §9.0). Its config
 load/save and CSV file writing stay this plugin's own job either way —
 roctable's `lib/config.js`/`lib/csv.js` file I/O is Node-`fs`-only and simply
 isn't called from here; see `chaos2crate/docs/crate2tables-spec.md`.
+
+`crate2tables` is split across three files: `index.js` (the plugin itself —
+hooks, the `optionSchema`, the `crate2tablesConfigure` action), `discover.js`
+(inspect the crate and merge onto whatever config already exists — the one
+code path both the build-time hook and the standalone action call, plus the
+`ldac:mainText`/`indexableText` default-seeding rule), and `config-tree-ui.js`
+(the checkbox-tree editor `openModal` renders — a table heading per `@type`,
+unrolling to its properties' include/expand/load_text/join). Config lives at
+`_config/roctable/config.json`, output at `_outputs/roctable/` — chaos2crate
+issue #81's proposed per-plugin directory convention, adopted here ahead of
+it becoming repo-wide.
 
 ## Writing a new plugin here
 
@@ -139,6 +150,14 @@ Rules of thumb:
 - **No `outputPaths` at all is correct for a plugin that never writes to the
   folder** — `merge`, `austlang`, `validate-crate`, and the input-analysis
   half of every plugin all fall here; only the writing side declares.
+- **A path under `_config/<slug>/` or `_backup/<slug>/` (chaos2crate issue
+  #81's proposed per-plugin directories) still gets scan-excluded, but
+  chaos2crate's "Delete plugin output before rebuilding" skips deleting it**
+  — those two are meant to persist across builds (standing configuration,
+  changed-file backups), unlike `_outputs/<slug>/`, which is exactly the
+  disposable generated content that setting exists to clear. `crate2tables`
+  is the first plugin here to use this: config at `_config/roctable/`,
+  CSVs at `_outputs/roctable/`.
 
 Then register it in this repo's `index.js` (`REGISTRY` for an additive
 plugin, `INPUT_REGISTRY` for a mutually-exclusive input mode), and in

@@ -11,10 +11,12 @@
 // runs per build, dispatched by pipeline.js on ctx.options.inputMode.
 // Core chaos2crate functions arrive via createPlugin(deps) — see this
 // repo's README.
-let buildFileMetadata, buildCrate;
+import { confirmNewFiles } from "./new-files-confirm.js";
+
+let buildFileMetadata, buildCrate, readJsonFromFolder, openModal;
 
 export function createPlugin(deps) {
-  ({ buildFileMetadata, buildCrate } = deps);
+  ({ buildFileMetadata, buildCrate, readJsonFromFolder, openModal } = deps);
   return plugin;
 }
 
@@ -31,13 +33,48 @@ const plugin = {
     ctx.sourceCount = ctx.filesWithMeta.length;
   },
 
-  buildCrate(ctx) {
-    ctx.crate = buildCrate(ctx.filesWithMeta, ctx.config, ctx.log, {
+  // If the folder already has a crate, this build reconciles against it
+  // (SPEC.md §6.1a) instead of replacing it — buildCrate() (crate.js) only
+  // needs the parsed JSON to know that; everything else is unchanged.
+  // "Existing crate" here means the file this same JSON output plugin
+  // writes, not xlsx-crate-input's additional-ro-crate-metadata.xlsx (a
+  // deliberately separate, opt-in source — see that plugin's own hooks).
+  //
+  // A file the scan found with no matching entity in that existing crate
+  // isn't added silently — the person building the crate confirms it first
+  // (new-files-confirm.js's checkbox tree), since reconcileFileEntities'
+  // fallback for one with no obvious home is to attach it straight to the
+  // root dataset, and that's exactly the kind of guess a human should sign
+  // off on rather than discover after the fact in the build log.
+  async buildCrate(ctx) {
+    const existingJson = await readJsonFromFolder(ctx.dirHandle, "ro-crate-metadata.json");
+    let filesToBuild = ctx.filesWithMeta;
+
+    if (existingJson) {
+      const existingIds = new Set((existingJson["@graph"] || []).map((e) => e["@id"]));
+      const newPaths = ctx.filesWithMeta.map((f) => f.id).filter((id) => !existingIds.has(id));
+
+      if (newPaths.length) {
+        ctx.log(`${newPaths.length} file(s) not in the existing crate — asking which to add.`, "info");
+        const confirmed = await confirmNewFiles({ newPaths, openModal });
+        if (confirmed === null) throw new Error("Build cancelled: new files were not confirmed.");
+
+        const confirmedSet = new Set(confirmed);
+        const skipped = newPaths.filter((id) => !confirmedSet.has(id));
+        if (confirmed.length) ctx.log(`Adding ${confirmed.length} confirmed new file(s).`, "ok");
+        if (skipped.length) ctx.log(`Skipping ${skipped.length} file(s) this build (not added to the crate): ${skipped.join(", ")}`, "warn");
+
+        filesToBuild = ctx.filesWithMeta.filter((f) => existingIds.has(f.id) || confirmedSet.has(f.id));
+      }
+    }
+
+    ctx.crate = buildCrate(filesToBuild, ctx.config, ctx.log, {
       topLevelFolderType: ctx.options.topLevelFolderType,
       // ctx.xlsxCrate is set at config:prepare, before this runs: a spreadsheet
       // already describes the entries and what belongs to what, so the folder
       // scan shouldn't invent a parallel structure alongside it.
       structureFromMetadata: !!ctx.xlsxCrate,
+      existingJson,
     });
   },
 };

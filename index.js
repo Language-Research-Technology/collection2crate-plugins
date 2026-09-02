@@ -17,6 +17,7 @@ import { createPlugin as createValidateCrate } from "./src/validate-crate/index.
 import { createPlugin as createJsonOutput } from "./src/ro-crate-json-output/index.js";
 import { createPlugin as createXlsxOutput } from "./src/ro-crate-xlsx-output/index.js";
 import { createPlugin as createHtmlOutput } from "./src/ro-crate-html-output/index.js";
+import { createPlugin as createCrate2Tables } from "./src/crate2tables/index.js";
 import { createPlugin as createGenericInput } from "./src/generic-input/index.js";
 import { createPlugin as createDocxInput } from "./src/docx-input/index.js";
 
@@ -33,6 +34,7 @@ export const REGISTRY = {
   "ca-data-prep": createCaDataPrep,
   "chat-export": createChatExport,
   "merge": createMerge,
+  "crate2tables": createCrate2Tables,
   "validate-crate": createValidateCrate,
   "ro-crate-json-output": createJsonOutput,
   "ro-crate-xlsx-output": createXlsxOutput,

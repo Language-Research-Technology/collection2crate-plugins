@@ -40,6 +40,25 @@ function applyMainTextDefaults(config, existingConfig) {
   }
 }
 
+// roctable's own discoverExpandedProperties (lib/inspect.js) only walks
+// config.tables — a type still sitting in potential_tables (not yet ticked
+// as a selected table in the tree editor) never gets an expanded property's
+// sub-properties discovered, no matter how many times a build runs, since
+// the function silently skips it rather than erroring. But the tree editor
+// lets a person check "expand" on a potential table's property before
+// deciding whether to select the table at all — a reasonable thing to want
+// to preview — so this has to work for both buckets. Rather than
+// reimplementing that walk (crate-entity iteration, one-hop dereferencing,
+// STRUCTURAL_PROPS filtering), run the same trusted function twice with the
+// two buckets swapped, so potential_tables gets identical treatment via the
+// exact same code path tables already gets.
+function discoverExpandedPropertiesForAllTables(crate, config) {
+  const afterTables = discoverExpandedProperties(crate, config);
+  const swapped = { ...afterTables, tables: afterTables.potential_tables, potential_tables: afterTables.tables };
+  const afterBoth = discoverExpandedProperties(crate, swapped);
+  return { ...afterBoth, tables: afterBoth.potential_tables, potential_tables: afterBoth.tables };
+}
+
 // crate: an ro-crate ROCrate instance (from ctx.crate mid-build, or
 // loadCrateFromJson(existingCrateJson) for the standalone action).
 // existingConfig: whatever config already exists (folder/upload), or null.
@@ -47,6 +66,6 @@ export function discoverConfig(crate, existingConfig) {
   const discovered = inspectCrate(crate);
   let config = mergeDiscovered(existingConfig || defaultConfig(), discovered);
   applyMainTextDefaults(config, existingConfig);
-  config = discoverExpandedProperties(crate, config);
+  config = discoverExpandedPropertiesForAllTables(crate, config);
   return config;
 }

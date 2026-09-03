@@ -78,17 +78,30 @@ function renderPropertyRow(properties, name, onIncludeChange) {
   const subPanel = document.createElement("div");
   subPanel.style.cssText = `margin:2px 0 6px 26px; ${propConfig.expand ? "" : "display:none;"}`;
 
+  // discoverExpandedProperties (roctable) only ever adds a `properties` key
+  // once it's actually walked the crate for this property — an *absent* key
+  // means "not tried yet" (still needs a discovery pass, i.e. a rebuild or
+  // reopening "Configure tables…"); a `properties` key present but *empty*
+  // means it was tried and found nothing to expand, which happens whenever
+  // the property's actual values aren't @id references at all (e.g. a plain
+  // text value like a bare author name) — expanding it can never produce
+  // anything, no amount of rebuilding will change that. Collapsing both
+  // into one "come back later" message would misrepresent the second case
+  // as a timing issue instead of a data fact.
   function renderSubPanel() {
     subPanel.replaceChildren();
-    if (propConfig.properties && Object.keys(propConfig.properties).length) {
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    if (!propConfig.properties) {
+      hint.textContent = "Sub-properties appear here after the next build re-discovers this expansion.";
+      subPanel.appendChild(hint);
+    } else if (!Object.keys(propConfig.properties).length) {
+      hint.textContent = "No reference values found for this property in the crate — nothing to expand.";
+      subPanel.appendChild(hint);
+    } else {
       for (const subName of Object.keys(propConfig.properties).sort()) {
         subPanel.appendChild(renderSubPropertyRow(propConfig.properties, subName));
       }
-    } else {
-      const hint = document.createElement("div");
-      hint.className = "hint";
-      hint.textContent = "Sub-properties appear here after the next build re-discovers this expansion.";
-      subPanel.appendChild(hint);
     }
   }
   renderSubPanel();
@@ -198,14 +211,32 @@ function renderTypeRow(config, type, onSelectionChange) {
   return wrap;
 }
 
+// The host's own .modal caps out at max-width:440px (index.html's shared
+// stylesheet) — sized for a short confirmation, not a multi-column property
+// table with four controls per row. openModal's modalClassName adds a class
+// to that same .modal element but supplies no rule of its own, so this
+// injects one override, once per page load, scoped to that class — more
+// specific than the bare .modal rule, so it wins regardless of stylesheet
+// order, without editing index.html's shared CSS for one plugin's modal.
+let stylesInjected = false;
+function ensureWideModalStyle() {
+  if (stylesInjected) return;
+  stylesInjected = true;
+  const style = document.createElement("style");
+  style.textContent = ".modal.roctable-config-modal { max-width: min(900px, 94vw); }";
+  document.head.appendChild(style);
+}
+
 // Opens the editor and resolves to the edited config, or null if dismissed
 // without an explicit Save/Cancel choice — the caller (index.js) treats
 // null as "no change was confirmed", not "clear everything".
 export async function openConfigTreeEditor({ config, openModal }) {
   const working = cloneConfig(config);
+  ensureWideModalStyle();
 
   return openModal({
     title: "Configure RO-Crate tables",
+    modalClassName: "roctable-config-modal",
     onDismiss: () => null,
     render(body, close) {
       const intro = document.createElement("p");

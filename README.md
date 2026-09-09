@@ -69,11 +69,15 @@ static import anywhere in this package.
 
 The `roctable` plugin (`src/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
-library not yet on npm — installed as `"roctable": "file:../roctable"` while
-both are under active development (swap to a `github:ptsefton/roctable` git
-dependency, pinned to a commit, once roctable's own PR lands). It reuses the
-library's own crate-walking functions directly (`ctx.crate` is already an
-`ro-crate` `ROCrate` instance, the same shape it expects) — including
+The `roctable` plugin (`src/roctable/`) takes its name from the
+[`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
+library not yet on npm — installed as a git dependency pinned to a
+commit (`"roctable": "github:ptsefton/roctable#<sha>"`), since it isn't
+tagged or released. Bump the pinned commit deliberately, not by dropping
+the pin — an unpinned GitHub dependency would silently pick up whatever
+the repository's default branch has on the next `npm install`. It reuses
+the library's own crate-walking functions directly (`ctx.crate` is already
+an `ro-crate` `ROCrate` instance, the same shape it expects) — including
 `load_text`, via a `fileReader` this plugin injects
 (`browserFileReader` in `src/roctable/index.js`, wrapping
 `readFileTextFromDirectory`) rather than the library's own Node-`fs`-based

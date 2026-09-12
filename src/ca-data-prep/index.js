@@ -15,6 +15,31 @@ export function createPlugin(deps) {
   return plugin;
 }
 
+export function addCsvFilesToCrate(crate, documentRecords) {
+  for (const doc of documentRecords) {
+    const csvId = `${doc.csvDirName}/${doc.csvName}`;
+    const objectId = `#${doc.baseName}`;
+    const hasObject = crate.hasEntity(objectId);
+    crate.addEntity({
+      "@id": csvId,
+      "@type": "File",
+      name: doc.csvName,
+      encodingFormat: "text/csv",
+      ...(hasObject ? { isPartOf: { "@id": objectId } } : {}),
+      ...(doc.docxId ? { annotationOf: { "@id": doc.docxId } } : {}),
+    });
+
+    if (hasObject) {
+      const parts = crate.getProperty(objectId, "hasPart");
+      const nextParts = Array.isArray(parts) ? parts : (parts ? [parts] : []);
+      if (!nextParts.some((part) => part && part["@id"] === csvId)) nextParts.push({ "@id": csvId });
+      crate.setProperty(objectId, "hasPart", nextParts);
+      const mainText = crate.getProperty(objectId, "ldac:mainText");
+      if (!mainText || (mainText["@id"] || mainText) !== csvId) crate.setProperty(objectId, "ldac:mainText", { "@id": csvId });
+    }
+  }
+}
+
 export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
   if (!dirHandle || !relativePath) return null;
   const parts = String(relativePath).replace(/\\/g, "/").split("/").filter(Boolean);
@@ -76,9 +101,9 @@ const plugin = {
           csvDirName,
           logDirName,
           sourcePath: file.relativePath,
-          objectId: `./c2c-output/${baseName}`,
+          objectId: `#${baseName}`,
           docxId: file.relativePath,
-          csvId: `./${csvDirName}/${baseName}.csv`,
+          csvId: `${csvDirName}/${baseName}.csv`,
           annotationId: `#annotation-${baseName}`,
           speakerRefs,
           persons: buildSpeakerPersonEntities(result.speakerMap),
@@ -109,6 +134,7 @@ const plugin = {
       // instead of silently reverting to buildRoCrateMetadata's own default.
       const selectedConformsTo = ctx.config?.rootDataset?.conformsTo?.["@id"];
       ctx.crate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
+      addCsvFilesToCrate(ctx.crate, documentRecords);
       ctx.sourceCount = files.length;
       ctx.log(`Built transcript crate from ${files.length} .docx file(s).`, "ok");
     },

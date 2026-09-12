@@ -3,6 +3,7 @@
 // primitive; this file owns the "when/how to gather options for it" logic
 // that used to live inline in processFolder.
 import { mergeXlsxIntoCrate } from "./xlsx.js";
+import { progressFor } from "../_progress.js";
 import MERGE_CONFIG from "./merge_config.json" with { type: "json" };
 
 // Hook names are literal strings and core chaos2crate functions arrive
@@ -32,35 +33,51 @@ const plugin = {
     ],
   },
   hooks: {
-    "crate:built": async (ctx) => {
-      const { options, dirHandle, crate, log } = ctx;
-      if (!options.merge) return;
-      if (!options.mergeUpload) {
-        log("Merge is on but no spreadsheet was selected — skipping merge.", "warn");
-        return;
-      }
+    "crate:build": {
+      priority: 70,
+      weight: 4,
+      activeWhen: (ctx) => !!ctx.options.merge,
+      handler: async (ctx) => {
+        const { options, dirHandle, crate, log } = ctx;
+        if (!options.merge) return;
+        if (!options.mergeUpload) {
+          log("Merge is on but no spreadsheet was selected — skipping merge.", "warn");
+          return;
+        }
 
-      let mergeConfig = MERGE_CONFIG, mcSrc = "bundled default";
-      if (options.mergeConfigUpload) {
-        const mcText = await options.mergeConfigUpload.file.text();
-        try { mergeConfig = JSON.parse(mcText); }
-        catch (e) { throw new Error(`uploaded merge config "${options.mergeConfigUpload.name}" is not valid JSON: ${e.message}`); }
-        mcSrc = `uploaded (${options.mergeConfigUpload.name})`;
-      } else {
-        const folderMc = await readJsonFromFolder(dirHandle, "merge-config.json");
-        if (folderMc) { mergeConfig = folderMc; mcSrc = "merge-config.json from folder"; }
-      }
-      log(`Merging ${options.mergeUpload.name} · mapping ${mcSrc}.`, "muted");
-      const bytes = await options.mergeUpload.file.arrayBuffer();
-      const effectiveMergeConfig = {
-        ...mergeConfig,
-        placeLookup: {
-          ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}),
-          enabled: options.doPlaceLookups !== false,
-        },
-      };
-      if (options.doPlaceLookups === false) log("Placename lookup disabled by settings.", "muted");
-      await mergeXlsxIntoCrate(crate, bytes, effectiveMergeConfig, log, graphEntityById);
+        let mergeConfig = MERGE_CONFIG, mcSrc = "bundled default";
+        if (options.mergeConfigUpload) {
+          const mcText = await options.mergeConfigUpload.file.text();
+          try { mergeConfig = JSON.parse(mcText); }
+          catch (e) { throw new Error(`uploaded merge config "${options.mergeConfigUpload.name}" is not valid JSON: ${e.message}`); }
+          mcSrc = `uploaded (${options.mergeConfigUpload.name})`;
+        } else {
+          const folderMc = await readJsonFromFolder(dirHandle, "merge-config.json");
+          if (folderMc) { mergeConfig = folderMc; mcSrc = "merge-config.json from folder"; }
+        }
+        log(`Merging ${options.mergeUpload.name} · mapping ${mcSrc}.`, "muted");
+        const bytes = await options.mergeUpload.file.arrayBuffer();
+        const effectiveMergeConfig = {
+          ...mergeConfig,
+          placeLookup: {
+            ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}),
+            enabled: options.doPlaceLookups !== false,
+          },
+        };
+        if (options.doPlaceLookups === false) log("Placename lookup disabled by settings.", "muted");
+
+        // The place-name prefetch inside mergeXlsxIntoCrate is the only part
+        // of a merge long enough to be worth a bar of its own; the rest of the
+        // work is in-memory and finishes between frames. start()/done() bracket
+        // the whole tap either way, so a merge with lookups off still moves.
+        const progress = progressFor(ctx);
+        progress.start(`Merging ${options.mergeUpload.name}…`);
+        try {
+          await mergeXlsxIntoCrate(crate, bytes, effectiveMergeConfig, log, graphEntityById, progress.report);
+        } finally {
+          progress.done();
+        }
+      },
     },
   },
 };

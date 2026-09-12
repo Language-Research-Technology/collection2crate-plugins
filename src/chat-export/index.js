@@ -1,4 +1,5 @@
 import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
+import { countedProgress } from "../_progress.js";
 
 let writeFileAtPath;
 
@@ -99,70 +100,84 @@ const plugin = {
     hint: "Creates one CHAT transcript per .docx file, using the transcript speaker metadata and any parenthetical group name from the source.",
   },
   hooks: {
-    "files:analyze": async (ctx) => {
-      if (!ctx.options.generateChatFiles) return;
-      const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
-      if (!files.length) return;
+    "files:prepare": {
+      priority: 40,
+      weight: 4,
+      activeWhen: (ctx) => !!ctx.options.generateChatFiles,
+      handler: async (ctx) => {
+        if (!ctx.options.generateChatFiles) return;
+        const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
+        if (!files.length) return;
 
-      const documentRecords = [];
-      for (let index = 0; index < files.length; index++) {
-        const file = files[index];
-        const filePath = file.relativePath || file.fileName || file.name || "";
-        ctx.log(`CHAT export: ${index + 1}/${files.length} file(s)…`, "muted");
-        let buffer = file.arrayBuffer ? await file.arrayBuffer() : null;
-        if (!buffer && ctx.dirHandle && filePath) {
-          const { readDocxFileBytesFromDirHandle } = await import("../ca-data-prep/index.js");
-          buffer = await readDocxFileBytesFromDirHandle(ctx.dirHandle, filePath);
+        const documentRecords = [];
+        const tick = countedProgress(ctx, files.length, "Generating CHAT transcripts…");
+        for (let index = 0; index < files.length; index++) {
+          const file = files[index];
+          const filePath = file.relativePath || file.fileName || file.name || "";
+          let buffer = file.arrayBuffer ? await file.arrayBuffer() : null;
+          if (!buffer && ctx.dirHandle && filePath) {
+            const { readDocxFileBytesFromDirHandle } = await import("../ca-data-prep/index.js");
+            buffer = await readDocxFileBytesFromDirHandle(ctx.dirHandle, filePath);
+          }
+          if (!buffer) { tick(index); continue; }
+
+          const text = await extractDocumentText(buffer);
+          const baseName = (file.fileName || file.name || "document").replace(/\.docx$/i, "");
+          const chatText = await generateChatText(text, {
+            languageIso: ctx.options.languageIso || "",
+            corpusId: ctx.dirHandle && ctx.dirHandle.name ? ctx.dirHandle.name : baseName,
+            headerRows: ctx.options.headerRows || 0,
+            footerRows: ctx.options.footerRows || 0,
+          });
+
+          documentRecords.push({
+            baseName,
+            docxName: file.fileName || file.name,
+            chatDirName: "c2c-output/chat",
+            sourcePath: filePath,
+            chatText,
+            chatName: `${baseName}.cha`,
+          });
+          tick(index, `Generated ${baseName}.cha`);
         }
-        if (!buffer) continue;
+        tick.done();
 
-        const text = await extractDocumentText(buffer);
-        const baseName = (file.fileName || file.name || "document").replace(/\.docx$/i, "");
-        const chatText = await generateChatText(text, {
-          languageIso: ctx.options.languageIso || "",
-          corpusId: ctx.dirHandle && ctx.dirHandle.name ? ctx.dirHandle.name : baseName,
-          headerRows: ctx.options.headerRows || 0,
-          footerRows: ctx.options.footerRows || 0,
-        });
-
-        documentRecords.push({
-          baseName,
-          docxName: file.fileName || file.name,
-          chatDirName: "c2c-output/chat",
-          sourcePath: filePath,
-          chatText,
-          chatName: `${baseName}.cha`,
-        });
-      }
-
-      ctx.chatExport = { files, documentRecords };
-      ctx.log(`Prepared CHAT export for ${documentRecords.length} .docx file(s).`, "muted");
+        ctx.chatExport = { files, documentRecords };
+        ctx.log(`Prepared CHAT export for ${documentRecords.length} .docx file(s).`, "muted");
+      },
     },
 
-    "crate:built": async (ctx) => {
-      if (!ctx.options.generateChatFiles || !ctx.chatExport) return;
-      const { documentRecords } = ctx.chatExport;
-      if (!documentRecords.length) return;
+    "crate:build": {
+      priority: 60,
+      weight: 2,
+      activeWhen: (ctx) => !!ctx.options.generateChatFiles,
+      handler: async (ctx) => {
+        if (!ctx.options.generateChatFiles || !ctx.chatExport) return;
+        const { documentRecords } = ctx.chatExport;
+        if (!documentRecords.length) return;
 
-      const total = documentRecords.length;
-      for (let i = 0; i < total; i++) {
-        const doc = documentRecords[i];
-        await writeFileAtPath(ctx.dirHandle, `${doc.chatDirName}/${doc.chatName}`, doc.chatText);
-        ctx.log(`Writing CHAT export: ${i + 1}/${total} file(s)…`, "muted");
-      }
+        const total = documentRecords.length;
+        const writeTick = countedProgress(ctx, total, "Writing CHAT files…");
+        for (let i = 0; i < total; i++) {
+          const doc = documentRecords[i];
+          await writeFileAtPath(ctx.dirHandle, `${doc.chatDirName}/${doc.chatName}`, doc.chatText);
+          writeTick(i, `Wrote ${doc.chatName}`);
+        }
+        writeTick.done();
 
-      if (ctx.crate) addChatFilesToCrate(ctx.crate, documentRecords);
+        if (ctx.crate) addChatFilesToCrate(ctx.crate, documentRecords);
 
-      ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");
+        ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");
+      },
     },
   },
 };
 
 // Registers each .cha as a File entity so it's actually part of the RO-Crate,
 // not just a file sitting next to it. ca-data-prep runs before chat-export
-// (see src/plugins/index.js's registration order) and, when it processes the
-// same source .docx, will already have added a RepositoryObject at
-// "./c2c-output/<baseName>" with the docx/csv as hasPart — chat-export
+// (priority 50 vs 60 on crate:build — see this repo's README) and, when it
+// processes the same source .docx, will already have added a RepositoryObject
+// at "#<baseName>" with the docx/csv as hasPart — chat-export
 // computes that same id independently (both derive baseName from the source
 // .docx filename the same way) so it can add the .cha into that object's
 // hasPart alongside them. If ca-data-prep didn't run this build (chat export

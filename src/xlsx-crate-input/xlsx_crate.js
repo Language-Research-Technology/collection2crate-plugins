@@ -37,10 +37,10 @@ const ROOT_ID = "./";
 
 // Root properties not carried over by seedRootDataset. @type and conformsTo
 // belong to the profile; hasPart belongs to the folder scan. pcdm:hasMember is
-// here for a different reason: it IS carried over, but not at config:prepare —
+// here for a different reason: it IS carried over, but not at crate:prepare —
 // buildCrate assigns rootDataset["pcdm:hasMember"] from the folder scan after
 // the config is applied, so a seeded value would be silently overwritten.
-// applyCollectionMembership() handles it at crate:built instead.
+// applyCollectionMembership() handles it at crate:build instead.
 const STRUCTURAL_ROOT_PROPS = new Set([
   "@id", "@type", "hasPart", "pcdm:hasMember", "conformsTo",
 ]);

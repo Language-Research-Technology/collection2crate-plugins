@@ -6,6 +6,8 @@
 // statically imported into the registry.
 // Hook names are literal strings and core chaos2crate functions arrive
 // via createPlugin(deps) — see this repo's README.
+import { progressFor } from "../_progress.js";
+
 let addLanguageEntities;
 
 export function createPlugin(deps) {
@@ -35,16 +37,36 @@ const plugin = {
     ],
   },
   hooks: {
-    "files:analyze": async (ctx) => {
-      if (!ctx.options.enableLanguageLookups) return;
-      const { identifyAllLanguages } = await import("./matcher.js");
-      ctx.langById = await identifyAllLanguages(ctx.filesWithMeta, ctx.options.includeAlternateNames, ctx.log);
+    "files:prepare": {
+      priority: 10,
+      weight: 4,
+      activeWhen: (ctx) => !!ctx.options.enableLanguageLookups,
+      handler: async (ctx) => {
+        if (!ctx.options.enableLanguageLookups) return;
+        const { identifyAllLanguages } = await import("./matcher.js");
+        const progress = progressFor(ctx);
+        progress.start("Identifying subject languages…");
+        try {
+          ctx.langById = await identifyAllLanguages(
+            ctx.filesWithMeta, ctx.options.includeAlternateNames, ctx.log, progress.report,
+          );
+        } finally {
+          // done() in a finally so a thrown match still snaps the bar to the
+          // end of this tap's slice rather than leaving it stuck mid-step.
+          progress.done();
+        }
+      },
     },
-    "crate:built": (ctx) => {
-      if (!ctx.langById) return;
-      const n = addLanguageEntities(ctx.crate, ctx.filesWithMeta, ctx.langById);
-      if (n) for (const p of LANGUAGE_PROPERTY_DEFINITIONS) ctx.crate.addEntity(p);
-      ctx.log(`Identified ${n} unique language(s).`, n ? "ok" : "muted");
+    "crate:build": {
+      priority: 30,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.enableLanguageLookups,
+      handler: (ctx) => {
+        if (!ctx.langById) return;
+        const n = addLanguageEntities(ctx.crate, ctx.filesWithMeta, ctx.langById);
+        if (n) for (const p of LANGUAGE_PROPERTY_DEFINITIONS) ctx.crate.addEntity(p);
+        ctx.log(`Identified ${n} unique language(s).`, n ? "ok" : "muted");
+      },
     },
   },
 };

@@ -28,6 +28,7 @@ import { inspectCrate, mergeDiscovered, discoverExpandedProperties } from "rocta
 import { extractTables } from "roctable/lib/extract.js";
 import { tablesToCsvStrings } from "roctable/lib/csv.js";
 import { defaultConfig } from "roctable/lib/config.js";
+import { countedProgress, progressFor } from "../_progress.js";
 
 const CONFIG_FILE = "crate2tables-config.json";
 const OUTPUT_DIR = "crate2tables-output";
@@ -67,70 +68,90 @@ const plugin = {
     { path: OUTPUT_DIR, kind: "dir" },
   ],
   hooks: {
-    "crate:built": async (ctx) => {
-      if (!ctx.options.enableCrate2Tables) return;
-      const { crate, dirHandle, options, log } = ctx;
+    "crate:build": {
+      priority: 80,
+      weight: 3,
+      activeWhen: (ctx) => !!ctx.options.enableCrate2Tables,
+      handler: async (ctx) => {
+        if (!ctx.options.enableCrate2Tables) return;
+        const { crate, dirHandle, options, log } = ctx;
+        const progress = progressFor(ctx);
+        progress.start("Extracting tables from the crate…");
+        try {
+          let existingConfig = null;
+          let configSource = "none — starting fresh";
+          if (options.crate2tablesConfigUpload) {
+            const text = await options.crate2tablesConfigUpload.file.text();
+            try { existingConfig = JSON.parse(text); }
+            catch (e) { throw new Error(`uploaded table config "${options.crate2tablesConfigUpload.name}" is not valid JSON: ${e.message}`); }
+            configSource = `uploaded (${options.crate2tablesConfigUpload.name})`;
+          } else {
+            const folderConfig = await readJsonFromFolder(dirHandle, CONFIG_FILE);
+            if (folderConfig) { existingConfig = folderConfig; configSource = CONFIG_FILE; }
+          }
 
-      let existingConfig = null;
-      let configSource = "none — starting fresh";
-      if (options.crate2tablesConfigUpload) {
-        const text = await options.crate2tablesConfigUpload.file.text();
-        try { existingConfig = JSON.parse(text); }
-        catch (e) { throw new Error(`uploaded table config "${options.crate2tablesConfigUpload.name}" is not valid JSON: ${e.message}`); }
-        configSource = `uploaded (${options.crate2tablesConfigUpload.name})`;
-      } else {
-        const folderConfig = await readJsonFromFolder(dirHandle, CONFIG_FILE);
-        if (folderConfig) { existingConfig = folderConfig; configSource = CONFIG_FILE; }
-      }
+          let config;
+          try {
+            config = discoverExpandedProperties(crate, mergeDiscovered(existingConfig || defaultConfig(), inspectCrate(crate)));
+          } catch (e) {
+            log(`crate2tables: could not inspect the crate — ${e.message}`, "warn");
+            return;
+          }
 
-      let config;
-      try {
-        config = discoverExpandedProperties(crate, mergeDiscovered(existingConfig || defaultConfig(), inspectCrate(crate)));
-      } catch (e) {
-        log(`crate2tables: could not inspect the crate — ${e.message}`, "warn");
-        return;
-      }
+          ctx.crate2tables = { config, configSource };
 
-      ctx.crate2tables = { config, configSource };
+          const tableNames = Object.keys(config.tables || {});
+          if (!tableNames.length) {
+            log(`crate2tables: no tables selected yet (config source: ${configSource}). Wrote every discovered type to ${CONFIG_FILE} under "potential_tables" — move the ones you want into "tables" and rebuild.`, "warn");
+            return;
+          }
 
-      const tableNames = Object.keys(config.tables || {});
-      if (!tableNames.length) {
-        log(`crate2tables: no tables selected yet (config source: ${configSource}). Wrote every discovered type to ${CONFIG_FILE} under "potential_tables" — move the ones you want into "tables" and rebuild.`, "warn");
-        return;
-      }
-
-      try {
-        const data = await extractTables(crate, config, { fileReader: browserFileReader(dirHandle) });
-        ctx.crate2tables.csv = tablesToCsvStrings(data);
-        log(`crate2tables: built ${tableNames.length} table(s) — ${tableNames.join(", ")}.`, "ok");
-      } catch (e) {
-        log(`crate2tables: failed to extract tables — ${e.message}`, "warn");
-      }
+          try {
+            const data = await extractTables(crate, config, { fileReader: browserFileReader(dirHandle) });
+            ctx.crate2tables.csv = tablesToCsvStrings(data);
+            log(`crate2tables: built ${tableNames.length} table(s) — ${tableNames.join(", ")}.`, "ok");
+          } catch (e) {
+            log(`crate2tables: failed to extract tables — ${e.message}`, "warn");
+          }
+        } finally {
+          progress.done();
+        }
+      },
     },
 
-    "output:write": async (ctx) => {
-      if (!ctx.options.enableCrate2Tables || !ctx.crate2tables) return;
-      const { dirHandle, options, log } = ctx;
-      const { config, csv } = ctx.crate2tables;
+    "output:write": {
+      priority: 10,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.enableCrate2Tables,
+      handler: async (ctx) => {
+        if (!ctx.options.enableCrate2Tables || !ctx.crate2tables) return;
+        const { dirHandle, options, log } = ctx;
+        const { config, csv } = ctx.crate2tables;
 
-      // Non-destructive by construction (mergeDiscovered only ever adds
-      // newly-seen types/properties, unselected — see roctable/lib/inspect.js),
-      // so rewriting it every build is the same "keep it fresh" behaviour as
-      // rerunning `roctable inspect`, not a risk to a hand-edited config.
-      await writeFileAtPath(dirHandle, CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+        // Non-destructive by construction (mergeDiscovered only ever adds
+        // newly-seen types/properties, unselected — see roctable/lib/inspect.js),
+        // so rewriting it every build is the same "keep it fresh" behaviour as
+        // rerunning `roctable inspect`, not a risk to a hand-edited config.
+        await writeFileAtPath(dirHandle, CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
 
-      if (!csv) return;
-      let written = 0;
-      for (const [tableName, text] of Object.entries(csv)) {
-        const path = `${OUTPUT_DIR}/${tableName}.csv`;
-        if (options.overwrite || !(await existsAtPath(dirHandle, path))) {
-          await writeFileAtPath(dirHandle, path, text);
-          written++;
-        } else {
-          log(`${path} exists and overwrite is off — skipped.`, "warn");
+        if (!csv) return;
+        let written = 0;
+        const entries = Object.entries(csv);
+        const tick = countedProgress(ctx, entries.length, "Writing crate2tables CSV…");
+        for (let i = 0; i < entries.length; i++) {
+          const [tableName, text] = entries[i];
+          const path = `${OUTPUT_DIR}/${tableName}.csv`;
+          if (options.overwrite || !(await existsAtPath(dirHandle, path))) {
+            await writeFileAtPath(dirHandle, path, text);
+            written++;
+          } else {
+            log(`${path} exists and overwrite is off — skipped.`, "warn");
+          }
+          tick(i, `${tableName}.csv`);
         }
-      }
-      if (written) log(`crate2tables: wrote ${written} CSV file(s) to ${OUTPUT_DIR}/.`, "ok");
+        tick.done();
+        if (written) log(`crate2tables: wrote ${written} CSV file(s) to ${OUTPUT_DIR}/.`, "ok");
+      },
     },
   },
 };

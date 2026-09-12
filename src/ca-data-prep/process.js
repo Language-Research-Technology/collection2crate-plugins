@@ -465,7 +465,7 @@ export async function extractDocumentText(docxSource) {
 
 // conformsTo defaults to the LDAC Collection profile's own identity (this
 // function always builds a RepositoryCollection root) rather than hardcoding
-// it — the caller (ca-data-prep's "crate:built" hook) passes through
+// it — the caller (ca-data-prep's "crate:build" hook) passes through
 // whichever profile the user actually selected, so a crate built here still
 // reflects that choice instead of silently overwriting it. The default only
 // matters when nothing was selected (e.g. calling this directly, as tests do).

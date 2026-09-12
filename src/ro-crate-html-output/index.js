@@ -12,6 +12,7 @@
 // them once into these module-level bindings before the plugin object is
 // ever used — see this repo's README for the createPlugin(deps) contract.
 import { resolveProfileGroups } from "./layout.js";
+import { countedProgress, progressFor } from "../_progress.js";
 
 let crateToPreviewHtml, crateToMultiPageHtml;
 let writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists;
@@ -431,183 +432,197 @@ const plugin = {
     ],
   },
   hooks: {
-    "output:write": async (ctx) => {
-      const { dirHandle, options, crate, log } = ctx;
-      const previewStartMs = Date.now();
-      let assetResolveMs = 0;
-      let renderMs = 0;
-      let pageWriteMs = 0;
-      if (!options.makeHtml) return;
-      if (!(options.overwrite || !(await fileExists(dirHandle, HTML_FILE)))) {
-        log(`${HTML_FILE} exists and overwrite is off — skipped.`, "warn");
-        return;
-      }
-      try {
-        applyCollectionLabelOverrides(crate, options);
-        // resolveTerm() (used below to place profile-declared property
-        // names) needs the context resolved first — crateToPreviewHtml/
-        // crateToMultiPageHtml also call this themselves, but only after
-        // the layout has already been computed; safe/idempotent to call twice.
-        await crate.resolveContext();
-        const profilePropertyGroups = ctx.selectedProfileData?.workflow?.propertyGroups;
-        const layout = resolveProfileGroups(crate, profilePropertyGroups);
-        if (layout.length) {
-          log(`Preview: profile layout applied (${layout.length} group(s): ${layout.map((g) => g.name).join(", ")}).`, "muted");
-        } else if (ctx.selectedProfileData) {
-          log("Preview: active profile loaded, but no property groups resolved to render the plain preview. Check that the profile's workflow.propertyGroups entries resolve against the built crate context.", "warn");
-        } else {
-          throw new Error(
-            "HTML preview requires an active profile with resolved propertyGroups. " +
-            "No profile was loaded for this build, so no preview layout could be resolved. " +
-            "Select a profile or re-run the build with a profile in effect."
-          );
+    "output:write": {
+      priority: 40,
+      weight: 5,
+      activeWhen: (ctx) => !!ctx.options.makeHtml,
+      handler: async (ctx) => {
+        const { dirHandle, options, crate, log } = ctx;
+        const previewStartMs = Date.now();
+        let assetResolveMs = 0;
+        let renderMs = 0;
+        let pageWriteMs = 0;
+        if (!options.makeHtml) return;
+        if (!(options.overwrite || !(await fileExists(dirHandle, HTML_FILE)))) {
+          log(`${HTML_FILE} exists and overwrite is off — skipped.`, "warn");
+          return;
         }
-
-        let html;
-        const selectedFolder = (options.templateRepoFolder || "").trim();
-        const repoSelected = !!selectedFolder;
-        let pageTemplates = null;
-        let pageTemplatesSrc = "none";
-        if (options.styledPreview || repoSelected) {
-          // Precedence for template/config/style: repo folder → uploaded file → local folder.
-          let template = null, templateSrc = "none";
-          let cfg = null, cfgSrc = "none";
-          let css = "", cssSrc = "none";
-          const assetResolveStartMs = Date.now();
-
-          if (repoSelected) {
-            const remote = await fetchTemplateBundle(TEMPLATE_REPO_OWNER, TEMPLATE_REPO_NAME, TEMPLATE_REPO_REF, selectedFolder);
-            template = remote.template;
-            cfg = remote.config;
-            css = remote.css;
-            if (remote.pageTemplates && Object.keys(remote.pageTemplates).length > 0) {
-              pageTemplates = remote.pageTemplates;
-              pageTemplatesSrc = `repo (${selectedFolder})`;
-            }
-            const base = `repo (${selectedFolder})`;
-            templateSrc = remote.files.template ? `${base}/${remote.files.template}` : `${base}; no template found`;
-            cfgSrc = remote.files.config ? `${base}/${remote.files.config}` : "none";
-            cssSrc = remote.files.style ? `${base}/${remote.files.style}` : "none";
+        // Bracketing the whole tap: a single-page preview reports nothing in
+        // between and just crosses its slice, while the multipage branch below
+        // reports per page and so raises the secondary bar for the part of a
+        // build most likely to sit there for a while.
+        const progress = progressFor(ctx);
+        progress.start("Building the HTML preview…");
+        try {
+          applyCollectionLabelOverrides(crate, options);
+          // resolveTerm() (used below to place profile-declared property
+          // names) needs the context resolved first — crateToPreviewHtml/
+          // crateToMultiPageHtml also call this themselves, but only after
+          // the layout has already been computed; safe/idempotent to call twice.
+          await crate.resolveContext();
+          const profilePropertyGroups = ctx.selectedProfileData?.workflow?.propertyGroups;
+          const layout = resolveProfileGroups(crate, profilePropertyGroups);
+          if (layout.length) {
+            log(`Preview: profile layout applied (${layout.length} group(s): ${layout.map((g) => g.name).join(", ")}).`, "muted");
+          } else if (ctx.selectedProfileData) {
+            log("Preview: active profile loaded, but no property groups resolved to render the plain preview. Check that the profile's workflow.propertyGroups entries resolve against the built crate context.", "warn");
+          } else {
+            throw new Error(
+              "HTML preview requires an active profile with resolved propertyGroups. " +
+              "No profile was loaded for this build, so no preview layout could be resolved. " +
+              "Select a profile or re-run the build with a profile in effect."
+            );
           }
 
-          if (options.styledPreview && options.configUpload) {
-            const cfgText = await options.configUpload.file.text();
-            try { cfg = JSON.parse(cfgText); }
-            catch (e) { throw new Error(`uploaded config "${options.configUpload.name}" is not valid JSON: ${e.message}`); }
-            cfgSrc = `uploaded (${options.configUpload.name})`;
-          } else if (!repoSelected) {
-            const folderCfg = await readJsonFromFolder(dirHandle, "preview-config.json");
-            if (folderCfg) { cfg = folderCfg; cfgSrc = "preview-config.json from folder"; }
-          }
+          let html;
+          const selectedFolder = (options.templateRepoFolder || "").trim();
+          const repoSelected = !!selectedFolder;
+          let pageTemplates = null;
+          let pageTemplatesSrc = "none";
+          if (options.styledPreview || repoSelected) {
+            // Precedence for template/config/style: repo folder → uploaded file → local folder.
+            let template = null, templateSrc = "none";
+            let cfg = null, cfgSrc = "none";
+            let css = "", cssSrc = "none";
+            const assetResolveStartMs = Date.now();
 
-          if (options.styledPreview && cfg) {
-            const uploadedFiles = options.configUpload?.siblingFiles || null;
-            let configDirHandle = null;
-            if (needsLocalTemplateFolder(cfg, uploadedFiles)) {
-              configDirHandle = await ensureUploadedConfigDirectoryHandle();
+            if (repoSelected) {
+              const remote = await fetchTemplateBundle(TEMPLATE_REPO_OWNER, TEMPLATE_REPO_NAME, TEMPLATE_REPO_REF, selectedFolder);
+              template = remote.template;
+              cfg = remote.config;
+              css = remote.css;
+              if (remote.pageTemplates && Object.keys(remote.pageTemplates).length > 0) {
+                pageTemplates = remote.pageTemplates;
+                pageTemplatesSrc = `repo (${selectedFolder})`;
+              }
+              const base = `repo (${selectedFolder})`;
+              templateSrc = remote.files.template ? `${base}/${remote.files.template}` : `${base}; no template found`;
+              cfgSrc = remote.files.config ? `${base}/${remote.files.config}` : "none";
+              cssSrc = remote.files.style ? `${base}/${remote.files.style}` : "none";
             }
-            const assetOpts = { uploadedFiles, dirHandle: configDirHandle };
-            const resolved = await resolveTemplateBundleFromConfig(cfg, assetOpts);
-            if (resolved.template) { template = resolved.template; templateSrc = resolved.templateSrc; }
-            if (resolved.css) { css = resolved.css; cssSrc = resolved.cssSrc; }
 
-            // A local config gets its own template map, resolved from the same
-            // uploaded files or picked folder. Without this the repo bundle was
-            // the only way to build multipage, which made developing a
-            // multipage template locally impossible — the build silently fell
-            // through to a single page whose entity links pointed at pages it
-            // never wrote.
-            const localPageTemplates = await collectPageTemplates(cfg, assetOpts);
-            if (localPageTemplates) {
-              pageTemplates = localPageTemplates;
-              pageTemplatesSrc = configDirHandle ? "picked folder" : "uploaded files";
+            if (options.styledPreview && options.configUpload) {
+              const cfgText = await options.configUpload.file.text();
+              try { cfg = JSON.parse(cfgText); }
+              catch (e) { throw new Error(`uploaded config "${options.configUpload.name}" is not valid JSON: ${e.message}`); }
+              cfgSrc = `uploaded (${options.configUpload.name})`;
+            } else if (!repoSelected) {
+              const folderCfg = await readJsonFromFolder(dirHandle, "preview-config.json");
+              if (folderCfg) { cfg = folderCfg; cfgSrc = "preview-config.json from folder"; }
             }
-          }
-          assetResolveMs = Date.now() - assetResolveStartMs;
-          // A template's own config.json-declared propertyGroups (the most
-          // specific, deliberate customization) still wins over the
-          // profile's — the profile only fills in when the template didn't
-          // set its own.
-          const cfgHasOwnGroups = !!(cfg && Array.isArray(cfg.propertyGroups) && cfg.propertyGroups.length);
-          const baseCfg = cfg && !cfgHasOwnGroups ? { ...cfg, propertyGroups: layout } : cfg;
-          const effectiveCfg = applyHomePageAndDomainOverrides(baseCfg, options);
 
-          // The repo's templates are keyed to the repo's own config, so they
-          // can't be paired with a config from somewhere else — but an
-          // uploaded config that brought its own templates has just replaced
-          // pageTemplates with a matching set, and that pairing is fine.
-          const uploadedConfigWithRepoTemplates =
-            !!options.configUpload && pageTemplatesSrc.startsWith("repo (");
-          if (uploadedConfigWithRepoTemplates && cfg && cfg.multipage !== false) {
-            log(`Uploaded config asks for a multipage build but brought no templates, and the ${selectedFolder} repo folder's templates belong to its own config — falling back to a single page. Upload the templates alongside the config, or clear the repo folder.`, "warn");
-          }
+            if (options.styledPreview && cfg) {
+              const uploadedFiles = options.configUpload?.siblingFiles || null;
+              let configDirHandle = null;
+              if (needsLocalTemplateFolder(cfg, uploadedFiles)) {
+                configDirHandle = await ensureUploadedConfigDirectoryHandle();
+              }
+              const assetOpts = { uploadedFiles, dirHandle: configDirHandle };
+              const resolved = await resolveTemplateBundleFromConfig(cfg, assetOpts);
+              if (resolved.template) { template = resolved.template; templateSrc = resolved.templateSrc; }
+              if (resolved.css) { css = resolved.css; cssSrc = resolved.cssSrc; }
 
-          if (pageTemplates && !uploadedConfigWithRepoTemplates && cfg && cfg.multipage !== false) {
-            log(`Preview: multipage · templates ${pageTemplatesSrc} · config ${cfgSrc}.`, "muted");
-            const multipageRenderStartMs = Date.now();
-            const templateCount = Object.keys(pageTemplates).length;
-            log(`Preview: rendering multipage site (${templateCount} template file(s))…`, "muted");
-            const multi = await crateToMultiPageHtml(crate, { config: effectiveCfg, css, pageTemplates });
-            const renderDoneMs = Date.now();
-            renderMs = renderDoneMs - multipageRenderStartMs;
-            log(`Preview: rendered root + ${multi.pages.length} page(s) in ${formatDurationMs(renderDoneMs - multipageRenderStartMs)}. Writing pages…`, "muted");
-
-            const writeStartMs = Date.now();
-            // A stale page from a previous build (e.g. one belonging to a
-            // collection that no longer exists) would otherwise never get
-            // cleaned up, since pages are written by path rather than the
-            // whole directory being regenerated — wipe it first so the
-            // folder always reflects exactly this build's output.
-            try {
-              await dirHandle.removeEntry(MULTIPAGE_DIR, { recursive: true });
-            } catch {
-              // no pre-existing ro-crate-preview_html/ to remove — fine.
-            }
-            const totalPages = multi.pages.length;
-            const progressStep = totalPages >= 50 ? 25 : totalPages >= 10 ? 10 : 0;
-            for (let i = 0; i < multi.pages.length; i += 1) {
-              const page = multi.pages[i];
-              await writeFileAtPath(dirHandle, page.path, page.html);
-              const written = i + 1;
-              if (progressStep && (written % progressStep === 0 || written === totalPages)) {
-                log(`Preview: wrote ${written}/${totalPages} page file(s)…`, "muted");
+              // A local config gets its own template map, resolved from the same
+              // uploaded files or picked folder. Without this the repo bundle was
+              // the only way to build multipage, which made developing a
+              // multipage template locally impossible — the build silently fell
+              // through to a single page whose entity links pointed at pages it
+              // never wrote.
+              const localPageTemplates = await collectPageTemplates(cfg, assetOpts);
+              if (localPageTemplates) {
+                pageTemplates = localPageTemplates;
+                pageTemplatesSrc = configDirHandle ? "picked folder" : "uploaded files";
               }
             }
-            pageWriteMs = Date.now() - writeStartMs;
-            log(`Wrote ${multi.pages.length} page(s) under ro-crate-preview_html/ in ${formatDurationMs(Date.now() - writeStartMs)}.`, "ok");
-            html = multi.rootHtml;
-            ctx.lastHtmlTemplate = null;
-          } else if (template) {
-            log(`Preview: styled tabular · template ${templateSrc} · config ${cfgSrc} · style ${cssSrc}.`, "muted");
-            const styledRenderStartMs = Date.now();
-            html = await crateToPreviewHtml(crate, { template, config: effectiveCfg, css });
-            renderMs = Date.now() - styledRenderStartMs;
-            ctx.lastHtmlTemplate = { template, config: effectiveCfg, css, source: templateSrc };
+            assetResolveMs = Date.now() - assetResolveStartMs;
+            // A template's own config.json-declared propertyGroups (the most
+            // specific, deliberate customization) still wins over the
+            // profile's — the profile only fills in when the template didn't
+            // set its own.
+            const cfgHasOwnGroups = !!(cfg && Array.isArray(cfg.propertyGroups) && cfg.propertyGroups.length);
+            const baseCfg = cfg && !cfgHasOwnGroups ? { ...cfg, propertyGroups: layout } : cfg;
+            const effectiveCfg = applyHomePageAndDomainOverrides(baseCfg, options);
+
+            // The repo's templates are keyed to the repo's own config, so they
+            // can't be paired with a config from somewhere else — but an
+            // uploaded config that brought its own templates has just replaced
+            // pageTemplates with a matching set, and that pairing is fine.
+            const uploadedConfigWithRepoTemplates =
+              !!options.configUpload && pageTemplatesSrc.startsWith("repo (");
+            if (uploadedConfigWithRepoTemplates && cfg && cfg.multipage !== false) {
+              log(`Uploaded config asks for a multipage build but brought no templates, and the ${selectedFolder} repo folder's templates belong to its own config — falling back to a single page. Upload the templates alongside the config, or clear the repo folder.`, "warn");
+            }
+
+            if (pageTemplates && !uploadedConfigWithRepoTemplates && cfg && cfg.multipage !== false) {
+              log(`Preview: multipage · templates ${pageTemplatesSrc} · config ${cfgSrc}.`, "muted");
+              const multipageRenderStartMs = Date.now();
+              const templateCount = Object.keys(pageTemplates).length;
+              log(`Preview: rendering multipage site (${templateCount} template file(s))…`, "muted");
+              const multi = await crateToMultiPageHtml(crate, { config: effectiveCfg, css, pageTemplates });
+              const renderDoneMs = Date.now();
+              renderMs = renderDoneMs - multipageRenderStartMs;
+              log(`Preview: rendered root + ${multi.pages.length} page(s) in ${formatDurationMs(renderDoneMs - multipageRenderStartMs)}. Writing pages…`, "muted");
+
+              const writeStartMs = Date.now();
+              // A stale page from a previous build (e.g. one belonging to a
+              // collection that no longer exists) would otherwise never get
+              // cleaned up, since pages are written by path rather than the
+              // whole directory being regenerated — wipe it first so the
+              // folder always reflects exactly this build's output.
+              try {
+                await dirHandle.removeEntry(MULTIPAGE_DIR, { recursive: true });
+              } catch {
+                // no pre-existing ro-crate-preview_html/ to remove — fine.
+              }
+              const totalPages = multi.pages.length;
+              // Every page reports now. The old code only logged on every 10th
+              // or 25th page because each line cost a row in the transcript; a
+              // bar position costs nothing, so the throttle went with it.
+              const tick = countedProgress(ctx, totalPages, `Writing ${totalPages} preview page(s)…`);
+              for (let i = 0; i < multi.pages.length; i += 1) {
+                const page = multi.pages[i];
+                await writeFileAtPath(dirHandle, page.path, page.html);
+                tick(i, `Preview: wrote ${i + 1}/${totalPages} page file(s)…`);
+              }
+              tick.done();
+              pageWriteMs = Date.now() - writeStartMs;
+              log(`Wrote ${multi.pages.length} page(s) under ro-crate-preview_html/ in ${formatDurationMs(Date.now() - writeStartMs)}.`, "ok");
+              html = multi.rootHtml;
+              ctx.lastHtmlTemplate = null;
+            } else if (template) {
+              log(`Preview: styled tabular · template ${templateSrc} · config ${cfgSrc} · style ${cssSrc}.`, "muted");
+              const styledRenderStartMs = Date.now();
+              html = await crateToPreviewHtml(crate, { template, config: effectiveCfg, css });
+              renderMs = Date.now() - styledRenderStartMs;
+              ctx.lastHtmlTemplate = { template, config: effectiveCfg, css, source: templateSrc };
+            } else {
+              log("Preview: plain (library default template; no custom template file provided).", "muted");
+              const plainRenderStartMs = Date.now();
+              html = await crateToPreviewHtml(crate, { layouts: { default: layout } });
+              renderMs = Date.now() - plainRenderStartMs;
+              ctx.lastHtmlTemplate = null;
+            }
           } else {
-            log("Preview: plain (library default template; no custom template file provided).", "muted");
+            log("Preview: plain (library default template).", "muted");
             const plainRenderStartMs = Date.now();
             html = await crateToPreviewHtml(crate, { layouts: { default: layout } });
             renderMs = Date.now() - plainRenderStartMs;
             ctx.lastHtmlTemplate = null;
           }
-        } else {
-          log("Preview: plain (library default template).", "muted");
-          const plainRenderStartMs = Date.now();
-          html = await crateToPreviewHtml(crate, { layouts: { default: layout } });
-          renderMs = Date.now() - plainRenderStartMs;
-          ctx.lastHtmlTemplate = null;
+          await writeFile(dirHandle, HTML_FILE, html);
+          log(`Wrote ${HTML_FILE}.`, "ok");
+          const totalPreviewMs = Date.now() - previewStartMs;
+          log(
+            `Preview summary: total ${formatDurationMs(totalPreviewMs)} (assets ${formatDurationMs(assetResolveMs)}, render ${formatDurationMs(renderMs)}, page writes ${formatDurationMs(pageWriteMs)}).`,
+            "muted"
+          );
+          ctx.buildHtml = html;
+        } catch (e) {
+          log(`HTML preview failed: ${e.message}`, "err");
+        } finally {
+          progress.done();
         }
-        await writeFile(dirHandle, HTML_FILE, html);
-        log(`Wrote ${HTML_FILE}.`, "ok");
-        const totalPreviewMs = Date.now() - previewStartMs;
-        log(
-          `Preview summary: total ${formatDurationMs(totalPreviewMs)} (assets ${formatDurationMs(assetResolveMs)}, render ${formatDurationMs(renderMs)}, page writes ${formatDurationMs(pageWriteMs)}).`,
-          "muted"
-        );
-        ctx.buildHtml = html;
-      } catch (e) {
-        log(`HTML preview failed: ${e.message}`, "err");
-      }
+      },
     },
   },
 };

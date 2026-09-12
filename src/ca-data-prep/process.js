@@ -495,6 +495,7 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
       "@id": document.objectId,
       "@type": "RepositoryObject",
       name: document.baseName,
+      "ldac:mainText": { "@id": document.csvId },
       hasPart: [
         { "@id": document.docxId },
         { "@id": document.csvId },
@@ -507,6 +508,7 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
       "@type": "File",
       name: document.csvName,
       encodingFormat: "text/csv",
+      annotationOf: { "@id": document.docxId },
       isPartOf: { "@id": document.objectId },
     };
 

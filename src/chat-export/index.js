@@ -171,7 +171,7 @@ const plugin = {
 export function addChatFilesToCrate(crate, documentRecords) {
   for (const doc of documentRecords) {
     const chatId = `./${doc.chatDirName}/${doc.chatName}`;
-    const objectId = `./c2c-output/${doc.baseName}`;
+    const objectId = `#${doc.baseName}`;
     const hasObject = crate.hasEntity(objectId);
     crate.addEntity({
       "@id": chatId,
@@ -182,8 +182,9 @@ export function addChatFilesToCrate(crate, documentRecords) {
     });
     if (hasObject) {
       const parts = crate.getProperty(objectId, "hasPart");
-      if (parts) parts.push({ "@id": chatId });
-      else crate.setProperty(objectId, "hasPart", { "@id": chatId });
+      const nextParts = Array.isArray(parts) ? parts : (parts ? [parts] : []);
+      if (!nextParts.some((part) => part && part["@id"] === chatId)) nextParts.push({ "@id": chatId });
+      crate.setProperty(objectId, "hasPart", nextParts);
     }
   }
 }

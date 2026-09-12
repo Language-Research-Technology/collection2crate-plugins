@@ -3,7 +3,7 @@
 // (crate.js's buildFileMetadata + buildCrate). This is the default input
 // mode and every other build plugin's baseline — and the only one with a flat
 // file list, so the only one that declares analyzeFiles and therefore the only
-// one whose builds emit files:analyze.
+// one whose builds emit files:prepare.
 //
 // Registered as an input-mode plugin (INPUT_PLUGINS, keyed by inputMode) —
 // unlike the additive hook-tapping plugins in src/plugins/index.js's
@@ -23,7 +23,7 @@ export function createPlugin(deps) {
 const plugin = {
   name: "generic-input",
   inputMode: "generic",
-  // Declaring this is what makes the pipeline emit files:analyze — see
+  // Declaring this is what makes the pipeline emit files:prepare — see
   // runPipeline. Everything here is still plain data: taps get to annotate
   // ctx.filesWithMeta before buildCrate turns any of it into entities.
   analyzeFiles(ctx) {
@@ -70,7 +70,7 @@ const plugin = {
 
     ctx.crate = buildCrate(filesToBuild, ctx.config, ctx.log, {
       topLevelFolderType: ctx.options.topLevelFolderType,
-      // ctx.xlsxCrate is set at config:prepare, before this runs: a spreadsheet
+      // ctx.xlsxCrate is set at crate:prepare, before this runs: a spreadsheet
       // already describes the entries and what belongs to what, so the folder
       // scan shouldn't invent a parallel structure alongside it.
       structureFromMetadata: !!ctx.xlsxCrate,

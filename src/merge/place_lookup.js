@@ -456,15 +456,16 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
     },
 
     // Resolves every name in `placeNames` up front, `PREFETCH_CONCURRENCY` at
-    // a time, logging progress as each one finishes (picked up by the build
-    // progress bar) — so a merge with many distinct Place values doesn't look
-    // frozen while lookups run one after another.
-    async prefetch(placeNames, progressLog = log) {
+    // a time, reporting a fraction as each one finishes — so a merge with many
+    // distinct Place values doesn't look frozen while lookups run one after
+    // another. `report(fraction, label)` is the progress channel (see
+    // src/_progress.js); it is deliberately not `log`, which is the transcript.
+    async prefetch(placeNames, report = () => {}) {
       if (!enabled) return;
       const names = [...new Set(placeNames)].filter((n) => normalizePlaceName(n) && !resultCache.has(normalizePlaceName(n)));
       const total = names.length;
       if (!total) return;
-      progressLog(`Place lookup: resolving ${total} place name(s)…`, "muted");
+      log(`Place lookup: resolving ${total} place name(s)…`, "muted");
       let done = 0;
       let next = 0;
       const worker = async () => {
@@ -472,7 +473,7 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
           const name = names[next++];
           await service.lookup(name);
           done++;
-          progressLog(`Place lookup: resolved ${done}/${total} place name(s)…`, "muted");
+          report(done / total, `Place lookup: resolved ${done}/${total} place name(s)…`);
         }
       };
       await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, total) }, worker));

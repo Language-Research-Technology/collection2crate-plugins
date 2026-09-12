@@ -6,6 +6,8 @@
 // the registry — same shape as the austlang plugin.
 // Hook names are literal strings and core chaos2crate functions arrive via
 // createPlugin(deps) — see this repo's README.
+import { progressFor } from "../_progress.js";
+
 let graphEntityById, coreDeps;
 
 export function createPlugin(deps) {
@@ -43,30 +45,48 @@ const plugin = {
     hint: "Reads each file's bytes and matches them against the PRONOM signature registry — fully offline, no network.",
   },
   hooks: {
-    "files:analyze": async (ctx) => {
-      if (!ctx.options.identifyFileFormats) return;
-      const { identifyAllFormats } = await loadMatcher();
-      ctx.formatById = await identifyAllFormats(ctx.dirHandle, ctx.filesWithMeta, ctx.log);
+    "files:prepare": {
+      priority: 20,
+      weight: 6,
+      activeWhen: (ctx) => !!ctx.options.identifyFileFormats,
+      handler: async (ctx) => {
+        if (!ctx.options.identifyFileFormats) return;
+        const { identifyAllFormats } = await loadMatcher();
+        const progress = progressFor(ctx);
+        progress.start("Identifying file formats…");
+        try {
+          ctx.formatById = await identifyAllFormats(
+            ctx.dirHandle, ctx.filesWithMeta, ctx.log, progress.report,
+          );
+        } finally {
+          progress.done();
+        }
+      },
     },
 
-    "crate:built": (ctx) => {
-      if (!ctx.formatById) return;
-      let n = 0;
-      for (const file of ctx.filesWithMeta) {
-        const result = ctx.formatById.get(file.id);
-        if (!result) continue;
-        const entity = graphEntityById(ctx.crate, file.id);
-        if (!entity) continue;
-        // schema.org's own guidance for encodingFormat: a MIME type when
-        // there is one, otherwise a link to a format registry entry — the
-        // PRONOM URI is exactly that for formats DROID has no MIME type on
-        // record for (mostly obsolete/legacy formats).
-        entity.encodingFormat = result.mime || `${PRONOM_URL_PREFIX}${result.puid}`;
-        entity["custom:formatPuid"] = `${PRONOM_URL_PREFIX}${result.puid}`;
-        n++;
-      }
-      if (n) for (const p of FORMAT_PROPERTY_DEFINITIONS) ctx.crate.addEntity(p);
-      ctx.log(`Identified ${n} file format(s).`, n ? "ok" : "muted");
+    "crate:build": {
+      priority: 40,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.identifyFileFormats,
+      handler: (ctx) => {
+        if (!ctx.formatById) return;
+        let n = 0;
+        for (const file of ctx.filesWithMeta) {
+          const result = ctx.formatById.get(file.id);
+          if (!result) continue;
+          const entity = graphEntityById(ctx.crate, file.id);
+          if (!entity) continue;
+          // schema.org's own guidance for encodingFormat: a MIME type when
+          // there is one, otherwise a link to a format registry entry — the
+          // PRONOM URI is exactly that for formats DROID has no MIME type on
+          // record for (mostly obsolete/legacy formats).
+          entity.encodingFormat = result.mime || `${PRONOM_URL_PREFIX}${result.puid}`;
+          entity["custom:formatPuid"] = `${PRONOM_URL_PREFIX}${result.puid}`;
+          n++;
+        }
+        if (n) for (const p of FORMAT_PROPERTY_DEFINITIONS) ctx.crate.addEntity(p);
+        ctx.log(`Identified ${n} file format(s).`, n ? "ok" : "muted");
+      },
     },
   },
 };

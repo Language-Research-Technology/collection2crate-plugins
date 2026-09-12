@@ -22,23 +22,135 @@ for the consuming side.
 ## The two conventions every plugin here follows
 
 **1. Hook names are literal strings, not an imported constant.** A plugin's
-`hooks` object is keyed by strings like `"crate:built"` or `"output:write"`
-rather than an imported `HOOKS.CRATE_BUILT` — those strings are a stable
+`hooks` object is keyed by strings like `"crate:build"` or `"output:write"`
+rather than an imported `HOOKS.CRATE_BUILD` — those strings are a stable
 contract owned by chaos2crate's `src/plugins/hooks.js`:
 
-| Hook | String |
-|---|---|
-| `FOLDER_PICKED` | `"folder:picked"` |
-| `PROFILE_SELECTED` | `"profile:selected"` |
-| `CONFIG_PREPARE` | `"config:prepare"` |
-| `FILES_ANALYZE` | `"files:analyze"` |
-| `CRATE_BUILT` | `"crate:built"` |
-| `CRATE_VALIDATE` | `"crate:validate"` |
-| `OUTPUT_WRITE` | `"output:write"` |
+| Hook | String | When |
+|---|---|---|
+| `C2C_LOADED` | `"c2c:loaded"` | startup, once |
+| `FOLDER_PICKED` | `"folder:picked"` | a folder is chosen |
+| `PROFILE_SELECTED` | `"profile:selected"` | a MASP profile is chosen |
+| `CRATE_PREPARE` | `"crate:prepare"` | after the Describe step, before the crate exists |
+| `FILES_PREPARE` | `"files:prepare"` | per-file analysis |
+| `METADATA_MERGE` | `"metadata:merge"` | spreadsheet metadata merge |
+| `CRATE_BUILD` | `"crate:build"` | crate assembly and everything that mutates it |
+| `CRATE_VALIDATE` | `"crate:validate"` | validation |
+| `OUTPUT_WRITE` | `"output:write"` | writing to the folder |
 
 If chaos2crate ever renames one of these, every plugin here keyed to the
 old string silently stops firing — there's no import to break loudly. Grep
 this repo for the old string when that happens.
+
+These replaced an earlier, smaller set: `"config:prepare"` is now
+`"crate:prepare"`, `"files:analyze"` is now `"files:prepare"`, and
+`"crate:built"` folded into `"crate:build"` — the old separate
+build-then-mutate pair is now one stage ordered by `priority` (below), with
+chaos2crate's own assembly running ahead of every plugin tap.
+
+**Every tap declares its `priority`.** A tap is an object, not a bare
+function:
+
+```js
+hooks: {
+  "files:prepare": {
+    priority: 20,                                       // 0–100, lower runs earlier
+    weight: 4,                                          // share of the progress bar (default 0)
+    activeWhen: (ctx) => !!ctx.options.enableMyThing,   // omit for "always"
+    handler: async (ctx) => { /* ... */ },
+  },
+},
+```
+
+`priority` is explicit on every tap in this repo rather than left to the
+default (10) plus stable-sort registration order, so a plugin's position in
+a stage is a property of the plugin itself and survives being filtered out
+of, or reordered in, a deployment's `PLUGINS` selection. The numbers are
+spaced 10 apart so a new plugin can be slotted between two existing ones
+without renumbering. Plugin taps on `"crate:build"` start at 20, leaving
+0–10 to chaos2crate's own crate assembly, which has to run first.
+
+Current assignments, per stage:
+
+| Stage | Order |
+|---|---|
+| `folder:picked` | `xlsx-crate-input` 10 |
+| `crate:prepare` | `xlsx-crate-input` 10 |
+| `files:prepare` | `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `crate:build` | `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `crate2tables` 80 |
+| `crate:validate` | `validate-crate` 10 |
+| `output:write` | `crate2tables` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
+
+These reproduce the execution order `REGISTRY`'s own order used to imply.
+Note that `ca-data-prep` replaces `ctx.crate` wholesale at 50, so the two
+taps ahead of it (`austlang` 30, `file-format-identify` 40) contribute
+nothing on a build where transcript processing is on — preserved as-is
+here, since this change was a rename, not a reordering.
+
+### Progress
+
+Progress is **declared and weighted**, not inferred from log text. A tap
+that does visible work sets `weight` (default 0 — no slice of the bar) and,
+if it only runs conditionally, `activeWhen(ctx)`. Before a build the host
+sums `weight` across every tap whose `activeWhen` passes and gives each an
+ordered `[start%, end%]` slice of the main bar; the handler then reports
+only its own position inside that slice:
+
+```js
+import { progressFor } from "../_progress.js";
+
+handler: async (ctx) => {
+  const progress = progressFor(ctx);
+  progress.start("Identifying file formats…");
+  for (let i = 0; i < total; i++) {
+    // ...
+    progress.report((i + 1) / total, `Format identification: ${i + 1}/${total} file(s)…`);
+  }
+  progress.done();
+}
+```
+
+`report(fraction, label)` drives the main bar (scaled into the tap's slice)
+and the secondary bar (the raw fraction) from one call — the secondary bar
+appears by itself the first time a tap reports more than once before
+`done()`, and stays hidden for a tap that only brackets `start()`/`done()`
+around a single label. `done()` snaps the main bar to the slice end.
+
+`ctx.log` and `ctx.progress` are **independent channels**: no log message
+drives bar state any more. The old convention — emitting
+`"… 12/40 file(s)…"` through `ctx.log` and letting chaos2crate's host
+parse the `done/total` out of the string — is gone. Keep logging what is
+worth reading in the transcript; report progress separately.
+
+Always go through `progressFor(ctx)` (`src/_progress.js`) rather than
+touching `ctx.progress` directly. It returns the same three-call shape on a
+host that has no `ctx.progress` at all, so a plugin from this repo still
+runs under an older chaos2crate instead of throwing partway through a build.
+
+`countedProgress(ctx, total, label)` from the same module wraps the common
+"loop over N things" case: it starts the tap, hands back a `tick(index,
+label)` that takes the zero-based index of the item just finished, and
+`tick.done()` closes it out. Tick on the skipped paths too (a `continue`
+inside the loop), or the bar comes up short on a run where half the inputs
+were unreadable.
+
+### Testing
+
+```bash
+npm test          # hooks.test.mjs — the hook/priority/progress contract
+npm run test:pronom
+```
+
+`hooks.test.mjs` constructs every plugin in `REGISTRY`/`INPUT_REGISTRY`
+against a stub `deps` and asserts the parts of the contract that fail
+*silently* rather than loudly: a tap keyed to a hook name chaos2crate no
+longer emits never fires, a tap left as a bare function never gets a slice
+of the bar, and two taps sharing a priority in one stage quietly fall back
+to registration order. It also prints the resolved execution order per
+stage, which is the quickest way to see what a priority change actually
+did. The list of valid hook names is duplicated there rather than imported
+— this package has no runtime dependency on chaos2crate, so accepting a
+contract change from the other side is a deliberate edit to that list.
 
 **2. Every plugin module exports `createPlugin(deps)`**, not a static
 `plugin` object. `deps` is the exact set of chaos2crate core functions
@@ -104,7 +216,12 @@ const plugin = {
   // paths" below.
   outputPaths: [{ path: "my-thing-output", kind: "dir" }],
   hooks: {
-    "crate:built": (ctx) => { /* ... */ },
+    "crate:build": {
+      priority: 20,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.enableMyThing,
+      handler: (ctx) => { /* ... */ },
+    },
   },
 };
 ```

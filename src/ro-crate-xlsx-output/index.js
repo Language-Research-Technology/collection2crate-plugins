@@ -5,6 +5,8 @@
 //
 // Hook names are literal strings and core chaos2crate functions arrive
 // via createPlugin(deps) — see this repo's README.
+import { progressFor } from "../_progress.js";
+
 let crateToXlsxBytes, writeFile, fileExists;
 
 const XLSX_FILE = "ro-crate-metadata.xlsx";
@@ -21,16 +23,27 @@ const plugin = {
     key: "makeXlsx", label: "Generate ro-crate-metadata.xlsx", default: true,
   },
   hooks: {
-    "output:write": async (ctx) => {
-      const { dirHandle, options, crate, log } = ctx;
-      if (!options.makeXlsx) return;
-      if (options.overwrite || !(await fileExists(dirHandle, XLSX_FILE))) {
-        const bytes = await crateToXlsxBytes(crate);
-        await writeFile(dirHandle, XLSX_FILE, bytes);
-        log(`Wrote ${XLSX_FILE}.`, "ok");
-      } else {
-        log(`${XLSX_FILE} exists and overwrite is off — skipped.`, "warn");
-      }
+    "output:write": {
+      priority: 30,
+      weight: 2,
+      activeWhen: (ctx) => !!ctx.options.makeXlsx,
+      handler: async (ctx) => {
+        const { dirHandle, options, crate, log } = ctx;
+        if (!options.makeXlsx) return;
+        const progress = progressFor(ctx);
+        progress.start(`Writing ${XLSX_FILE}…`);
+        try {
+          if (options.overwrite || !(await fileExists(dirHandle, XLSX_FILE))) {
+            const bytes = await crateToXlsxBytes(crate);
+            await writeFile(dirHandle, XLSX_FILE, bytes);
+            log(`Wrote ${XLSX_FILE}.`, "ok");
+          } else {
+            log(`${XLSX_FILE} exists and overwrite is off — skipped.`, "warn");
+          }
+        } finally {
+          progress.done();
+        }
+      },
     },
   },
 };

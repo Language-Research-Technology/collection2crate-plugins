@@ -19,6 +19,8 @@
     "unicode-name": "^1.1.0"
   },
   "scripts": {
+    "test": "node hooks.test.mjs",
+    "test:hooks": "node hooks.test.mjs",
     "update:pronom": "node src/file-format-identify/update-sf-wasm.mjs",
     "test:pronom": "node src/file-format-identify/matcher.test.mjs"
   }

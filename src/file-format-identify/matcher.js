@@ -61,7 +61,7 @@ async function identifyHandle(fileHandle) {
  *
  * Keyed by id rather than position in filesWithMeta for the same reason
  * austlang's identifyAllLanguages is (see that module): produced at
- * files:analyze, consumed a hook stage later at crate:built.
+ * files:prepare, consumed a hook stage later at crate:build.
  *
  * Calling identify() per file (not once over the whole directory) keeps
  * this consistent with every other per-file scan in this codebase — a
@@ -73,7 +73,7 @@ async function identifyHandle(fileHandle) {
  */
 const CHUNK = 10;
 
-export async function identifyAllFormats(dirHandle, filesWithMeta, log = () => {}) {
+export async function identifyAllFormats(dirHandle, filesWithMeta, log = () => {}, report = () => {}) {
   await loadSiegfried();
   const total = filesWithMeta.length;
   log(`Identifying file formats for ${total} file(s) (offline, siegfried WASM)…`, "muted");
@@ -90,7 +90,8 @@ export async function identifyAllFormats(dirHandle, filesWithMeta, log = () => {
       }
     }
     if ((i + 1) % CHUNK === 0 || i + 1 === total) {
-      log(`Format identification: ${i + 1}/${total} file(s)…`, "muted");
+      // Reported, not logged — see the same loop in austlang's matcher.
+      report((i + 1) / total, `Format identification: ${i + 1}/${total} file(s)…`);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }

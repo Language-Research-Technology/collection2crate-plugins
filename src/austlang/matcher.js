@@ -62,7 +62,7 @@ function findAustlangMatches(haystack, includeAlt) {
 // Returns a Map of file id -> { matchedLanguages }.
 //
 // Keyed by id rather than by position in filesWithMeta, because the result is
-// produced at files:analyze and consumed at crate:built — two hook stages
+// produced at files:prepare and consumed at crate:build — two hook stages
 // apart, with every other tap's handler in between. Nothing stops a tap
 // reordering, filtering or appending to that array; with positional keys any
 // of those would silently attribute languages to the wrong files. Ids are
@@ -73,7 +73,7 @@ function findAustlangMatches(haystack, includeAlt) {
 // batches, instead of running as one uninterrupted synchronous loop.
 const CHUNK = 25;
 
-export async function identifyAllLanguages(filesWithMeta, includeAlt, log = () => {}) {
+export async function identifyAllLanguages(filesWithMeta, includeAlt, log = () => {}, report = () => {}) {
   const total = filesWithMeta.length;
   log(`Identifying subject languages for ${total} file(s) (offline AUSTLANG, by filename)…`, "muted");
   const cache = new Map();
@@ -86,7 +86,11 @@ export async function identifyAllLanguages(filesWithMeta, includeAlt, log = () =
     if (matches.length) log(`  ${file.fileName} → ${matches.map((m) => m.name).join(", ")}`, "muted");
     byId.set(file.id, { matchedLanguages: matches });
     if ((i + 1) % CHUNK === 0 || i + 1 === total) {
-      log(`Language identification: ${i + 1}/${total} file(s)…`, "muted");
+      // Progress goes to the bar, not the log: the host scales this fraction
+      // into this tap's slice of the main bar and drives the secondary bar
+      // with it raw. The per-match lines above are still logged, because
+      // those say something a reader wants; "23/91" does not.
+      report((i + 1) / total, `Language identification: ${i + 1}/${total} file(s)…`);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }

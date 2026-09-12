@@ -8,6 +8,8 @@
 // injected via createPlugin(deps) rather than imported by relative path —
 // that's what keeps this package free of any runtime dependency back on
 // chaos2crate.
+import { progressFor } from "../_progress.js";
+
 let crateToJsonString, writeFile, fileExists;
 
 const JSON_FILE = "ro-crate-metadata.json";
@@ -21,14 +23,27 @@ const plugin = {
   name: "ro-crate-json-output",
   outputPaths: [{ path: JSON_FILE, kind: "file" }],
   hooks: {
-    "output:write": async (ctx) => {
-      const { dirHandle, options, crate, log } = ctx;
-      if (options.overwrite || !(await fileExists(dirHandle, JSON_FILE))) {
-        await writeFile(dirHandle, JSON_FILE, crateToJsonString(crate));
-        log(`Wrote ${JSON_FILE}.`, "ok");
-      } else {
-        log(`${JSON_FILE} exists and overwrite is off — skipped.`, "warn");
-      }
+    "output:write": {
+      priority: 20,
+      weight: 1,
+      handler: async (ctx) => {
+        const { dirHandle, options, crate, log } = ctx;
+        // One indivisible step, so start()/done() and no report() in between:
+        // the main bar crosses this tap's slice and the secondary bar never
+        // appears, which is what it should do for work with no sub-steps.
+        const progress = progressFor(ctx);
+        progress.start(`Writing ${JSON_FILE}…`);
+        try {
+          if (options.overwrite || !(await fileExists(dirHandle, JSON_FILE))) {
+            await writeFile(dirHandle, JSON_FILE, crateToJsonString(crate));
+            log(`Wrote ${JSON_FILE}.`, "ok");
+          } else {
+            log(`${JSON_FILE} exists and overwrite is off — skipped.`, "warn");
+          }
+        } finally {
+          progress.done();
+        }
+      },
     },
   },
 };

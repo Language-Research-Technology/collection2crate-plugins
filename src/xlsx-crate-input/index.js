@@ -8,6 +8,7 @@
 // workbook's isPartOf/image references point at. This plugin supplies
 // metadata; it does not replace the input mode.
 import { FOLDER_XLSX_NAME } from "./xlsx_crate.js";
+import { progressFor } from "../_progress.js";
 
 // Hook names are literal strings, and core chaos2crate functions arrive
 // via createPlugin(deps) — including loadMasp, a thunk
@@ -51,66 +52,91 @@ const plugin = {
     // wrote. Moved here (from being hardcoded in main.js's folder-pick flow)
     // so which sources count as "existing crate metadata" stays this
     // plugin's call, not the app's.
-    "folder:picked": async (ctx) => {
-      const { pickNewestCrateSource, readCrateJsonFromSource } = await loadXlsxCrate();
-      const source = await pickNewestCrateSource(ctx.dirHandle);
-      if (!source) return;
-      try {
-        ctx.crateJson = await readCrateJsonFromSource(source);
-        ctx.crateSourceLabel = `${source.name} (modified ${new Date(source.lastModified).toLocaleString()})`;
-      } catch (e) {
-        // A spreadsheet that won't parse shouldn't cost the user the JSON
-        // sitting next to it — but if the JSON itself was the one that
-        // failed, re-reading it again would just fail the same way.
-        ctx.log(`Could not read ${source.name} for prefill: ${e.message}`, "warn");
-        const fallback = source.kind !== "json" ? await readJsonFromFolder(ctx.dirHandle, DESCRIPTOR_FILENAME) : null;
-        ctx.crateJson = fallback;
-        ctx.crateSourceLabel = fallback ? DESCRIPTOR_FILENAME : "";
-      }
+    "folder:picked": {
+      priority: 10,
+      handler: async (ctx) => {
+        const { pickNewestCrateSource, readCrateJsonFromSource } = await loadXlsxCrate();
+        const source = await pickNewestCrateSource(ctx.dirHandle);
+        if (!source) return;
+        try {
+          ctx.crateJson = await readCrateJsonFromSource(source);
+          ctx.crateSourceLabel = `${source.name} (modified ${new Date(source.lastModified).toLocaleString()})`;
+        } catch (e) {
+          // A spreadsheet that won't parse shouldn't cost the user the JSON
+          // sitting next to it — but if the JSON itself was the one that
+          // failed, re-reading it again would just fail the same way.
+          ctx.log(`Could not read ${source.name} for prefill: ${e.message}`, "warn");
+          const fallback = source.kind !== "json" ? await readJsonFromFolder(ctx.dirHandle, DESCRIPTOR_FILENAME) : null;
+          ctx.crateJson = fallback;
+          ctx.crateSourceLabel = fallback ? DESCRIPTOR_FILENAME : "";
+        }
+      },
     },
 
     // Seed the root dataset before the crate is built, so the values are in
     // ctx.config by the time generic-input calls buildCrate().
-    "config:prepare": async (ctx) => {
-      const { options, dirHandle, log } = ctx;
-      if (!options.xlsxCrate) return;
+    "crate:prepare": {
+      priority: 10,
+      weight: 2,
+      activeWhen: (ctx) => !!ctx.options.xlsxCrate,
+      handler: async (ctx) => {
+        const { options, dirHandle, log } = ctx;
+        if (!options.xlsxCrate) return;
 
-      const source = await resolveSource(options, dirHandle);
-      if (!source) {
-        log(`Spreadsheet metadata is on, but no file was uploaded and the folder has no ${FOLDER_XLSX_NAME} — skipping.`, "warn");
-        return;
-      }
+        const source = await resolveSource(options, dirHandle);
+        if (!source) {
+          log(`Spreadsheet metadata is on, but no file was uploaded and the folder has no ${FOLDER_XLSX_NAME} — skipping.`, "warn");
+          return;
+        }
 
-      const { readCrateFromXlsxBytes, rootPropertiesFromCrate, seedRootDataset, collectWarnings } =
-        await loadXlsxCrate();
+        const progress = progressFor(ctx);
+        progress.start(`Reading ${source.name}…`);
+        try {
+          const { readCrateFromXlsxBytes, rootPropertiesFromCrate, seedRootDataset, collectWarnings } =
+            await loadXlsxCrate();
 
-      let crate;
-      try {
-        crate = await readCrateFromXlsxBytes(source.bytes);
-      } catch (e) {
-        throw new Error(`Could not read ${source.name} as an RO-Crate spreadsheet: ${e.message}`);
-      }
-      log(`Reading crate metadata from ${source.name} (${source.origin}).`, "muted");
+          let crate;
+          try {
+            crate = await readCrateFromXlsxBytes(source.bytes);
+          } catch (e) {
+            throw new Error(`Could not read ${source.name} as an RO-Crate spreadsheet: ${e.message}`);
+          }
+          log(`Reading crate metadata from ${source.name} (${source.origin}).`, "muted");
 
-      const taken = seedRootDataset(ctx.config.rootDataset, rootPropertiesFromCrate(crate));
-      log(taken.length
-        ? `Took ${taken.length} root propert(ies) from the spreadsheet: ${taken.join(", ")}.`
-        : "Spreadsheet root added nothing the Describe step hadn't already set.", "muted");
+          const taken = seedRootDataset(ctx.config.rootDataset, rootPropertiesFromCrate(crate));
+          log(taken.length
+            ? `Took ${taken.length} root propert(ies) from the spreadsheet: ${taken.join(", ")}.`
+            : "Spreadsheet root added nothing the Describe step hadn't already set.", "muted");
 
-      await reportOnCrate(ctx, crate, source.name);
+          await reportOnCrate(ctx, crate, source.name);
 
-      // Held for CRATE_BUILT — reading the workbook twice would be wasteful
-      // and could report the same warnings twice.
-      ctx.xlsxCrate = crate;
+          // Held for CRATE_BUILD — reading the workbook twice would be wasteful
+          // and could report the same warnings twice.
+          ctx.xlsxCrate = crate;
+        } finally {
+          progress.done();
+        }
+      },
     },
 
-    "crate:built": async (ctx) => {
-      if (!ctx.options.xlsxCrate || !ctx.xlsxCrate) return;
-      const { mergeCrateEntities, applyCollectionMembership } = await loadXlsxCrate();
-      mergeCrateEntities(ctx.crate, ctx.xlsxCrate, ctx.log);
-      // After the merge, so the entities the workbook's membership points at
-      // are already in the crate to be checked against.
-      applyCollectionMembership(ctx.crate, ctx.xlsxCrate, ctx.log);
+    "crate:build": {
+      priority: 20,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.xlsxCrate,
+      handler: async (ctx) => {
+        if (!ctx.options.xlsxCrate || !ctx.xlsxCrate) return;
+        const { mergeCrateEntities, applyCollectionMembership } = await loadXlsxCrate();
+        const progress = progressFor(ctx);
+        progress.start("Merging spreadsheet entities into the crate…");
+        try {
+          mergeCrateEntities(ctx.crate, ctx.xlsxCrate, ctx.log);
+          // After the merge, so the entities the workbook's membership points at
+          // are already in the crate to be checked against.
+          applyCollectionMembership(ctx.crate, ctx.xlsxCrate, ctx.log);
+        } finally {
+          progress.done();
+        }
+      },
     },
   },
 };

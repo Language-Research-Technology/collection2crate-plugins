@@ -200,7 +200,7 @@ function generatedGeometryId(placeEntity, placeName) {
 // from config.fileProperties, or a prior merge) gets a minimal one generated
 // so it's not left undocumented in the graph. Mutates `crate` in place;
 // returns stats.
-export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () => {}, graphEntityById) {
+export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () => {}, graphEntityById, report = () => {}) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(xlsxData);
 
@@ -271,7 +271,7 @@ export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () 
         for (const val of splitMappingValues(raw)) uniquePlaces.add(val);
       }
     }
-    if (uniquePlaces.size) await placeLookup.prefetch([...uniquePlaces], log);
+    if (uniquePlaces.size) await placeLookup.prefetch([...uniquePlaces], report);
   }
 
   for (const row of dataRows) {

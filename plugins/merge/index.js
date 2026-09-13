@@ -3,10 +3,10 @@
 // primitive; this file owns the "when/how to gather options for it" logic
 // that used to live inline in processFolder.
 import { mergeXlsxIntoCrate } from "./xlsx.js";
-import { progressFor } from "../_progress.js";
+import { progressFor } from "../../src/_progress.js";
 import MERGE_CONFIG from "./merge_config.json" with { type: "json" };
 
-// Hook names are literal strings and core chaos2crate functions arrive
+// Hook names are literal strings and core collection2crate functions arrive
 // via createPlugin(deps) — see this repo's README. graphEntityById (needed
 // by xlsx.js's mergeXlsxIntoCrate) is threaded through as an extra argument
 // rather than injected separately, since it's only used inside that one call.

@@ -3,17 +3,17 @@
 // user uploads. Its root dataset fills gaps in the Describe-step config and
 // its entities are merged into the crate the folder scan produced.
 //
-// Additive rather than an INPUT_PLUGIN on purpose: the folder scan still has
-// to run, because generic-input is what creates the File entities the
-// workbook's isPartOf/image references point at. This plugin supplies
-// metadata; it does not replace the input mode.
+// An annotating tap (crate:build at 20) rather than a builder on purpose: the
+// folder scan still has to run, because generic-input is what creates the File
+// entities the workbook's isPartOf/image references point at. This plugin
+// supplies metadata; it does not assemble the crate.
 import { FOLDER_XLSX_NAME } from "./xlsx_crate.js";
-import { progressFor } from "../_progress.js";
+import { progressFor } from "../../src/_progress.js";
 
-// Hook names are literal strings, and core chaos2crate functions arrive
+// Hook names are literal strings, and core collection2crate functions arrive
 // via createPlugin(deps) — including loadMasp, a thunk
 // (`() => import("../masp.js")`) that keeps the heavy validator dynamically
-// imported from chaos2crate's own tree. See this repo's README.
+// imported from collection2crate's own tree. See this repo's README.
 let readFileBytes, readJsonFromFolder, loadMasp, coreDeps;
 
 export function createPlugin(deps) {

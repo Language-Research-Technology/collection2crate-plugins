@@ -1,22 +1,37 @@
-# c2c-plugins
+# collection2crate-plugins
 
-Build plugins for [chaos2crate](https://github.com/Language-Research-Technology/chaos2crate) —
+Build plugins for [collection2crate](https://github.com/Language-Research-Technology/collection2crate) —
 split out of that repo's `src/plugins/` so a deployment can pick which
 plugins it bundles instead of shipping all of them.
 
-This package has **no runtime dependency on chaos2crate**. Every plugin
-here is a factory, `createPlugin(deps)`, that chaos2crate calls with the
+This package has **no runtime dependency on collection2crate**. Every plugin
+here is a factory, `createPlugin(deps)`, that collection2crate calls with the
 specific functions from its own `crate.js`/`fs_helpers.js`/`github.js`/
 `masp.js` that plugin needs. That's what lets this repo be developed,
 tested, and version-controlled independently, with no circular package
 dependency between the two repos.
 
+## Layout
+
+```
+index.js                 REGISTRY — the one registry, keyed by plugin name
+plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
+src/_progress.js         shared machinery, not a plugin
+hooks.test.mjs           the hook/priority/progress contract test
+```
+
+One folder per plugin under `plugins/`, named exactly as the plugin names
+itself and as `REGISTRY` keys it — that triple agreement is what lets a
+consumer resolve `collection2crate-plugins/plugins/<name>/index.js` from a
+`PLUGINS` selection without a lookup table, and `hooks.test.mjs` asserts the
+registry key and `plugin.name` half of it. Anything shared between plugins
+rather than being one stays outside `plugins/`, in `src/`.
+
 ## Consuming this package
 
-chaos2crate depends on it as `"c2c-plugins": "file:../c2c-plugins"` (a
-sibling checkout) and imports `REGISTRY`/`INPUT_REGISTRY` from `index.js`,
-filtering them by its `PLUGINS` env var before calling each selected
-factory. See chaos2crate's `SPEC.md` and `src/plugins/index.js`
+collection2crate depends on it as `"collection2crate-plugins": "file:../collection2crate-plugins"` (a
+sibling checkout) and imports `REGISTRY` from `index.js`, filtering it by
+its `PLUGINS` env var before calling each selected factory. See collection2crate's `SPEC.md` and `src/plugins/index.js`
 for the consuming side.
 
 ## The two conventions every plugin here follows
@@ -24,7 +39,7 @@ for the consuming side.
 **1. Hook names are literal strings, not an imported constant.** A plugin's
 `hooks` object is keyed by strings like `"crate:build"` or `"output:write"`
 rather than an imported `HOOKS.CRATE_BUILD` — those strings are a stable
-contract owned by chaos2crate's `src/plugins/hooks.js`:
+contract owned by collection2crate's `src/plugins/hooks.js`:
 
 | Hook | String | When |
 |---|---|---|
@@ -38,7 +53,7 @@ contract owned by chaos2crate's `src/plugins/hooks.js`:
 | `CRATE_VALIDATE` | `"crate:validate"` | validation |
 | `OUTPUT_WRITE` | `"output:write"` | writing to the folder |
 
-If chaos2crate ever renames one of these, every plugin here keyed to the
+If collection2crate ever renames one of these, every plugin here keyed to the
 old string silently stops firing — there's no import to break loudly. Grep
 this repo for the old string when that happens.
 
@@ -46,7 +61,7 @@ These replaced an earlier, smaller set: `"config:prepare"` is now
 `"crate:prepare"`, `"files:analyze"` is now `"files:prepare"`, and
 `"crate:built"` folded into `"crate:build"` — the old separate
 build-then-mutate pair is now one stage ordered by `priority` (below), with
-chaos2crate's own assembly running ahead of every plugin tap.
+the build's chosen *builder* running ahead of every annotating tap.
 
 **Every tap declares its `priority`.** A tap is an object, not a bare
 function:
@@ -67,8 +82,8 @@ default (10) plus stable-sort registration order, so a plugin's position in
 a stage is a property of the plugin itself and survives being filtered out
 of, or reordered in, a deployment's `PLUGINS` selection. The numbers are
 spaced 10 apart so a new plugin can be slotted between two existing ones
-without renumbering. Plugin taps on `"crate:build"` start at 20, leaving
-0–10 to chaos2crate's own crate assembly, which has to run first.
+without renumbering. Taps on `"crate:build"` start at 20, leaving 0–10 to
+the builders — see below.
 
 Current assignments, per stage:
 
@@ -76,8 +91,8 @@ Current assignments, per stage:
 |---|---|
 | `folder:picked` | `xlsx-crate-input` 10 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
-| `files:prepare` | `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
-| `crate:build` | `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
+| `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
 | `output:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
 
@@ -86,6 +101,36 @@ Note that `ca-data-prep` replaces `ctx.crate` wholesale at 50, so the two
 taps ahead of it (`austlang` 30, `file-format-identify` 40) contribute
 nothing on a build where transcript processing is on — preserved as-is
 here, since this change was a rename, not a reordering.
+
+### Builders
+
+There is no separate kind of plugin for reading a folder, and no input-mode
+setting the host dispatches on. A **builder** is just a plugin whose
+`"crate:build"` tap sits in the band `priority <= 10` and assigns
+`ctx.crate`; everything at 20 and above annotates the crate a builder
+produced, which is why those taps can assume it already exists.
+
+collection2crate runs **exactly one builder per build**: of the builder taps whose
+`activeWhen(ctx)` passes, the lowest priority wins, and *every* tap belonging
+to a builder that lost is skipped for that build — other stages included. So
+a specialised builder doesn't have to coordinate with the baseline one, or
+even know it exists:
+
+| Builder | Priority | Gate |
+|---|---|---|
+| `docx-input` | 5 | `activeWhen: ctx => !!ctx.options.docxInput` |
+| `generic-input` | 10 | none — the fallback |
+
+`generic-input` carries no option, so it is always active and always the last
+builder standing; switching on `docxInput` puts a builder ahead of it and
+stands it down, folder scan (`files:prepare` at 0) included. A new builder
+needs a lower priority than the fallback and an option of its own for a
+profile to enable — nothing in the host changes. Exactly one builder in the
+registry may go ungated; `hooks.test.mjs` enforces that, since a second
+unconditional one could never run.
+
+If a build ends with no `ctx.crate`, collection2crate fails it with an error
+naming the stage rather than carrying on into validation with nothing.
 
 ### Progress
 
@@ -118,14 +163,14 @@ around a single label. `done()` snaps the main bar to the slice end.
 
 `ctx.log` and `ctx.progress` are **independent channels**: no log message
 drives bar state any more. The old convention — emitting
-`"… 12/40 file(s)…"` through `ctx.log` and letting chaos2crate's host
+`"… 12/40 file(s)…"` through `ctx.log` and letting collection2crate's host
 parse the `done/total` out of the string — is gone. Keep logging what is
 worth reading in the transcript; report progress separately.
 
 Always go through `progressFor(ctx)` (`src/_progress.js`) rather than
 touching `ctx.progress` directly. It returns the same three-call shape on a
 host that has no `ctx.progress` at all, so a plugin from this repo still
-runs under an older chaos2crate instead of throwing partway through a build.
+runs under an older collection2crate instead of throwing partway through a build.
 
 `countedProgress(ctx, total, label)` from the same module wraps the common
 "loop over N things" case: it starts the tap, hands back a `tick(index,
@@ -141,19 +186,18 @@ npm test          # hooks.test.mjs — the hook/priority/progress contract
 npm run test:pronom
 ```
 
-`hooks.test.mjs` constructs every plugin in `REGISTRY`/`INPUT_REGISTRY`
-against a stub `deps` and asserts the parts of the contract that fail
-*silently* rather than loudly: a tap keyed to a hook name chaos2crate no
+`hooks.test.mjs` constructs every plugin in `REGISTRY` against a stub `deps` and asserts the parts of the contract that fail
+*silently* rather than loudly: a tap keyed to a hook name collection2crate no
 longer emits never fires, a tap left as a bare function never gets a slice
 of the bar, and two taps sharing a priority in one stage quietly fall back
 to registration order. It also prints the resolved execution order per
 stage, which is the quickest way to see what a priority change actually
 did. The list of valid hook names is duplicated there rather than imported
-— this package has no runtime dependency on chaos2crate, so accepting a
+— this package has no runtime dependency on collection2crate, so accepting a
 contract change from the other side is a deliberate edit to that list.
 
 **2. Every plugin module exports `createPlugin(deps)`**, not a static
-`plugin` object. `deps` is the exact set of chaos2crate core functions
+`plugin` object. `deps` is the exact set of collection2crate core functions
 that plugin needs, assigned into module-level bindings the plugin's hook
 handlers close over. Call it once, before the plugin's hooks can fire.
 
@@ -171,17 +215,17 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
 | `ro-crate-html-output` | `crateToPreviewHtml`, `crateToMultiPageHtml`, `writeFile`, `writeFileAtPath`, `readJsonFromFolder`, `readFileTextFromDirectory`, `verifyPermission`, `fileExists`, `bustCacheUrl`, `buildGitHubTreeUrl`, `fetchGitHubTextFile`, `listGitHubFolder` |
-| `generic-input` (input mode) | `buildFileMetadata`, `buildCrate`, `readJsonFromFolder` (reads the folder's existing crate, if any, to reconcile against rather than replace — chaos2crate SPEC.md §6.1a), `openModal` (confirms which newly-found files to add, via `new-files-confirm.js`) |
-| `docx-input` (input mode) | `writeFileAtPath` (handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
+| `generic-input` (builder) | `buildFileMetadata`, `buildCrate`, `readJsonFromFolder` (reads the folder's existing crate, if any, to reconcile against rather than replace — collection2crate SPEC.md §6.1a), `openModal` (confirms which newly-found files to add, via `new-files-confirm.js`) |
+| `docx-input` (builder) | `writeFileAtPath` (handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
 
 `loadMasp` is a thunk — `() => import("../masp.js")` — rather than the
 function itself, so `ro-crate-masp` (a heavy validator library) stays
-dynamically imported from chaos2crate's own tree instead of becoming a
+dynamically imported from collection2crate's own tree instead of becoming a
 static import anywhere in this package.
 
-The `roctable` plugin (`src/roctable/`) takes its name from the
+The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
-The `roctable` plugin (`src/roctable/`) takes its name from the
+The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
 library not yet on npm — installed as a git dependency pinned to a
 commit (`"roctable": "github:ptsefton/roctable#<sha>"`), since it isn't
@@ -191,12 +235,12 @@ the repository's default branch has on the next `npm install`. It reuses
 the library's own crate-walking functions directly (`ctx.crate` is already
 an `ro-crate` `ROCrate` instance, the same shape it expects) — including
 `load_text`, via a `fileReader` this plugin injects
-(`browserFileReader` in `src/roctable/index.js`, wrapping
+(`browserFileReader` in `plugins/roctable/index.js`, wrapping
 `readFileTextFromDirectory`) rather than the library's own Node-`fs`-based
 default (see its `lib/io.js` and `SPEC.md` §9.0). Its config load/save and
 CSV file writing stay this plugin's own job either way — the library's
 `lib/config.js`/`lib/csv.js` file I/O is Node-`fs`-only and simply isn't
-called from here; see `chaos2crate/docs/roctable-spec.md`.
+called from here; see `collection2crate/docs/roctable-spec.md`.
 
 The plugin is split across three files: `index.js` (the plugin itself —
 hooks, the `optionSchema`, the `roctableConfigure` action), `discover.js`
@@ -205,14 +249,14 @@ code path both the build-time hook and the standalone action call, plus the
 `ldac:mainText`/`indexableText` default-seeding rule), and `config-tree-ui.js`
 (the checkbox-tree editor `openModal` renders — a table heading per `@type`,
 unrolling to its properties' include/expand/load_text/join). Config lives at
-`_config/roctable/config.json`, output at `_outputs/roctable/` — chaos2crate
+`_config/roctable/config.json`, output at `_outputs/roctable/` — collection2crate
 issue #81's proposed per-plugin directory convention, adopted here ahead of
 it becoming repo-wide.
 
 ## Writing a new plugin here
 
 ```js
-// src/my-thing/index.js
+// plugins/my-thing/index.js
 let someCoreFn;
 
 export function createPlugin(deps) {
@@ -244,12 +288,12 @@ const plugin = {
 
 A plugin that writes into the picked folder (rather than only reading from it,
 or only mutating `ctx.crate` in memory) should declare `outputPaths`: an array
-of `{ path, kind }`, `kind` being `"file"` or `"dir"`. chaos2crate composes
+of `{ path, kind }`, `kind` being `"file"` or `"dir"`. collection2crate composes
 these across every registered plugin (`composeOutputPaths()` in its
 `src/plugins/index.js`, generated alongside `composeOptionSchema`/
 `composeSettingsSchema`) for two things: excluding a previous build's own
 output from being rescanned as corpus content on the next build (the same job
-`GENERATED_FILENAMES` in chaos2crate's `crate.js` already does for the core
+`GENERATED_FILENAMES` in collection2crate's `crate.js` already does for the core
 JSON/xlsx/HTML outputs), and an opt-in Settings toggle that deletes all of it
 before a build runs, so stale output from a renamed or removed source file
 never lingers.
@@ -265,23 +309,22 @@ Rules of thumb:
   only appears for a multipage template.
 - **Two plugins writing into the same shared directory both declare it** —
   `chat-export` and `ca-data-prep` both declare `{ path: "c2c-output", kind:
-  "dir" }`; chaos2crate's composition dedupes by `path`.
-- **`kind: "dir"` means chaos2crate may delete the whole subtree.** Only
+  "dir" }`; collection2crate's composition dedupes by `path`.
+- **`kind: "dir"` means collection2crate may delete the whole subtree.** Only
   declare a directory path when the plugin owns everything under it — don't
   declare a directory that content files might also legitimately live in.
 - **No `outputPaths` at all is correct for a plugin that never writes to the
   folder** — `merge`, `austlang`, `validate-crate`, and the input-analysis
   half of every plugin all fall here; only the writing side declares.
-- **A path under `_config/<slug>/` or `_backup/<slug>/` (chaos2crate issue
+- **A path under `_config/<slug>/` or `_backup/<slug>/` (collection2crate issue
   #81's proposed per-plugin directories) still gets scan-excluded, but
-  chaos2crate's "Delete plugin output before rebuilding" skips deleting it**
+  collection2crate's "Delete plugin output before rebuilding" skips deleting it**
   — those two are meant to persist across builds (standing configuration,
   changed-file backups), unlike `_outputs/<slug>/`, which is exactly the
   disposable generated content that setting exists to clear. `roctable`
   is the first plugin here to use this: config at `_config/roctable/`,
   CSVs at `_outputs/roctable/`.
 
-Then register it in this repo's `index.js` (`REGISTRY` for an additive
-plugin, `INPUT_REGISTRY` for a mutually-exclusive input mode), and in
-chaos2crate's `src/plugins/index.js`, wire up the `deps` object it's
-called with.
+Then register it in this repo's `index.js` (`REGISTRY` — one registry, for
+builders and annotating plugins alike), and in collection2crate's
+`src/plugins/index.js`, wire up the `deps` object it's called with.

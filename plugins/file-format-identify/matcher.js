@@ -6,9 +6,9 @@
 // reimplementation — full PRONOM byte-signature *and* container-signature
 // matching (proper docx/xlsx/odt disambiguation, not a heuristic), plus its
 // own built-in extension-based fallback with mismatch warnings, all running
-// client-side since chaos2crate is browser-only with no server/Node runtime.
+// client-side since collection2crate is browser-only with no server/Node runtime.
 //
-// getFileHandleAtPath is a chaos2crate core function, injected once via
+// getFileHandleAtPath is a collection2crate core function, injected once via
 // configure() rather than imported by relative path — called from
 // file-format-identify/index.js's createPlugin(deps) before this module's
 // exports are used. See this repo's README.
@@ -67,7 +67,7 @@ async function identifyHandle(fileHandle) {
  * this consistent with every other per-file scan in this codebase — a
  * single directory-level call has no per-file progress signal (siegfried's
  * own directory walk in wasm/wasm.go has no exclusion list either, so it
- * would also pick up chaos2crate's own generated/control files) — and lets
+ * would also pick up collection2crate's own generated/control files) — and lets
  * the existing sub-progress-bar log lines (main.js's
  * updateBuildProgressFromLog) keep working unchanged.
  */

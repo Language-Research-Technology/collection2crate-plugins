@@ -1,5 +1,5 @@
 import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
-import { countedProgress } from "../_progress.js";
+import { countedProgress } from "../../src/_progress.js";
 
 let writeFileAtPath;
 

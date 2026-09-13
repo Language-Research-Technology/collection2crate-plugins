@@ -4,7 +4,7 @@
 // both a plugin AND main.js's Edit-Save flow directly), this code has no
 // caller besides the merge plugin itself. graphEntityById is the one thing
 // still shared with crate.js (addLanguageEntities, the austlang plugin's
-// crate-mutation primitive, uses it too) — chaos2crate's core function,
+// crate-mutation primitive, uses it too) — collection2crate's core function,
 // passed in by the caller (merge/index.js's createPlugin(deps)) rather than
 // imported by relative path, per this repo's README.
 import ExcelJS from "exceljs";

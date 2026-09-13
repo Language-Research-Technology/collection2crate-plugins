@@ -8,7 +8,7 @@ import {
 
 // Hook names are literal strings and writeFileAtPath (fs_helpers.js) arrives
 // via createPlugin(deps) — see this repo's README.
-import { countedProgress } from "../_progress.js";
+import { countedProgress } from "../../src/_progress.js";
 
 let writeFileAtPath;
 

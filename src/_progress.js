@@ -1,7 +1,7 @@
 // The progress side of the hook contract, in one place.
 //
 // A tap declares how much of the build it represents (`weight`) and, when
-// conditional, `activeWhen(ctx)`; chaos2crate sums the weights of the taps
+// conditional, `activeWhen(ctx)`; collection2crate sums the weights of the taps
 // that will actually run and hands each one an ordered slice of the main
 // progress bar. The handler then reports only its own position within that
 // slice — a fraction in [0,1], never a global percentage, and never a
@@ -9,7 +9,7 @@
 //
 // Everything here exists so a plugin never has to feel for whether the host
 // supports any of that. progressFor(ctx) always returns the same three-call
-// shape; against a chaos2crate that predates ctx.progress (or any other
+// shape; against a collection2crate that predates ctx.progress (or any other
 // host, or a unit test passing a bare object as ctx) the calls are no-ops,
 // so a plugin stays runnable rather than throwing partway through a build.
 // Keep it dependency-free for the same reason the rest of this package is.

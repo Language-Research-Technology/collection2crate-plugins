@@ -2,13 +2,13 @@
 // current unconditional behavior (gated only by the overwrite/file-exists
 // check every output plugin already respects).
 //
-// Hook names are literal strings (a stable chaos2crate contract, see
+// Hook names are literal strings (a stable collection2crate contract, see
 // this repo's README) rather than an imported HOOKS constant, and the core
-// chaos2crate functions this plugin needs (crate.js/fs_helpers.js) are
+// collection2crate functions this plugin needs (crate.js/fs_helpers.js) are
 // injected via createPlugin(deps) rather than imported by relative path —
 // that's what keeps this package free of any runtime dependency back on
-// chaos2crate.
-import { progressFor } from "../_progress.js";
+// collection2crate.
+import { progressFor } from "../../src/_progress.js";
 
 let crateToJsonString, writeFile, fileExists;
 

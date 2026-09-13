@@ -1,9 +1,9 @@
 {
-  "name": "c2c-plugins",
+  "name": "collection2crate-plugins",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Build plugins for chaos2crate — additive hook-tap plugins and mutually-exclusive input-mode plugins, split out of chaos2crate's src/plugins/ into their own repo.",
+  "description": "Build plugins for collection2crate — hook-tap plugins, including the builders that assemble the crate, split out of collection2crate's src/plugins/ into their own repo; each lives in plugins/<name>/.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -19,7 +19,9 @@
     "unicode-name": "^1.1.0"
   },
   "scripts": {
-    "update:pronom": "node src/file-format-identify/update-sf-wasm.mjs",
-    "test:pronom": "node src/file-format-identify/matcher.test.mjs"
+    "test": "node hooks.test.mjs",
+    "test:hooks": "node hooks.test.mjs",
+    "update:pronom": "node plugins/file-format-identify/update-sf-wasm.mjs",
+    "test:pronom": "node plugins/file-format-identify/matcher.test.mjs"
   }
 }

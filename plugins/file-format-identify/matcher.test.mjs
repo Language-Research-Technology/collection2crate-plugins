@@ -1,4 +1,4 @@
-// Matches this repo's plain-node-assert test style (see chaos2crate's
+// Matches this repo's plain-node-assert test style (see collection2crate's
 // tests/test-*.mjs) — no framework needed for a handful of fixture checks.
 // Run with: node src/file-format-identify/matcher.test.mjs
 //
@@ -54,7 +54,7 @@ async function fileHandleFor(filePath) {
 }
 
 // The plugin's own contract: configure() takes { getFileHandleAtPath }, the
-// same shape chaos2crate's deps.js hands every plugin — here it's a thin
+// same shape collection2crate's deps.js hands every plugin — here it's a thin
 // wrapper resolving relativePath against a Node scratch directory instead
 // of a browser FileSystemDirectoryHandle.
 function configureAgainst(root) {

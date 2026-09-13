@@ -41,7 +41,7 @@ import mammoth from "mammoth";
 import * as cheerio from "cheerio";
 import { ROCrate } from "ro-crate";
 
-// writeFileAtPath is a chaos2crate core function (fs_helpers.js),
+// writeFileAtPath is a collection2crate core function (fs_helpers.js),
 // injected once via configure() rather than imported by relative path — see
 // docx-input/index.js's createPlugin(deps) and this repo's README.
 let writeFileAtPath;

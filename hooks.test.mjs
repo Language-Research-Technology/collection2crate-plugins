@@ -1,9 +1,9 @@
-// Contract test for the hook layer: every plugin in REGISTRY/INPUT_REGISTRY
-// taps only hooks chaos2crate actually emits, in the object form the pipeline
+// Contract test for the hook layer: every plugin in REGISTRY taps only hooks
+// collection2crate actually emits, in the object form the pipeline
 // expects, with a priority that is explicit and unambiguous within its stage.
 //
 // It exists because the failure mode here is silent. A tap keyed to a hook
-// name chaos2crate no longer emits doesn't throw — it just never fires, and
+// name collection2crate no longer emits doesn't throw — it just never fires, and
 // the build quietly produces less than it should (README, "Hook names are
 // literal strings"). Same for a tap left as a bare function after the move to
 // { priority, weight, activeWhen, handler }: nothing errors, it just never
@@ -11,12 +11,12 @@
 //
 //   node hooks.test.mjs
 import assert from "node:assert/strict";
-import { REGISTRY, INPUT_REGISTRY } from "./index.js";
+import { REGISTRY } from "./index.js";
 import { progressFor, countedProgress } from "./src/_progress.js";
 
-// chaos2crate's src/plugins/hooks.js owns this list; it is duplicated rather
+// collection2crate's src/plugins/hooks.js owns this list; it is duplicated rather
 // than imported on purpose — this package has no runtime dependency on
-// chaos2crate (README). Updating it here is the deliberate act of accepting
+// collection2crate (README). Updating it here is the deliberate act of accepting
 // a contract change from the other side.
 const HOOKS = new Set([
   "c2c:loaded", "folder:picked", "profile:selected", "crate:prepare",
@@ -50,7 +50,7 @@ for (const [name, factory] of Object.entries(REGISTRY)) {
   });
 
   for (const [hook, tap] of Object.entries(plugin.hooks || {})) {
-    check(`${name}: "${hook}" is a hook chaos2crate emits`, () => {
+    check(`${name}: "${hook}" is a hook collection2crate emits`, () => {
       assert.ok(HOOKS.has(hook), `unknown hook "${hook}" — a tap keyed to it never fires`);
     });
 
@@ -98,20 +98,46 @@ for (const [hook, taps] of [...byStage].sort()) {
   console.log(`       ${hook}: ${order}`);
 }
 
-check("crate:build: plugin taps leave 0–10 to chaos2crate's own assembly", () => {
-  for (const [name, prio] of byStage.get("crate:build") || []) {
-    assert.ok(prio > 10, `${name} taps crate:build at ${prio}, at or before core assembly`);
-  }
+// The builder band. A crate:build tap at priority <= 10 is a builder: it
+// assembles ctx.crate, and collection2crate runs exactly one of them per build —
+// the active one with the lowest priority, every tap of the others skipped.
+// Taps above 10 annotate the crate a builder produced, so they assume it
+// already exists.
+console.log("\nBuilders");
+
+const BUILDER_BAND = 10;
+const builders = [];
+for (const [name, factory] of Object.entries(REGISTRY)) {
+  const plugin = factory(deps);
+  const tap = plugin.hooks?.["crate:build"];
+  if (tap && typeof tap === "object" && tap.priority <= BUILDER_BAND) builders.push([name, tap]);
+}
+
+check("at least one builder ships in the registry", () => {
+  assert.ok(builders.length, "nothing taps crate:build in the builder band — no build could produce a crate");
 });
 
-console.log("\nInput modes");
-for (const [mode, factory] of Object.entries(INPUT_REGISTRY)) {
-  const plugin = factory(deps);
-  check(`${mode}: builds a crate`, () => {
-    assert.equal(plugin.inputMode, mode, "inputMode and INPUT_REGISTRY key disagree");
-    assert.equal(typeof plugin.buildCrate, "function", "input-mode plugin has no buildCrate");
+for (const [name, tap] of builders) {
+  check(`${name}: its builder tap assembles ctx.crate`, () => {
+    assert.match(tap.handler.toString(), /ctx\.crate\s*=|buildFromFolder|buildCrate\(/,
+      "a tap in the builder band that never assigns ctx.crate leaves the build with nothing to validate");
   });
 }
+
+// Exactly one builder may be unconditional: it is the fallback that runs when
+// no gated builder is switched on. Two of them would mean the higher-priority
+// one could never run, which is an authoring mistake rather than a choice.
+check("exactly one builder is unconditional, and it sorts last in the band", () => {
+  const unconditional = builders.filter(([, tap]) => !tap.activeWhen);
+  assert.equal(unconditional.length, 1,
+    `${unconditional.length} builders have no activeWhen (${unconditional.map(([n]) => n).join(", ") || "none"}) — exactly one fallback is expected`);
+  const fallback = unconditional[0];
+  for (const [name, tap] of builders) {
+    if (name === fallback[0]) continue;
+    assert.ok(tap.priority < fallback[1].priority,
+      `${name} sits at ${tap.priority}, at or after the ${fallback[0]} fallback at ${fallback[1].priority} — it could never win the band`);
+  }
+});
 
 console.log("\nProgress helper");
 check("progressFor: no-ops when the host has no ctx.progress", () => {

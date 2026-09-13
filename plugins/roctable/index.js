@@ -1,16 +1,16 @@
 // Exports a built RO-Crate as one CSV per configured @type, using the
 // roctable library (https://github.com/ptsefton/roctable) — this plugin
-// takes its name from it. chaos2crate's own crate.js builds its ROCrate
+// takes its name from it. collection2crate's own crate.js builds its ROCrate
 // with the same `ro-crate` package version the roctable library depends on,
 // so ctx.crate can be handed straight to its crate-walking functions with
 // no adapter needed.
 //
 // Config lives at _config/roctable/config.json and output at
-// _outputs/roctable/ — chaos2crate issue #81's proposed standard per-plugin
+// _outputs/roctable/ — collection2crate issue #81's proposed standard per-plugin
 // directories (_config/<slug>/ for standing configuration, _outputs/<slug>/
 // for disposable generated content), adopted here ahead of that becoming a
 // repo-wide convention. Both are excluded from "Delete plugin output before
-// rebuilding" on the chaos2crate side (SPEC.md), since _config/ specifically
+// rebuilding" on the collection2crate side (SPEC.md), since _config/ specifically
 // is meant to persist across builds, not be cleared like _outputs/.
 //
 // On a build with no existing config (nothing at _config/roctable/config.json
@@ -25,10 +25,10 @@
 // load_text (the roctable library's "read this property's referenced file
 // into the row" feature) reads through an injected fileReader
 // (ptsefton/roctable#2) rather than its own Node-fs default —
-// browserFileReader below wraps chaos2crate's readFileTextFromDirectory,
+// browserFileReader below wraps collection2crate's readFileTextFromDirectory,
 // which already returns null for "not found", matching what extractTables'
 // loadText expects from a reader.
-import { progressFor, countedProgress } from "../_progress.js";
+import { progressFor, countedProgress } from "../../src/_progress.js";
 import { extractTables } from "roctable/lib/extract.js";
 import { tablesToCsvStrings } from "roctable/lib/csv.js";
 import { discoverConfig } from "./discover.js";
@@ -39,7 +39,7 @@ const CONFIG_FILE = `${CONFIG_DIR}/config.json`;
 const OUTPUT_DIR = "_outputs/roctable";
 const CRATE_FILE = "ro-crate-metadata.json";
 
-// Hook names are literal strings and core chaos2crate functions arrive via
+// Hook names are literal strings and core collection2crate functions arrive via
 // createPlugin(deps) — see this repo's README.
 let readJsonFromFolder, writeFileAtPath, getFileHandleAtPath, readFileTextFromDirectory, loadCrateFromJson, openModal;
 

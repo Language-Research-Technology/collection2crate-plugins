@@ -6,13 +6,13 @@
 // and template-repo folder dropdown) and generic FSA read/write helpers are
 // imported from neutral modules rather than duplicated here.
 //
-// Core chaos2crate functions (crate.js/fs_helpers.js/github.js) are used
+// Core collection2crate functions (crate.js/fs_helpers.js/github.js) are used
 // throughout this file's helpers below, so rather than threading them as an
 // explicit parameter through every call site, createPlugin(deps) assigns
 // them once into these module-level bindings before the plugin object is
 // ever used — see this repo's README for the createPlugin(deps) contract.
 import { resolveProfileGroups } from "./layout.js";
-import { countedProgress, progressFor } from "../_progress.js";
+import { countedProgress, progressFor } from "../../src/_progress.js";
 
 let crateToPreviewHtml, crateToMultiPageHtml;
 let writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists;

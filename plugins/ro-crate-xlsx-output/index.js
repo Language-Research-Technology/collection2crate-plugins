@@ -3,9 +3,9 @@
 // Settings modal, its current location; only the fields explicitly asked to
 // move to Build options — placename/Austlang lookups — changed location).
 //
-// Hook names are literal strings and core chaos2crate functions arrive
+// Hook names are literal strings and core collection2crate functions arrive
 // via createPlugin(deps) — see this repo's README.
-import { progressFor } from "../_progress.js";
+import { progressFor } from "../../src/_progress.js";
 
 let crateToXlsxBytes, writeFile, fileExists;
 

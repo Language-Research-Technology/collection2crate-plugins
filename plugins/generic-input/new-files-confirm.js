@@ -1,6 +1,6 @@
 // A checkbox file-tree for confirming which newly-discovered files (found by
 // a generic-input scan but not yet in an existing crate) should actually be
-// added as new File entities — see index.js's buildCrate and chaos2crate
+// added as new File entities — see index.js's buildCrate and collection2crate
 // SPEC.md §6.1a. Built the same "no host markup, no HTML string" way as the
 // rest of this app's own plugin UI, using the shared `openModal` helper and
 // the host's own `.checkbox`/`.modal .actions` CSS conventions rather than

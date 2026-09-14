@@ -39,19 +39,29 @@ for the consuming side.
 **1. Hook names are literal strings, not an imported constant.** A plugin's
 `hooks` object is keyed by strings like `"crate:build"` or `"crate:write"`
 rather than an imported `HOOKS.CRATE_BUILD` — those strings are a stable
-contract owned by collection2crate's `src/plugins/hooks.js`:
+contract owned by collection2crate's `src/plugins/hooks.js`, in the order the pipeline emits
+them:
 
 | Hook | String | When |
 |---|---|---|
 | `C2C_LOADED` | `"c2c:loaded"` | startup, once |
 | `FOLDER_PICKED` | `"folder:picked"` | a folder is chosen |
 | `PROFILE_SELECTED` | `"profile:selected"` | a MASP profile is chosen |
-| `CRATE_PREPARE` | `"crate:prepare"` | after the Describe step, before the crate exists |
 | `FILES_PREPARE` | `"files:prepare"` | per-file analysis |
+| `FILES_WRITE` | `"files:write"` | writing files derived from the folder's own — no crate exists yet |
 | `METADATA_MERGE` | `"metadata:merge"` | spreadsheet metadata merge |
+| `CRATE_PREPARE` | `"crate:prepare"` | the crate's own metadata, settled after the files are done |
 | `CRATE_BUILD` | `"crate:build"` | crate assembly and everything that mutates it |
 | `CRATE_VALIDATE` | `"crate:validate"` | validation |
 | `CRATE_WRITE` | `"crate:write"` | writing to the folder |
+
+Which button runs a tap follows from its stage. collection2crate's **Process**
+step emits `files:prepare → files:write → metadata:merge → crate:prepare`, and
+its **Build** step emits `crate:build → crate:validate → crate:write` — the two
+halves are disjoint, and a build continues the `ctx` the Process run finished
+with. So a plugin spanning both (prepare files, then describe them in the
+crate) writes to `ctx` in a file stage and reads it back at `crate:build`,
+exactly as it would within one run.
 
 If collection2crate ever renames one of these, every plugin here keyed to the
 old string silently stops firing — there's no import to break loudly. Grep
@@ -92,8 +102,8 @@ Current assignments, per stage:
 | Stage | Order |
 |---|---|
 | `folder:picked` | `xlsx-crate-input` 10 |
-| `crate:prepare` | `xlsx-crate-input` 10 |
 | `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `crate:prepare` | `xlsx-crate-input` 10 |
 | `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
 | `crate:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |

@@ -98,8 +98,13 @@ export function createPlugin(deps) {
           const progress = progressFor(ctx);
           progress.start("Writing extracted media…");
           try {
-            const written = await writeExtractedMedia(ctx.dirHandle, ctx.docxMedia);
-            ctx.log(`Wrote ${written} media file(s) to ${OUTPUT_FILES_DIR_NAME}/.`, "ok");
+            const { written, skipped } = await writeExtractedMedia(ctx.dirHandle, ctx.docxMedia, {
+              overwrite: ctx.options.overwrite !== false,
+            });
+            ctx.log(`Wrote ${written} media file(s) to ${OUTPUT_FILES_DIR_NAME}/.`, written ? "ok" : "muted");
+            if (skipped) {
+              ctx.log(`${skipped} media file(s) already present and overwrite is off — skipped.`, "warn");
+            }
           } finally {
             progress.done();
           }

@@ -8,10 +8,10 @@ import { countedProgress } from "../../src/_progress.js";
 // configurable.
 const OUTPUT_DIR = "_outputs/chat";
 
-let writeFileAtPath;
+let writeFileAtPath, fileExists;
 
 export function createPlugin(deps) {
-  ({ writeFileAtPath } = deps);
+  ({ writeFileAtPath, fileExists } = deps);
   return plugin;
 }
 
@@ -167,15 +167,25 @@ const plugin = {
         const { documentRecords } = ctx.chatExport;
         if (!documentRecords.length) return;
 
+        // The overwrite setting covers derived files too, not just the
+        // crate's own output.
+        const overwrite = ctx.options.overwrite !== false;
         const total = documentRecords.length;
         const writeTick = countedProgress(ctx, total, "Writing CHAT files…");
+        let written = 0;
         for (let i = 0; i < total; i++) {
           const doc = documentRecords[i];
-          await writeFileAtPath(ctx.dirHandle, `${doc.chatDirName}/${doc.chatName}`, doc.chatText);
+          const path = `${doc.chatDirName}/${doc.chatName}`;
+          if (!overwrite && await fileExists(ctx.dirHandle, path)) {
+            ctx.log(`${path} exists and overwrite is off — skipped.`, "warn");
+          } else {
+            await writeFileAtPath(ctx.dirHandle, path, doc.chatText);
+            written++;
+          }
           writeTick(i, `Wrote ${doc.chatName}`);
         }
         writeTick.done();
-        ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");
+        ctx.log(`Wrote ${written} CHAT file(s).`, written ? "ok" : "warn");
       },
     },
 

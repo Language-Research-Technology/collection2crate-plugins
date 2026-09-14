@@ -350,15 +350,18 @@ Rules of thumb:
   — those two are meant to persist across builds (standing configuration,
   changed-file backups), unlike `_outputs/<slug>/`, which is exactly the
   disposable generated content that setting exists to clear.
-- **Use `_outputs/<plugin name>/` for anything you generate**, and
-  `_config/<plugin name>/` for anything a person configures. Every writing
-  plugin here follows it: `roctable` (config at `_config/roctable/`, CSVs at
-  `_outputs/roctable/`), `ca-data-prep` (`_outputs/ca-data-prep/csv/` and
-  `.../logs/`) and `chat-export` (`_outputs/chat-export/`). The exceptions are
-  the crate's own published artefacts — `ro-crate-metadata.json`, the xlsx, the
-  preview and its assets — which belong at the folder root where a reader of
-  the crate expects them, not filed under the plugin that happened to write
-  them.
+- **Generated files go under `_outputs/`, standing configuration under
+  `_config/`.** Name the folder inside for *what it holds*, not for the plugin
+  that writes it: `_outputs/csv/`, `_outputs/logs/`, `_outputs/chat/` — someone
+  opening the folder is looking for their CSVs, not for the plugin that made
+  them. A plugin whose output has no such name uses its own (`roctable` writes
+  `_outputs/roctable/`, configured from `_config/roctable/`).
+  Declare each directory you write individually; `_outputs/` is shared, so a
+  plugin claiming it whole would hand its own "delete output before rebuilding"
+  sweep everybody else's files. The exceptions to all of this are the crate's
+  own published artefacts — `ro-crate-metadata.json`, the xlsx, the preview and
+  its assets — which belong at the folder root where a reader of the crate
+  expects them, not filed under output directories at all.
 
 Then register it in this repo's `index.js` (`REGISTRY` — one registry, for
 builders and annotating plugins alike), and in collection2crate's

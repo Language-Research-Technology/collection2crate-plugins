@@ -111,10 +111,18 @@ Current assignments, per stage:
 |---|---|
 | `folder:picked` | `xlsx-crate-input` 10 |
 | `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `files:write` | `ca-data-prep` 10 · `chat-export` 20 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
 | `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
 | `crate:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
+
+`ca-data-prep` and `chat-export` each split across two stages on purpose: the
+files they derive are written at `files:write`, during Process, and the
+entities describing those files are added at `crate:build`, the first point
+where a crate exists. Neither half needs the other to have run in the same
+run — the records they both read live on `ctx`, which a build carries over
+from Process.
 
 These reproduce the execution order `REGISTRY`'s own order used to imply.
 Note that `ca-data-prep` replaces `ctx.crate` wholesale at 50, so the two

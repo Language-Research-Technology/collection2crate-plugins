@@ -2,9 +2,9 @@
 // a generic-input scan but not yet in an existing crate) should actually be
 // added as new File entities — see index.js's buildCrate and collection2crate
 // SPEC.md §6.1a. Built the same "no host markup, no HTML string" way as the
-// rest of this app's own plugin UI, using the shared `openModal` helper and
-// the host's own `.checkbox`/`.modal .actions` CSS conventions rather than
-// inventing new ones.
+// rest of this app's own plugin UI: the shared `openModal` helper's own
+// `onMount`/`actions` (collection2crate SPEC.md §6.2) and the host's own
+// `.checkbox` CSS convention, rather than inventing either.
 
 // Turns a flat list of relative paths into a nested { name, children, isFile,
 // path } tree, splitting on "/" the same way filesWithMeta's own folder
@@ -90,8 +90,7 @@ export async function confirmNewFiles({ newPaths, openModal }) {
 
   return openModal({
     title: `${newPaths.length} new file${newPaths.length === 1 ? "" : "s"} found`,
-    onDismiss: () => null,
-    render(body, close) {
+    onMount(body) {
       const intro = document.createElement("p");
       intro.textContent =
         "These files aren't in the existing crate yet. Choose which to add — " +
@@ -107,23 +106,15 @@ export async function confirmNewFiles({ newPaths, openModal }) {
       updateCount();
 
       const scrollWrap = document.createElement("div");
-      scrollWrap.style.cssText = "max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:8px 12px; margin-bottom:16px;";
+      scrollWrap.style.cssText = "max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:8px 12px;";
       scrollWrap.appendChild(treeEl);
       body.append(countLabel, scrollWrap);
-
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      const skipBtn = document.createElement("button");
-      skipBtn.type = "button"; skipBtn.className = "button";
-      skipBtn.textContent = "Add none";
-      skipBtn.addEventListener("click", () => close([]));
-      const confirmBtn = document.createElement("button");
-      confirmBtn.type = "button";
-      confirmBtn.className = "button primary";
-      confirmBtn.textContent = "Add selected";
-      confirmBtn.addEventListener("click", () => close([...checkedSet]));
-      actions.append(skipBtn, confirmBtn);
-      body.appendChild(actions);
     },
+    // checkedSet keeps changing as boxes are ticked, so both actions read it
+    // at click time rather than capturing it when the modal opened.
+    actions: [
+      { label: "Add none", value: () => [] },
+      { label: "Add selected", primary: true, value: () => [...checkedSet] },
+    ],
   });
 }

@@ -2,8 +2,10 @@
 // discovered @type (tick to select it as a table), each unrolling to a list
 // of its properties (include/expand/load_text/join), an expanded property
 // further unrolling to its own one-hop sub-properties. Built the same
-// "no host markup, no HTML string" way as new-files-confirm.js, using the
-// host's own `.checkbox`/`.modal .actions`/`.secondary`/`.hint` CSS.
+// "no host markup, no HTML string" way as new-files-confirm.js: openModal's
+// own `onMount`/`actions` (collection2crate SPEC.md §6.2) plus the host's
+// own `.checkbox`/`.button`/`.field-hint` CSS, so this ships no markup and
+// no stylesheet of its own — bar the one width override below.
 //
 // The working copy is mutated directly by each control's own change handler
 // rather than re-derived from DOM state at the end — Save just resolves
@@ -223,7 +225,7 @@ function ensureWideModalStyle() {
   if (stylesInjected) return;
   stylesInjected = true;
   const style = document.createElement("style");
-  style.textContent = ".modal.roctable-config-modal { max-width: min(900px, 94vw); }";
+  style.textContent = ".modal-panel.roctable-config-modal { width: min(900px, 94vw); }";
   document.head.appendChild(style);
 }
 
@@ -237,14 +239,13 @@ export async function openConfigTreeEditor({ config, openModal }) {
   return openModal({
     title: "Configure RO-Crate tables",
     modalClassName: "roctable-config-modal",
-    onDismiss: () => null,
-    render(body, close) {
+    onMount(body) {
       const intro = document.createElement("p");
       intro.textContent = "Tick a type to export it as a table. Expand a type to choose which properties become columns, and whether each one is expanded, has its file text loaded, or joined as CSV rows.";
       body.appendChild(intro);
 
       const listWrap = document.createElement("div");
-      listWrap.style.cssText = "max-height:420px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:4px 12px; margin-bottom:16px;";
+      listWrap.style.cssText = "max-height:420px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:4px 12px;";
       body.appendChild(listWrap);
 
       function renderList() {
@@ -262,20 +263,12 @@ export async function openConfigTreeEditor({ config, openModal }) {
         }
       }
       renderList();
-
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      const cancelBtn = document.createElement("button");
-      cancelBtn.type = "button"; cancelBtn.className = "button";
-      cancelBtn.textContent = "Cancel";
-      cancelBtn.addEventListener("click", () => close(null));
-      const saveBtn = document.createElement("button");
-      saveBtn.type = "button";
-      saveBtn.className = "button primary";
-      saveBtn.textContent = "Save configuration";
-      saveBtn.addEventListener("click", () => close(working));
-      actions.append(cancelBtn, saveBtn);
-      body.appendChild(actions);
     },
+    // `working` is edited in place by the rows above, so Save reads it at
+    // click time rather than capturing whatever it held when the modal opened.
+    actions: [
+      { label: "Cancel", value: null },
+      { label: "Save configuration", primary: true, value: () => working },
+    ],
   });
 }

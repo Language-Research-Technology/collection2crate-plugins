@@ -349,9 +349,16 @@ Rules of thumb:
   collection2crate's "Delete plugin output before rebuilding" skips deleting it**
   — those two are meant to persist across builds (standing configuration,
   changed-file backups), unlike `_outputs/<slug>/`, which is exactly the
-  disposable generated content that setting exists to clear. `roctable`
-  is the first plugin here to use this: config at `_config/roctable/`,
-  CSVs at `_outputs/roctable/`.
+  disposable generated content that setting exists to clear.
+- **Use `_outputs/<plugin name>/` for anything you generate**, and
+  `_config/<plugin name>/` for anything a person configures. Every writing
+  plugin here follows it: `roctable` (config at `_config/roctable/`, CSVs at
+  `_outputs/roctable/`), `ca-data-prep` (`_outputs/ca-data-prep/csv/` and
+  `.../logs/`) and `chat-export` (`_outputs/chat-export/`). The exceptions are
+  the crate's own published artefacts — `ro-crate-metadata.json`, the xlsx, the
+  preview and its assets — which belong at the folder root where a reader of
+  the crate expects them, not filed under the plugin that happened to write
+  them.
 
 Then register it in this repo's `index.js` (`REGISTRY` — one registry, for
 builders and annotating plugins alike), and in collection2crate's

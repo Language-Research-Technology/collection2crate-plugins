@@ -42,6 +42,15 @@ export function addCsvFilesToCrate(crate, documentRecords) {
   }
 }
 
+// Everything this plugin generates lives under _outputs/<its own name>/, the
+// per-plugin output convention (collection2crate issue #81) roctable follows
+// too: one folder per plugin, so "delete plugin output before rebuilding" and
+// the folder scan can reason about whose files are whose. No _config/ counterpart
+// — this plugin has nothing standing to configure.
+const OUTPUT_DIR = "_outputs/ca-data-prep";
+const CSV_DIR = `${OUTPUT_DIR}/csv`;
+const LOG_DIR = `${OUTPUT_DIR}/logs`;
+
 export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
   if (!dirHandle || !relativePath) return null;
   const parts = String(relativePath).replace(/\\/g, "/").split("/").filter(Boolean);
@@ -56,10 +65,7 @@ export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
 
 const plugin = {
   name: "ca-data-prep",
-  outputPaths: [
-    { path: "c2c-output/csv", kind: "dir" },
-    { path: "c2c-output/logs", kind: "dir" },
-  ],
+  outputPaths: [{ path: OUTPUT_DIR, kind: "dir" }],
   optionSchema: {
     key: "processTranscriptDocuments",
     label: "Process plain transcript documents (.docx)",
@@ -96,8 +102,8 @@ const plugin = {
           const result = await processTranscriptText(text, ctx.options || {});
           const baseName = (file.fileName || file.name).replace(/\.docx$/i, "");
           const csvText = toCsv(result.rows);
-          const csvDirName = "c2c-output/csv";
-          const logDirName = "c2c-output/logs";
+          const csvDirName = CSV_DIR;
+          const logDirName = LOG_DIR;
 
           const speakerRefs = Array.from(result.speakerMap.entries()).map(([speakerID, details]) => ({
             "@id": details.optionalCode || `#${speakerID}`,

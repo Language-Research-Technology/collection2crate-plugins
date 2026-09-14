@@ -23,7 +23,7 @@ const plugin = {
   name: "ro-crate-json-output",
   outputPaths: [{ path: JSON_FILE, kind: "file" }],
   hooks: {
-    "output:write": {
+    "crate:write": {
       priority: 20,
       weight: 1,
       handler: async (ctx) => {

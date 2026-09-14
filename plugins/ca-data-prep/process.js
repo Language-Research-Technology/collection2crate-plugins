@@ -402,55 +402,43 @@ export async function resolveMammothArrayBuffer(docxSource) {
   return null;
 }
 
-export function toMammothInputOptions(docxSource) {
-  if (!docxSource) return {};
-  if (typeof Buffer !== "undefined" && Buffer.isBuffer(docxSource)) {
-    return { buffer: docxSource };
+// mammoth swaps its unzip implementation through package.json's "browser"
+// field: the browser build reads only { arrayBuffer }, the Node build only
+// { buffer } / { path }. Decide by runtime rather than by calling and catching.
+// Probing is what this used to do, and it is expensive in a way that doesn't
+// show up in tests: mammoth rejects through bluebird, which reports every
+// deliberate miss to the console as an unhandled rejection, so a four-document
+// folder filled the browser console with errors from a build that worked.
+const IN_BROWSER = typeof window !== "undefined" && typeof window.document !== "undefined";
+
+function toArrayBuffer(docxBuffer) {
+  if (docxBuffer instanceof ArrayBuffer) return docxBuffer;
+  if (ArrayBuffer.isView(docxBuffer)) {
+    const bytes = new Uint8Array(docxBuffer.buffer, docxBuffer.byteOffset, docxBuffer.byteLength);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   }
-  if (docxSource instanceof ArrayBuffer) {
-    return { arrayBuffer: docxSource };
-  }
-  if (ArrayBuffer.isView(docxSource)) {
-    const view = docxSource;
-    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-    return { arrayBuffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
-  }
-  if (docxSource && typeof docxSource.arrayBuffer === "function") {
-    return { arrayBuffer: true };
-  }
-  if (docxSource && typeof docxSource.buffer !== "undefined" && docxSource.buffer instanceof ArrayBuffer) {
-    const view = docxSource;
-    const bytes = new Uint8Array(view.buffer, view.byteOffset || 0, view.byteLength || view.buffer.byteLength);
-    return { arrayBuffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
-  }
-  return {};
+  return new Uint8Array(docxBuffer || []).buffer;
+}
+
+// Buffer can exist in a bundled browser build too (node polyfills), which is
+// why the runtime decides the shape and this only decides how to carry it.
+function mammothOptions(arrayBuffer, forBrowser) {
+  if (forBrowser) return { arrayBuffer };
+  if (typeof Buffer !== "undefined") return { buffer: Buffer.from(arrayBuffer) };
+  return { buffer: new Uint8Array(arrayBuffer) };
 }
 
 export async function callMammothExtractRawText(docxBuffer) {
-  const arrayBuffer = docxBuffer instanceof ArrayBuffer ? docxBuffer : new Uint8Array(docxBuffer).buffer.slice(
-    0,
-    docxBuffer.byteLength || docxBuffer.length
-  );
-  const candidates = [
-    { buffer: docxBuffer },
-    { buffer: new Uint8Array(arrayBuffer) },
-    { arrayBuffer },
-  ];
-
-  let lastError;
-  for (const options of candidates) {
-    try {
-      return await mammoth.extractRawText(options);
-    } catch (error) {
-      const message = error && typeof error.message === "string" ? error.message : String(error);
-      if (!/Could not find file in options/i.test(message)) {
-        throw error;
-      }
-      lastError = error;
-    }
+  const arrayBuffer = toArrayBuffer(docxBuffer);
+  try {
+    return await mammoth.extractRawText(mammothOptions(arrayBuffer, IN_BROWSER));
+  } catch (error) {
+    const message = error && typeof error.message === "string" ? error.message : String(error);
+    if (!/Could not find file in options/i.test(message)) throw error;
+    // The runtime guess was wrong — an exotic bundle, or jsdom in a test.
+    // One retry with the other shape, rather than failing on a readable file.
+    return await mammoth.extractRawText(mammothOptions(arrayBuffer, !IN_BROWSER));
   }
-
-  throw lastError || new Error("Could not find file in options");
 }
 
 export async function extractDocumentText(docxSource) {

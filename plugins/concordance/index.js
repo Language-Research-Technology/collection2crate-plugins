@@ -86,9 +86,14 @@ export function createPlugin() {
         const windowInput = numberInput({ value: 5, min: 1, max: 20 });
         const status = element("p", { className: "field-hint" });
         const count = element("span", { className: "field-hint" });
+        // Left context is right-aligned so it runs up against the keyword: a
+        // concordance is read down the column of what precedes the word, and
+        // ragged-left text hides exactly the thing being compared.
         const { body, node: table } = dataTable([
-          "Source", "Speaker", "Left context",
-          { label: "Keyword", className: "kwic-keyword" }, "Right context",
+          "Source", "Speaker",
+          { label: "Left context", className: "kwic-left" },
+          { label: "Keyword", className: "kwic-keyword" },
+          "Right context",
         ]);
         const resultsWrap = element("div", { attrs: { hidden: true } });
 

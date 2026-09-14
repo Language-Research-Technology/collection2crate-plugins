@@ -37,7 +37,7 @@ for the consuming side.
 ## The two conventions every plugin here follows
 
 **1. Hook names are literal strings, not an imported constant.** A plugin's
-`hooks` object is keyed by strings like `"crate:build"` or `"output:write"`
+`hooks` object is keyed by strings like `"crate:build"` or `"crate:write"`
 rather than an imported `HOOKS.CRATE_BUILD` — those strings are a stable
 contract owned by collection2crate's `src/plugins/hooks.js`:
 
@@ -51,7 +51,7 @@ contract owned by collection2crate's `src/plugins/hooks.js`:
 | `METADATA_MERGE` | `"metadata:merge"` | spreadsheet metadata merge |
 | `CRATE_BUILD` | `"crate:build"` | crate assembly and everything that mutates it |
 | `CRATE_VALIDATE` | `"crate:validate"` | validation |
-| `OUTPUT_WRITE` | `"output:write"` | writing to the folder |
+| `CRATE_WRITE` | `"crate:write"` | writing to the folder |
 
 If collection2crate ever renames one of these, every plugin here keyed to the
 old string silently stops firing — there's no import to break loudly. Grep
@@ -61,7 +61,9 @@ These replaced an earlier, smaller set: `"config:prepare"` is now
 `"crate:prepare"`, `"files:analyze"` is now `"files:prepare"`, and
 `"crate:built"` folded into `"crate:build"` — the old separate
 build-then-mutate pair is now one stage ordered by `priority` (below), with
-the build's chosen *builder* running ahead of every annotating tap.
+the build's chosen *builder* running ahead of every annotating tap. The write
+stage is `"crate:write"`; it was `"output:write"` until the stage names were
+made uniform, and collection2crate emits only the new name.
 
 **Every tap declares its `priority`.** A tap is an object, not a bare
 function:
@@ -94,7 +96,7 @@ Current assignments, per stage:
 | `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
 | `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
-| `output:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
+| `crate:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
 
 These reproduce the execution order `REGISTRY`'s own order used to imply.
 Note that `ca-data-prep` replaces `ctx.crate` wholesale at 50, so the two

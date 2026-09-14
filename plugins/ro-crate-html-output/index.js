@@ -432,7 +432,7 @@ const plugin = {
     ],
   },
   hooks: {
-    "output:write": {
+    "crate:write": {
       priority: 40,
       weight: 5,
       activeWhen: (ctx) => !!ctx.options.makeHtml,

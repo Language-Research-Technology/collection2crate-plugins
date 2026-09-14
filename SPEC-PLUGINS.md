@@ -1,28 +1,27 @@
-# Analysis plugins
+# Visualisation plugins
 
-Three panels for collection2crate's Visualise page. Two are ports from
-chaos2crate's `src/analysis-plugins/` — a concordance (KWIC) explorer and an
-n-gram analyser — and the third is the chart UI that lives in the host's
-`main.js` today, moved out here to sit alongside them. None of the three exists
-in this repo yet; this is what they should be when they do.
+Three panels for collection2crate's Visualise page. 
 
-They are not build plugins. A build plugin taps the pipeline, mutates `ctx` and
-writes files; these read text that a build already produced and let a person
+Panel one is a concordance explorer, panel two is an n-gram analyser, 
+and the third is the chart UI that lives in the host's `main.js` today, 
+moved out here to sit alongside them. 
+
+These plugins read text that a build already produced and let a person
 explore it — interactive panels on collection2crate's Visualise page, doing
 nothing until someone types in them. Everything below follows from that one
 difference.
 
 ## The contract
 
-A plugin declares analysis the way it declares anything else — as a member on
+A plugin declares visualisation the way it declares anything else — as a member on
 the same registry entry, in the one `REGISTRY`:
 
 ```js
 export function createPlugin(deps) {
   return {
     name: "concordance",
-    analysis: {
-      label: "Concordance (KWIC)",
+    visualisation: {
+      label: "Concordance",
       hint: "Search for a word or phrase and see every occurrence in context.",
       render(container, ctx) { /* … */ },
     },
@@ -40,7 +39,7 @@ export function createPlugin(deps) {
   described below, and the host's logger for anything worth putting in the
   build log.
 
-A plugin may declare `analysis` alongside `hooks`, or on its own. These two
+A plugin may declare `visualisation` alongside `hooks`, or on its own. These two
 declare no hooks at all: they never run during a build, so they register
 nothing on the bus, and `registerAllPlugins` skips them as it already skips any
 plugin with no `hooks`. No second registry, no separate selection mechanism —
@@ -107,12 +106,12 @@ A `.cha` or `.txt` source produces documents only and never appears in
 
 Host-side work this spec depends on, none of it done yet:
 
-- `composeAnalysisPanels()` in `src/plugins/index.js`, alongside
-  `composeOptionSchema()` and the others, returning every plugin's `analysis`
+- `composeVisualisationPanels()` in `src/plugins/index.js`, alongside
+  `composeOptionSchema()` and the others, returning every plugin's `visualisation`
   member in registry order.
 - A Visualise page that is nothing but a panel host: the output-directory
   picker and the composed panels in its left rail, the chosen panel rendered in
-  the right column. It holds no analysis of its own.
+  the right column. It holds no visualisation of its own.
 - One loaded set of data shared by every panel. Switching panels does not
   reload, and a panel never picks files for itself — which is also what makes
   running the same corpus through two panels a comparison rather than a
@@ -133,21 +132,19 @@ when the value holds a comma, quote or newline; double any quote),
 `buildCsvText(header, rows)`, and `downloadCsv(filename, text)`. Both plugins
 offer the same two result actions and must escape identically.
 
-Results are **copied or downloaded, never written into the folder**. Analysis
+Results are **copied or downloaded, never written into the folder**. Visualisation
 is exploratory — a person tries twenty searches and keeps one — and a plugin
 that wrote each attempt into `_outputs/` would be filing drafts as crate
-content. If a particular analysis is worth keeping, it belongs in the crate by
+content. If a particular visualisation is worth keeping, it belongs in the crate by
 a deliberate act, which is a separate feature from either of these.
 
 ## Styling
 
 Use the host's existing vocabulary — `.field`, `.actions`, `.button`,
 `.data-table`, `.table-scroll`, `.empty-note`, `.mono` — rather than
-plugin-specific class names. chaos2crate's versions carried their own `kwic-*`
-and `ngram-*` CSS, which is why they looked like guests on the page. Anything
-genuinely specific to a panel (the keyword column's centring, the numeric
-columns' alignment) is a handful of rules the plugin ships with its own
-prefixed class.
+plugin-specific class names. Anything genuinely specific to a panel (the keyword 
+column's centring, the numeric columns' alignment) is a handful of rules the 
+plugin ships with its own prefixed class.
 
 ---
 
@@ -268,13 +265,3 @@ returning the positions the SVG is drawn from. The drawing itself stays
 untested, as DOM.
 
 ---
-
-## Open questions
-
-- **Should a corpus's own language decide the stopword list?** The crate knows
-  its subject languages when AUSTLANG ran. Defaulting the list off is the
-  conservative answer until there is a real one.
-- **Whether `.log.txt` files should be offered at all.** They are ca-data-prep's
-  processing logs, not corpus text, and searching them concordance-style is
-  meaningless. Excluding by name is easy but arbitrary; leaving them in offers
-  a person a choice they can't evaluate.

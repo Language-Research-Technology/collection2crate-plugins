@@ -412,14 +412,23 @@ async function buildMediaLookup(docxDirHandle) {
   return mediaLookup;
 }
 
-async function copyMediaToOutputFiles(fileHandle, targetRelativePath, filesDirHandle) {
-  const file = await fileHandle.getFile();
-  const bytes = await file.arrayBuffer();
-  await writeFileAtPath(filesDirHandle, targetRelativePath, bytes);
+// Media is collected while parsing and written later, by writeExtractedMedia()
+// at crate:write — the crate has to name these files, but nothing needs them on
+// disk until the crate itself is written out. Keyed by path, so a media file
+// referenced from several chapters is carried once.
+let collectedMedia = null;
+
+function collectMedia(targetRelativePath, bytes) {
+  collectedMedia?.set(targetRelativePath, bytes);
   return `${OUTPUT_FILES_DIR_NAME}/${targetRelativePath}`;
 }
 
-async function findImageReference(imageToken, mediaLookup, collectionRelPath, filesDirHandle) {
+async function copyMediaToOutputFiles(fileHandle, targetRelativePath) {
+  const file = await fileHandle.getFile();
+  return collectMedia(targetRelativePath, await file.arrayBuffer());
+}
+
+async function findImageReference(imageToken, mediaLookup, collectionRelPath) {
   if (!imageToken) return "";
   const normalized = imageToken.trim().toLowerCase();
   if (!normalized) return "";
@@ -428,27 +437,53 @@ async function findImageReference(imageToken, mediaLookup, collectionRelPath, fi
   const fileHandle = mediaLookup.get(normalized) || mediaLookup.get(tokenNoExt);
   if (!fileHandle) return "";
 
-  return copyMediaToOutputFiles(fileHandle, `${collectionRelPath}/media/${fileHandle.name}`, filesDirHandle);
+  return copyMediaToOutputFiles(fileHandle, `${collectionRelPath}/media/${fileHandle.name}`);
 }
 
-async function writeEmbeddedImageToOutputFiles(collectionRelPath, docxBaseName, buffer, extension, index, filesDirHandle) {
+function collectEmbeddedImage(collectionRelPath, docxBaseName, buffer, extension, index) {
   const docxBaseNormalized = normalizeIdSegment(docxBaseName) || "doc";
-  const targetRelativePath = `${collectionRelPath}/media/embedded-${docxBaseNormalized}-${index}.${extension}`;
-  await writeFileAtPath(filesDirHandle, targetRelativePath, buffer);
-  return `${OUTPUT_FILES_DIR_NAME}/${targetRelativePath}`;
+  return collectMedia(`${collectionRelPath}/media/embedded-${docxBaseNormalized}-${index}.${extension}`, buffer);
+}
+
+/**
+ * Write the media collected by buildCrateFromDocxFolder into
+ * ro-crate-preview_files/, replacing whatever was there.
+ *
+ * Separate from the build so the extraction can happen while the crate is
+ * assembled — the crate has to name these files — and the folder is only
+ * touched when the crate itself is written (crate:write). The directory is
+ * wiped first: a media file whose source document was renamed or deleted
+ * should not survive into the next build.
+ *
+ * @param {FileSystemDirectoryHandle} rootHandle  the picked folder
+ * @param {Array<{path: string, bytes: ArrayBuffer}>} media
+ * @returns {Promise<number>} how many files were written
+ */
+export async function writeExtractedMedia(rootHandle, media = []) {
+  if (!media.length) return 0;
+  try {
+    await rootHandle.removeEntry(OUTPUT_FILES_DIR_NAME, { recursive: true });
+  } catch {
+    // no pre-existing ro-crate-preview_files/ to remove — fine.
+  }
+  const filesDirHandle = await rootHandle.getDirectoryHandle(OUTPUT_FILES_DIR_NAME, { create: true });
+  for (const { path, bytes } of media) {
+    await writeFileAtPath(filesDirHandle, path, bytes);
+  }
+  return media.length;
 }
 
 /* ---------- docx parsing (mirrors build-ro-crate.js's parseStructuredChapters) ---------- */
 
-async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPath, filesDirHandle) {
+async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPath) {
   let embeddedImageIndex = 0;
   const docxBaseName = fileHandle.name.replace(/\.docx$/i, "");
   const convertImage = mammoth.images.imgElement(async (element) => {
     embeddedImageIndex += 1;
     const buffer = await element.readAsArrayBuffer();
     const extension = extensionForContentType(element.contentType);
-    const outputRelativePath = await writeEmbeddedImageToOutputFiles(
-      collectionRelPath, docxBaseName, buffer, extension, embeddedImageIndex, filesDirHandle
+    const outputRelativePath = collectEmbeddedImage(
+      collectionRelPath, docxBaseName, buffer, extension, embeddedImageIndex
     );
     return { src: outputRelativePath };
   });
@@ -554,13 +589,13 @@ async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPat
           if (soundInfo.hasSound) {
             rowSoundSections.push({
               mediaToken: soundInfo.mediaToken,
-              mediaPath: await findImageReference(soundInfo.mediaToken, mediaLookup, collectionRelPath, filesDirHandle),
+              mediaPath: await findImageReference(soundInfo.mediaToken, mediaLookup, collectionRelPath),
             });
           }
           if (imageMetadata.imageToken) {
             rowImageSections.push({
               imageToken: imageMetadata.imageToken,
-              imagePath: await findImageReference(imageMetadata.imageToken, mediaLookup, collectionRelPath, filesDirHandle),
+              imagePath: await findImageReference(imageMetadata.imageToken, mediaLookup, collectionRelPath),
               caption: imageCaption,
             });
           } else if (hasEmbeddedImage) {
@@ -588,7 +623,7 @@ async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPat
     if (soundInfo.hasSound) {
       currentChapter.soundSections.push({
         mediaToken: soundInfo.mediaToken,
-        mediaPath: await findImageReference(soundInfo.mediaToken, mediaLookup, collectionRelPath, filesDirHandle),
+        mediaPath: await findImageReference(soundInfo.mediaToken, mediaLookup, collectionRelPath),
       });
       continue;
     }
@@ -611,7 +646,7 @@ async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPat
 
       currentChapter.imageSections.push({
         imageToken: imageInfo.imageToken,
-        imagePath: await findImageReference(imageInfo.imageToken, mediaLookup, collectionRelPath, filesDirHandle),
+        imagePath: await findImageReference(imageInfo.imageToken, mediaLookup, collectionRelPath),
         caption: imageInfo.inlineCaption,
       });
       continue;
@@ -643,12 +678,7 @@ async function parseStructuredChapters(fileHandle, mediaLookup, collectionRelPat
 export async function buildCrateFromDocxFolder(rootHandle, config, onProgress = () => {}) {
   const validatedConfig = validateAndNormalizeConfig(config);
 
-  try {
-    await rootHandle.removeEntry(OUTPUT_FILES_DIR_NAME, { recursive: true });
-  } catch {
-    // no pre-existing ro-crate-preview_files/ to remove — fine.
-  }
-  const filesDirHandle = await rootHandle.getDirectoryHandle(OUTPUT_FILES_DIR_NAME, { create: true });
+  collectedMedia = new Map();
 
   let subDirs = await getSubDirectoryHandles(rootHandle);
   if (subDirs.length === 0) return null;
@@ -711,14 +741,14 @@ export async function buildCrateFromDocxFolder(rootHandle, config, onProgress = 
       // sourceDocuments collection that mirrors this topic grouping. See
       // buildCrateFromDocxFolder's closing section for how the per-topic
       // groups are gathered under #sourceDocuments.
-      const sourceDocPath = await copyMediaToOutputFiles(fileHandle, `${collectionRelPath}/${fileHandle.name}`, filesDirHandle);
+      const sourceDocPath = await copyMediaToOutputFiles(fileHandle, `${collectionRelPath}/${fileHandle.name}`);
       ensureFileEntity(crate, mediaEntitiesAdded, sourceDocPath, fileHandle.name, getEncodingFormat(fileHandle.name));
       sourceGroupHasPart.push({ "@id": sourceDocPath });
 
       onProgress(`  Parsing: ${subDirHandle.name}/${relativePath}`);
       let chapters = [];
       try {
-        chapters = await parseStructuredChapters(fileHandle, mediaLookup, collectionRelPath, filesDirHandle);
+        chapters = await parseStructuredChapters(fileHandle, mediaLookup, collectionRelPath);
         if (chapters.length === 0) {
           onProgress(`  Warning: no Heading 1/2 styles found in ${relativePath}; no Chapter entities created.`);
         }
@@ -824,7 +854,9 @@ export async function buildCrateFromDocxFolder(rootHandle, config, onProgress = 
   }
   crate.rootDataset.hasPart = rootMembers;
 
-  return { crate, collectionCount: subDirs.length, documentPartCount };
+  const media = [...collectedMedia].map(([path, bytes]) => ({ path, bytes }));
+  collectedMedia = null;
+  return { crate, collectionCount: subDirs.length, documentPartCount, media };
 }
 
 // Quick pre-flight check for the UI: does this folder look like a structured

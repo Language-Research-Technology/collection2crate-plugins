@@ -115,7 +115,14 @@ Current assignments, per stage:
 | `crate:prepare` | `xlsx-crate-input` 10 |
 | `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
-| `crate:write` | `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
+| `crate:write` | `docx-input` 5 · `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
+
+`docx-input` splits the same way for a different reason: it extracts embedded
+and referenced media while parsing, because the crate has to name those files,
+but writes them at `crate:write` — nothing reads them before the crate they
+belong to is written out, and the directory is wiped and rewritten in one go
+rather than accumulating stale media from renamed documents. The bytes live on
+`ctx` in between.
 
 `ca-data-prep` and `chat-export` each split across two stages on purpose: the
 files they derive are written at `files:write`, during Process, and the

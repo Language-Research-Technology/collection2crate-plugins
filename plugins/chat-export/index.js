@@ -1,11 +1,12 @@
 import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
 import { countedProgress } from "../../src/_progress.js";
 
-// The per-plugin output convention (collection2crate issue #81), the same one
-// ca-data-prep and roctable follow: one folder per plugin under _outputs/, so
-// "delete plugin output before rebuilding" and the folder scan can tell whose
-// files are whose. No _config/ counterpart — nothing here is configurable.
-const OUTPUT_DIR = "_outputs/chat-export";
+// Generated files go under _outputs/, named for what they are rather than for
+// this plugin, the same as ca-data-prep's csv/ and logs/. The directory is
+// declared as this plugin's own output below; _outputs/ itself is shared, so
+// nothing claims it whole. No _config/ counterpart — nothing here is
+// configurable.
+const OUTPUT_DIR = "_outputs/chat";
 
 let writeFileAtPath;
 

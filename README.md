@@ -243,7 +243,8 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `xlsx-crate-input` | `readFileBytes`, `readJsonFromFolder`, `loadMasp`, `statFile` (handed to `xlsx_crate.js`'s own `configure(deps)` on each dynamic import) |
 | `austlang` | `addLanguageEntities` |
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
-| `ca-data-prep` | `writeFileAtPath` |
+| `ca-data-prep` | `writeFileAtPath`, `fileExists` |
+| `chat-export` | `writeFileAtPath`, `fileExists` (its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `validate-crate` | `loadMasp` |
@@ -251,7 +252,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
 | `ro-crate-html-output` | `crateToPreviewHtml`, `crateToMultiPageHtml`, `writeFile`, `writeFileAtPath`, `readJsonFromFolder`, `readFileTextFromDirectory`, `verifyPermission`, `fileExists`, `bustCacheUrl`, `buildGitHubTreeUrl`, `fetchGitHubTextFile`, `listGitHubFolder` |
 | `generic-input` (builder) | `buildFileMetadata`, `buildCrate`, `readJsonFromFolder` (reads the folder's existing crate, if any, to reconcile against rather than replace — collection2crate SPEC.md §6.1a), `openModal` (confirms which newly-found files to add, via `new-files-confirm.js`) |
-| `docx-input` (builder) | `writeFileAtPath` (handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
+| `docx-input` (builder) | `writeFileAtPath`, `fileExists` (both handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
 
 `loadMasp` is a thunk — `() => import("../masp.js")` — rather than the
 function itself, so `ro-crate-masp` (a heavy validator library) stays
@@ -335,6 +336,11 @@ never lingers.
 
 Rules of thumb:
 
+- **Respect `ctx.options.overwrite`.** It is the person's answer to whether a
+  run may replace what is already in their folder, and it covers derived files
+  as much as the crate's own: check before writing, and say what you skipped
+  (`` `${path} exists and overwrite is off — skipped.` ``) rather than passing
+  over it silently. Every writing plugin here does this.
 - **Declare every top-level entry you write, even ones gated behind an
   option.** The declaration describes what the plugin *may* produce across
   its lifetime, not just what a specific run's options enable — a stale file

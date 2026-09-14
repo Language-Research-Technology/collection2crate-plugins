@@ -1,6 +1,12 @@
 import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
 import { countedProgress } from "../../src/_progress.js";
 
+// The per-plugin output convention (collection2crate issue #81), the same one
+// ca-data-prep and roctable follow: one folder per plugin under _outputs/, so
+// "delete plugin output before rebuilding" and the folder scan can tell whose
+// files are whose. No _config/ counterpart — nothing here is configurable.
+const OUTPUT_DIR = "_outputs/chat-export";
+
 let writeFileAtPath;
 
 export function createPlugin(deps) {
@@ -92,7 +98,7 @@ export async function generateChatText(text, config = {}) {
 const plugin = {
   name: "chat-export",
   generateChatText,
-  outputPaths: [{ path: "c2c-output/chat", kind: "dir" }],
+  outputPaths: [{ path: OUTPUT_DIR, kind: "dir" }],
   optionSchema: {
     key: "generateChatFiles",
     label: "Generate CHAT (.cha) outputs",
@@ -133,7 +139,7 @@ const plugin = {
           documentRecords.push({
             baseName,
             docxName: file.fileName || file.name,
-            chatDirName: "c2c-output/chat",
+            chatDirName: OUTPUT_DIR,
             sourcePath: filePath,
             chatText,
             chatName: `${baseName}.cha`,

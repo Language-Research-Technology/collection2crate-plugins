@@ -64,10 +64,17 @@ what makes n-grams stop at line boundaries rather than running across an
 utterance break (see below).
 
 Loading is the **host's** job, not a plugin's: collection2crate owns the folder
-handle. It offers the directories plugins declared as `outputPaths` — which is
-how `_outputs/csv/` (ca-data-prep), `_outputs/chat/` (chat-export) and
-`_outputs/logs/` become the things a person can analyse — and reads three
-shapes:
+handle, and one picker on the page serves every panel.
+
+**That picker lists output directories, not files.** The choices are the
+directories plugins declared as `outputPaths` — `_outputs/csv/` (ca-data-prep),
+`_outputs/chat/` (chat-export), `_outputs/logs/` — named as what produced them
+rather than as a list of filenames. A corpus build writes hundreds of files
+whose names change with every source document; the handful of folders they land
+in does not, and "the CSVs the transcript processing made" is the choice a
+person is actually making. Picking one loads every supported file in it.
+
+The three shapes the loader reads:
 
 | Extension | Parsed as | `speaker` from |
 |---|---|---|
@@ -76,7 +83,9 @@ shapes:
 | anything else | one non-empty line per document | — |
 
 A directory is only offered when it exists *and* holds a supported file, so a
-declared output that holds HTML or images never appears as a dead option.
+declared output holding HTML or images never appears as a dead option — and a
+panel never has to render an empty state for a folder that could never have had
+anything in it.
 
 ### `ctx.tables` — the same CSVs, unflattened
 
@@ -101,9 +110,13 @@ Host-side work this spec depends on, none of it done yet:
 - `composeAnalysisPanels()` in `src/plugins/index.js`, alongside
   `composeOptionSchema()` and the others, returning every plugin's `analysis`
   member in registry order.
-- A Visualise page that is nothing but a panel host: the composed panels in its
-  left rail, the chosen one rendered in the right column. It holds no analysis
-  of its own.
+- A Visualise page that is nothing but a panel host: the output-directory
+  picker and the composed panels in its left rail, the chosen panel rendered in
+  the right column. It holds no analysis of its own.
+- One loaded set of data shared by every panel. Switching panels does not
+  reload, and a panel never picks files for itself — which is also what makes
+  running the same corpus through two panels a comparison rather than a
+  coincidence.
 - The loader described above, in the host rather than in a plugin, producing
   both `documents` and `tables`.
 - **Moving the chart UI out of `main.js`** into the `chart` plugin below. It is
@@ -230,9 +243,11 @@ and both measures against hand-worked numbers.
 The tabular chart that is the Visualise page today: pick a CSV, pick a chart
 type and two columns, get an SVG.
 
-**Controls.** A list of the sources in `ctx.tables` in the left of the panel;
-chart type — bar, line, scatter; and two column selects, category/x and
-value/y, populated from the chosen table's header.
+**Controls.** A select naming the tables in `ctx.tables` — a chosen directory
+can hold many CSVs and a chart draws one at a time — then chart type (bar, line,
+scatter) and two column selects, category/x and value/y, populated from that
+table's header. The panel picks among what is loaded; it does not browse the
+folder.
 
 **Rendering.** Hand-built SVG, no chart library: axes, ticks, and one mark per
 row. Bars for `bar`, a polyline for `line`, circles with a larger invisible hit
@@ -243,8 +258,9 @@ than coerced to zero, and the panel says how many rows it skipped — a column o
 **Below the chart**, the chosen table as a plain data table, so the numbers
 behind a shape are one glance away.
 
-**Empty state.** When `ctx.tables` is empty: no CSVs have been built yet, and
-the panel says which option produces them rather than just reporting nothing.
+**Empty state.** When `ctx.tables` is empty — the chosen directory holds text
+but no CSV, or nothing is chosen yet — the panel says which option produces
+tabular output rather than just reporting nothing.
 
 **Testable seam.** The scale and tick arithmetic — the part that is wrong in
 silence — as a pure function over `{ rows, xColumn, yColumn, width, height }`,

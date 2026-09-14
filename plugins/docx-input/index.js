@@ -1,3 +1,5 @@
+import { progressFor } from "../../src/_progress.js";
+
 // A builder for corpora of structured Word documents: parses Heading 1/2/3-
 // structured .docx files into Collections/DocumentParts/Chapters
 // (docx_crate.js, in this folder) instead of generic-input's flat file scan.
@@ -32,10 +34,9 @@ export function createPlugin(deps) {
       default: false,
       hint: "One sub-folder per collection, each holding .docx files whose Heading 1/2/3 styles become Collections and Chapters. Replaces the generic file scan for this build.",
     },
-    // docx_crate.js already wipes and recreates this directory unconditionally
-    // on every build (buildCrateFromDocxFolder), so declaring it here is about
-    // scan-exclusion and the folder-wide "delete plugin output" build setting
-    // — not about docx-input needing help cleaning up after itself.
+    // Written at crate:write below, which wipes and recreates the directory
+    // each time; declaring it here is about scan-exclusion and the folder-wide
+    // "delete plugin output" setting.
     outputPaths: [{ path: OUTPUT_FILES_DIR_NAME, kind: "dir" }],
     hooks: {
       "crate:build": {
@@ -73,7 +74,35 @@ export function createPlugin(deps) {
           }
           ctx.crate = result.crate;
           ctx.sourceCount = result.documentPartCount;
+          // The media the documents embed or reference is extracted here,
+          // because the crate has to name it, but it isn't on disk until
+          // crate:write — nothing reads those files before the crate they
+          // belong to is written out.
+          ctx.docxMedia = result.media || [];
           ctx.log(`Built crate: ${result.collectionCount} collection(s), ${result.documentPartCount} document(s).`, "ok");
+          if (ctx.docxMedia.length) {
+            ctx.log(`Extracted ${ctx.docxMedia.length} media file(s), to be written with the crate.`, "muted");
+          }
+        },
+      },
+
+      // Ahead of the crate's other written artefacts: the preview links to
+      // these files, so they are on disk before anything points at them.
+      "crate:write": {
+        priority: 5,
+        weight: 2,
+        activeWhen: (ctx) => !!ctx.options.docxInput,
+        handler: async (ctx) => {
+          if (!ctx.options.docxInput || !ctx.docxMedia?.length) return;
+          const { writeExtractedMedia } = await import("./docx_crate.js");
+          const progress = progressFor(ctx);
+          progress.start("Writing extracted media…");
+          try {
+            const written = await writeExtractedMedia(ctx.dirHandle, ctx.docxMedia);
+            ctx.log(`Wrote ${written} media file(s) to ${OUTPUT_FILES_DIR_NAME}/.`, "ok");
+          } finally {
+            progress.done();
+          }
         },
       },
     },

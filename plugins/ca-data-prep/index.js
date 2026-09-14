@@ -42,14 +42,14 @@ export function addCsvFilesToCrate(crate, documentRecords) {
   }
 }
 
-// Everything this plugin generates lives under _outputs/<its own name>/, the
-// per-plugin output convention (collection2crate issue #81) roctable follows
-// too: one folder per plugin, so "delete plugin output before rebuilding" and
-// the folder scan can reason about whose files are whose. No _config/ counterpart
-// — this plugin has nothing standing to configure.
-const OUTPUT_DIR = "_outputs/ca-data-prep";
-const CSV_DIR = `${OUTPUT_DIR}/csv`;
-const LOG_DIR = `${OUTPUT_DIR}/logs`;
+// Generated files go under _outputs/, named for what they are rather than for
+// this plugin — a folder of CSVs reads as a folder of CSVs to whoever opens it.
+// Each directory is still declared individually below: _outputs/ itself is
+// shared with the other writing plugins, so claiming it whole would hand this
+// plugin's "delete output before rebuilding" sweep somebody else's files. No
+// _config/ counterpart — nothing here is configurable.
+const CSV_DIR = "_outputs/csv";
+const LOG_DIR = "_outputs/logs";
 
 export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
   if (!dirHandle || !relativePath) return null;
@@ -65,7 +65,10 @@ export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
 
 const plugin = {
   name: "ca-data-prep",
-  outputPaths: [{ path: OUTPUT_DIR, kind: "dir" }],
+  outputPaths: [
+    { path: CSV_DIR, kind: "dir" },
+    { path: LOG_DIR, kind: "dir" },
+  ],
   optionSchema: {
     key: "processTranscriptDocuments",
     label: "Process plain transcript documents (.docx)",

@@ -50,18 +50,26 @@ them:
 | `FILES_PREPARE` | `"files:prepare"` | per-file analysis |
 | `FILES_WRITE` | `"files:write"` | writing files derived from the folder's own — no crate exists yet |
 | `METADATA_MERGE` | `"metadata:merge"` | spreadsheet metadata merge |
-| `CRATE_PREPARE` | `"crate:prepare"` | the crate's own metadata, settled after the files are done |
+| `CRATE_PREPARE` | `"crate:prepare"` | the crate's own metadata, immediately before assembly |
 | `CRATE_BUILD` | `"crate:build"` | crate assembly and everything that mutates it |
 | `CRATE_VALIDATE` | `"crate:validate"` | validation |
 | `CRATE_WRITE` | `"crate:write"` | writing to the folder |
 
 Which button runs a tap follows from its stage. collection2crate's **Process**
-step emits `files:prepare → files:write → metadata:merge → crate:prepare`, and
-its **Build** step emits `crate:build → crate:validate → crate:write` — the two
+step emits the file half — `files:prepare → files:write → metadata:merge` — and
+its **Build** step emits the crate half — `crate:prepare → crate:build →
+crate:validate → crate:write`. Every `crate:` stage belongs to Build. The two
 halves are disjoint, and a build continues the `ctx` the Process run finished
-with. So a plugin spanning both (prepare files, then describe them in the
+with, so a plugin spanning both (prepare files, then describe them in the
 crate) writes to `ctx` in a file stage and reads it back at `crate:build`,
 exactly as it would within one run.
+
+One caveat for anything seeding `ctx.config`, as `xlsx-crate-input` does at
+`crate:prepare`: the host rebuilds that object from the profile and the
+Describe form on every run, so a seed only survives to be used because
+`crate:prepare` runs in the same step as the assembly that reads it. Plugin-
+owned keys on `ctx` (`ctx.xlsxCrate`, `ctx.langById`, anything you invent)
+are carried between the two runs untouched.
 
 If collection2crate ever renames one of these, every plugin here keyed to the
 old string silently stops firing — there's no import to break loudly. Grep

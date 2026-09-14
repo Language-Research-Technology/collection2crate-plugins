@@ -284,13 +284,32 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `generic-input` (builder) | `buildFileMetadata`, `buildCrate`, `readJsonFromFolder` (reads the folder's existing crate, if any, to reconcile against rather than replace — collection2crate SPEC.md §6.1a), `openModal` (confirms which newly-found files to add, via `new-files-confirm.js`) |
 | `docx-input` (builder) | `writeFileAtPath`, `fileExists` (both handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
 
+`openModal` has one shape, documented in collection2crate SPEC.md §6.2 — a
+plugin builds its content in `onMount(body, { close })` and declares its
+buttons as `actions`, never drawing its own:
+
+```js
+const chosen = await openModal({
+  title: "Configure RO-Crate tables",
+  onMount(body) { body.append(/* your controls */); },
+  actions: [
+    { label: "Cancel", value: null },
+    // called at click time, so it sees whatever the controls have edited
+    { label: "Save configuration", primary: true, value: () => working },
+  ],
+});
+```
+
+Dismissing resolves `null`, which the caller should treat as "no choice was
+made" rather than an empty result. Content uses the host's own classes —
+`.button`, `.button primary`, `.button subtle`, `.checkbox`, `.field-hint`,
+`.data-table` — so a plugin ships no CSS.
+
 `loadMasp` is a thunk — `() => import("../masp.js")` — rather than the
 function itself, so `ro-crate-masp` (a heavy validator library) stays
 dynamically imported from collection2crate's own tree instead of becoming a
 static import anywhere in this package.
 
-The `roctable` plugin (`plugins/roctable/`) takes its name from the
-[`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
 The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
 library not yet on npm — installed as a git dependency pinned to a

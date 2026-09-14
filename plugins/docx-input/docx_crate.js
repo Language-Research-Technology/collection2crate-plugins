@@ -44,9 +44,9 @@ import { ROCrate } from "ro-crate";
 // writeFileAtPath is a collection2crate core function (fs_helpers.js),
 // injected once via configure() rather than imported by relative path — see
 // docx-input/index.js's createPlugin(deps) and this repo's README.
-let writeFileAtPath;
+let writeFileAtPath, fileExists;
 export function configure(deps) {
-  ({ writeFileAtPath } = deps);
+  ({ writeFileAtPath, fileExists } = deps);
 }
 
 // Where copied/embedded media and source .docx files land, relative to the
@@ -451,26 +451,40 @@ function collectEmbeddedImage(collectionRelPath, docxBaseName, buffer, extension
  *
  * Separate from the build so the extraction can happen while the crate is
  * assembled — the crate has to name these files — and the folder is only
- * touched when the crate itself is written (crate:write). The directory is
- * wiped first: a media file whose source document was renamed or deleted
- * should not survive into the next build.
+ * touched when the crate itself is written (crate:write).
+ *
+ * With `overwrite` on (the default), the directory is wiped first: a media
+ * file whose source document was renamed or deleted should not survive into
+ * the next build. With it off, nothing existing is touched at all — neither
+ * wiped nor replaced — and only media with no file already in place is
+ * written, which is the same promise the other writers make.
  *
  * @param {FileSystemDirectoryHandle} rootHandle  the picked folder
  * @param {Array<{path: string, bytes: ArrayBuffer}>} media
- * @returns {Promise<number>} how many files were written
+ * @param {{overwrite?: boolean}} [options]
+ * @returns {Promise<{written: number, skipped: number}>}
  */
-export async function writeExtractedMedia(rootHandle, media = []) {
-  if (!media.length) return 0;
-  try {
-    await rootHandle.removeEntry(OUTPUT_FILES_DIR_NAME, { recursive: true });
-  } catch {
-    // no pre-existing ro-crate-preview_files/ to remove — fine.
+export async function writeExtractedMedia(rootHandle, media = [], { overwrite = true } = {}) {
+  if (!media.length) return { written: 0, skipped: 0 };
+  if (overwrite) {
+    try {
+      await rootHandle.removeEntry(OUTPUT_FILES_DIR_NAME, { recursive: true });
+    } catch {
+      // no pre-existing ro-crate-preview_files/ to remove — fine.
+    }
   }
   const filesDirHandle = await rootHandle.getDirectoryHandle(OUTPUT_FILES_DIR_NAME, { create: true });
+  let written = 0;
+  let skipped = 0;
   for (const { path, bytes } of media) {
+    if (!overwrite && await fileExists(filesDirHandle, path)) {
+      skipped++;
+      continue;
+    }
     await writeFileAtPath(filesDirHandle, path, bytes);
+    written++;
   }
-  return media.length;
+  return { written, skipped };
 }
 
 /* ---------- docx parsing (mirrors build-ro-crate.js's parseStructuredChapters) ---------- */

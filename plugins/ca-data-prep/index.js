@@ -10,10 +10,10 @@ import {
 // via createPlugin(deps) — see this repo's README.
 import { countedProgress } from "../../src/_progress.js";
 
-let writeFileAtPath;
+let writeFileAtPath, fileExists;
 
 export function createPlugin(deps) {
-  ({ writeFileAtPath } = deps);
+  ({ writeFileAtPath, fileExists } = deps);
   return plugin;
 }
 
@@ -151,15 +151,29 @@ const plugin = {
         const { documentRecords } = ctx.caDataPrep;
         if (!documentRecords.length) return;
 
+        // The overwrite setting is the person's answer to "may this build
+        // replace what is already in my folder", and applies to derived files
+        // as much as to the crate's own.
+        const overwrite = ctx.options.overwrite !== false;
+        const write = async (path, text) => {
+          if (!overwrite && await fileExists(ctx.dirHandle, path)) {
+            ctx.log(`${path} exists and overwrite is off — skipped.`, "warn");
+            return 0;
+          }
+          await writeFileAtPath(ctx.dirHandle, path, text);
+          return 1;
+        };
+
         const writeTick = countedProgress(ctx, documentRecords.length, "Writing transcript CSV and log files…");
+        let written = 0;
         for (let i = 0; i < documentRecords.length; i++) {
           const document = documentRecords[i];
-          await writeFileAtPath(ctx.dirHandle, `${document.csvDirName}/${document.baseName}.csv`, document.csvText);
-          await writeFileAtPath(ctx.dirHandle, `${document.logDirName}/${document.baseName}.log.txt`, document.logText);
+          written += await write(`${document.csvDirName}/${document.baseName}.csv`, document.csvText);
+          written += await write(`${document.logDirName}/${document.baseName}.log.txt`, document.logText);
           writeTick(i, `Wrote ${document.baseName}.csv`);
         }
         writeTick.done();
-        ctx.log(`Wrote ${documentRecords.length} transcript CSV and log file(s).`, "ok");
+        ctx.log(`Wrote ${written} transcript CSV and log file(s).`, written ? "ok" : "warn");
       },
     },
 

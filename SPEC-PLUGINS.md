@@ -1,8 +1,10 @@
 # Analysis plugins
 
-Two plugins to port from chaos2crate's `src/analysis-plugins/`: a concordance
-(KWIC) explorer and an n-gram analyser. Neither exists in this repo yet; this
-is what they should be when they do.
+Three panels for collection2crate's Visualise page. Two are ports from
+chaos2crate's `src/analysis-plugins/` — a concordance (KWIC) explorer and an
+n-gram analyser — and the third is the chart UI that lives in the host's
+`main.js` today, moved out here to sit alongside them. None of the three exists
+in this repo yet; this is what they should be when they do.
 
 They are not build plugins. A build plugin taps the pipeline, mutates `ctx` and
 writes files; these read text that a build already produced and let a person
@@ -34,8 +36,9 @@ export function createPlugin(deps) {
   element the host owns. It is called each time the panel is shown, and may be
   called again when the loaded documents change; it must not assume it is the
   first call, and must not retain anything between calls except through `ctx`.
-- `ctx` carries `{ documents, log }` — the documents described below, and the
-  host's logger for anything worth putting in the build log.
+- `ctx` carries `{ documents, tables, log }` — the two views of the loaded data
+  described below, and the host's logger for anything worth putting in the
+  build log.
 
 A plugin may declare `analysis` alongside `hooks`, or on its own. These two
 declare no hooks at all: they never run during a build, so they register
@@ -75,6 +78,22 @@ shapes:
 A directory is only offered when it exists *and* holds a supported file, so a
 declared output that holds HTML or images never appears as a dead option.
 
+### `ctx.tables` — the same CSVs, unflattened
+
+Flattening a CSV to one line of text per row is what the text panels want and
+what a chart panel cannot use: a chart needs the columns back.
+
+```js
+{ source: "_outputs/csv/interview-01.csv",
+  header: ["speakerId", "start", "end", "text"],
+  rows: [["CHI", "0.0", "2.4", "the actual line"], …] }
+```
+
+So the host parses each CSV once and offers both views of it: `tables` for
+anything that reads columns, `documents` for anything that reads running text.
+A `.cha` or `.txt` source produces documents only and never appears in
+`tables` — there are no columns to offer.
+
 ## What collection2crate has to add
 
 Host-side work this spec depends on, none of it done yet:
@@ -82,10 +101,17 @@ Host-side work this spec depends on, none of it done yet:
 - `composeAnalysisPanels()` in `src/plugins/index.js`, alongside
   `composeOptionSchema()` and the others, returning every plugin's `analysis`
   member in registry order.
-- A Visualise page that lists those panels in its left rail and renders the
-  chosen one in the right column, replacing today's fixed chart UI or sitting
-  beside it as another entry.
-- The document loader described above, in the host rather than in a plugin.
+- A Visualise page that is nothing but a panel host: the composed panels in its
+  left rail, the chosen one rendered in the right column. It holds no analysis
+  of its own.
+- The loader described above, in the host rather than in a plugin, producing
+  both `documents` and `tables`.
+- **Moving the chart UI out of `main.js`** into the `chart` plugin below. It is
+  the page's own content today — the file list, the chart-type and axis
+  selects, `drawChart()` and its SVG helpers, roughly 150 lines around
+  `refreshVisualiseView()`. Once the page is a panel host, a built-in chart
+  would be the one panel that arrived by a different route and could not be
+  deselected from a deployment; there is no reason for it to be the exception.
 
 ## Shared helpers
 
@@ -199,11 +225,36 @@ and both measures against hand-worked numbers.
 
 ---
 
+## chart
+
+The tabular chart that is the Visualise page today: pick a CSV, pick a chart
+type and two columns, get an SVG.
+
+**Controls.** A list of the sources in `ctx.tables` in the left of the panel;
+chart type — bar, line, scatter; and two column selects, category/x and
+value/y, populated from the chosen table's header.
+
+**Rendering.** Hand-built SVG, no chart library: axes, ticks, and one mark per
+row. Bars for `bar`, a polyline for `line`, circles with a larger invisible hit
+target for `scatter`. Non-numeric values in the y column are skipped rather
+than coerced to zero, and the panel says how many rows it skipped — a column of
+`"n/a"` silently plotting as a floor of zeroes is a chart that lies.
+
+**Below the chart**, the chosen table as a plain data table, so the numbers
+behind a shape are one glance away.
+
+**Empty state.** When `ctx.tables` is empty: no CSVs have been built yet, and
+the panel says which option produces them rather than just reporting nothing.
+
+**Testable seam.** The scale and tick arithmetic — the part that is wrong in
+silence — as a pure function over `{ rows, xColumn, yColumn, width, height }`,
+returning the positions the SVG is drawn from. The drawing itself stays
+untested, as DOM.
+
+---
+
 ## Open questions
 
-- **Does the Visualise page keep its chart UI?** These two are tables. The
-  existing chart view reads a crate's tabular files directly; one of the three
-  has to become a panel among the others, and it may as well be the chart.
 - **Should a corpus's own language decide the stopword list?** The crate knows
   its subject languages when AUSTLANG ran. Defaulting the list off is the
   conservative answer until there is a real one.

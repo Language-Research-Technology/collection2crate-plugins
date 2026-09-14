@@ -23,7 +23,7 @@ const plugin = {
     key: "makeXlsx", label: "Generate ro-crate-metadata.xlsx", default: true,
   },
   hooks: {
-    "output:write": {
+    "crate:write": {
       priority: 30,
       weight: 2,
       activeWhen: (ctx) => !!ctx.options.makeXlsx,

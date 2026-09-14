@@ -169,7 +169,7 @@ const plugin = {
       },
     },
 
-    "output:write": {
+    "crate:write": {
       // Ahead of the crate writers: these CSVs are derived output and say
       // nothing about the crate files themselves.
       priority: 10,

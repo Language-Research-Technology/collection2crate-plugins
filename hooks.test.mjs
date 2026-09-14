@@ -21,7 +21,7 @@ import { progressFor, countedProgress } from "./src/_progress.js";
 const HOOKS = new Set([
   "c2c:loaded", "folder:picked", "profile:selected", "crate:prepare",
   "files:prepare", "metadata:merge", "crate:build", "crate:validate",
-  "output:write",
+  "crate:write",
 ]);
 
 // Every deps key any plugin destructures, stubbed. createPlugin() only

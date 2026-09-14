@@ -175,14 +175,24 @@ function renderTypeRow(config, type, onSelectionChange) {
     onSelectionChange();
   });
 
+  // A solid disclosure triangle at body-text size. The old control was a
+  // 12px ▸, which is both small and a hairline glyph — it read as
+  // punctuation rather than as something to press. aria-expanded is what
+  // actually tells a screen reader what it does, since the glyph says
+  // nothing.
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "button subtle";
-  toggle.style.cssText = "padding:2px 8px; font-size:12px; line-height:1.4;";
-  toggle.textContent = "▸";
+  toggle.style.cssText = "padding:0 6px; font-size:15px; line-height:1.2; min-width:26px;";
+  toggle.textContent = "▶";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.title = "Show this type's properties";
 
+  // The heading toggles too, so the triangle is a shortcut rather than the
+  // only target — a 26px button is a small thing to have to hit for every
+  // type in the list.
   const summary = document.createElement("span");
-  summary.style.fontWeight = "600";
+  summary.style.cssText = "font-weight:600; cursor:pointer;";
 
   function updateSummary() {
     const { included, total } = includedCount(properties);
@@ -198,28 +208,32 @@ function renderTypeRow(config, type, onSelectionChange) {
   wrap.appendChild(propsPanel);
 
   let built = false;
-  toggle.addEventListener("click", () => {
+  const toggleProperties = () => {
     const expanded = propsPanel.style.display !== "none";
     propsPanel.style.display = expanded ? "none" : "block";
-    toggle.textContent = expanded ? "▸" : "▾";
+    toggle.textContent = expanded ? "▶" : "▼";
+    toggle.setAttribute("aria-expanded", String(!expanded));
+    toggle.title = expanded ? "Show this type's properties" : "Hide this type's properties";
     if (!expanded && !built) {
       built = true;
       for (const propName of Object.keys(properties).sort()) {
         propsPanel.appendChild(renderPropertyRow(properties, propName, updateSummary));
       }
     }
-  });
+  };
+  toggle.addEventListener("click", toggleProperties);
+  summary.addEventListener("click", toggleProperties);
 
   return wrap;
 }
 
-// The host's own .modal caps out at max-width:440px (index.html's shared
-// stylesheet) — sized for a short confirmation, not a multi-column property
-// table with four controls per row. openModal's modalClassName adds a class
-// to that same .modal element but supplies no rule of its own, so this
-// injects one override, once per page load, scoped to that class — more
-// specific than the bare .modal rule, so it wins regardless of stylesheet
-// order, without editing index.html's shared CSS for one plugin's modal.
+// The host's modal panel is min(720px, 100%) — sized for a short
+// confirmation, not a multi-column property table with four controls per
+// row. openModal's modalClassName puts a class on that same panel but
+// supplies no rule of its own, so this injects one override, once per page
+// load, scoped to that class: two classes beat the host's single .modal-panel
+// selector regardless of stylesheet order, and the host's CSS stays free of
+// any one plugin's needs.
 let stylesInjected = false;
 function ensureWideModalStyle() {
   if (stylesInjected) return;

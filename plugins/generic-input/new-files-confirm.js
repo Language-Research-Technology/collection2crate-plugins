@@ -114,11 +114,12 @@ export async function confirmNewFiles({ newPaths, openModal }) {
       const actions = document.createElement("div");
       actions.className = "actions";
       const skipBtn = document.createElement("button");
-      skipBtn.type = "button"; skipBtn.className = "secondary";
+      skipBtn.type = "button"; skipBtn.className = "button";
       skipBtn.textContent = "Add none";
       skipBtn.addEventListener("click", () => close([]));
       const confirmBtn = document.createElement("button");
       confirmBtn.type = "button";
+      confirmBtn.className = "button primary";
       confirmBtn.textContent = "Add selected";
       confirmBtn.addEventListener("click", () => close([...checkedSet]));
       actions.append(skipBtn, confirmBtn);

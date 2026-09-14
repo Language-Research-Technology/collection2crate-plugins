@@ -21,6 +21,9 @@ import { createPlugin as createRoctable } from "./plugins/roctable/index.js";
 import { createPlugin as createValidateCrate } from "./plugins/validate-crate/index.js";
 import { createPlugin as createJsonOutput } from "./plugins/ro-crate-json-output/index.js";
 import { createPlugin as createXlsxOutput } from "./plugins/ro-crate-xlsx-output/index.js";
+import { createPlugin as createConcordance } from "./plugins/concordance/index.js";
+import { createPlugin as createNgrams } from "./plugins/ngrams/index.js";
+import { createPlugin as createChart } from "./plugins/chart/index.js";
 import { createPlugin as createHtmlOutput } from "./plugins/ro-crate-html-output/index.js";
 
 // Order here doubles as the default hook-execution order for plugins sharing
@@ -44,5 +47,9 @@ export const REGISTRY = {
   "ro-crate-json-output": createJsonOutput,
   "ro-crate-xlsx-output": createXlsxOutput,
   "ro-crate-html-output": createHtmlOutput,
+  // Visualisation panels: no hooks, nothing during a build (SPEC-PLUGINS.md).
+  "concordance": createConcordance,
+  "ngrams": createNgrams,
+  "chart": createChart,
 };
 

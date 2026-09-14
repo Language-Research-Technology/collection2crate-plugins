@@ -17,7 +17,10 @@ dependency between the two repos.
 index.js                 REGISTRY — the one registry, keyed by plugin name
 plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
+src/_csv.js              CSV building and download, for visualisation panels
+src/_panel.js            the DOM vocabulary those panels share
 hooks.test.mjs           the hook/priority/progress contract test
+visualisation.test.mjs   the panels' pure seams: matching, counting, scaling
 ```
 
 One folder per plugin under `plugins/`, named exactly as the plugin names
@@ -26,6 +29,32 @@ consumer resolve `collection2crate-plugins/plugins/<name>/index.js` from a
 `PLUGINS` selection without a lookup table, and `hooks.test.mjs` asserts the
 registry key and `plugin.name` half of it. Anything shared between plugins
 rather than being one stays outside `plugins/`, in `src/`.
+
+## Two kinds of plugin
+
+Most plugins here tap the build pipeline: they declare `hooks`, run when a
+person presses Process or Build, and write to `ctx`. The rest declare a
+**`visualisation`** panel — `concordance`, `ngrams` and `chart` — which appears
+on collection2crate's Visualise page, taps nothing, and does not run at all
+until someone opens it:
+
+```js
+{
+  name: "concordance",
+  visualisation: {
+    label: "Concordance",                       // names it in the sidebar
+    hint: "Search for a word or phrase…",       // one line, shown with it
+    render(container, { documents, tables, log }) { /* build DOM here */ },
+  },
+}
+```
+
+One registry holds both, and a plugin may declare either or both: a panel is
+something a plugin offers, like an `optionSchema`. A deployment that leaves a
+plugin out of its `PLUGINS` selection gets neither its taps nor its panel.
+
+`SPEC-PLUGINS.md` is the full contract — what `documents` and `tables` are,
+where they come from, and what each of the three panels does.
 
 ## Consuming this package
 
@@ -248,6 +277,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `validate-crate` | `loadMasp` |
+| `concordance`, `ngrams`, `chart` (panels) | none — a panel receives its data in `ctx`, and never touches the folder |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
 | `ro-crate-html-output` | `crateToPreviewHtml`, `crateToMultiPageHtml`, `writeFile`, `writeFileAtPath`, `readJsonFromFolder`, `readFileTextFromDirectory`, `verifyPermission`, `fileExists`, `bustCacheUrl`, `buildGitHubTreeUrl`, `fetchGitHubTextFile`, `listGitHubFolder` |

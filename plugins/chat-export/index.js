@@ -147,8 +147,12 @@ const plugin = {
       },
     },
 
-    "crate:build": {
-      priority: 60,
+    // CHAT files are derived from the folder's own .docx files, so they are
+    // written at files:write — during Process, where they were asked for —
+    // rather than waiting for a build. The entities describing them are added
+    // at crate:build below, the first point where a crate exists.
+    "files:write": {
+      priority: 20,
       weight: 2,
       activeWhen: (ctx) => !!ctx.options.generateChatFiles,
       handler: async (ctx) => {
@@ -164,10 +168,20 @@ const plugin = {
           writeTick(i, `Wrote ${doc.chatName}`);
         }
         writeTick.done();
-
-        if (ctx.crate) addChatFilesToCrate(ctx.crate, documentRecords);
-
         ctx.log(`Wrote ${documentRecords.length} CHAT file(s).`, "ok");
+      },
+    },
+
+    "crate:build": {
+      priority: 60,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.generateChatFiles,
+      handler: (ctx) => {
+        if (!ctx.options.generateChatFiles || !ctx.chatExport) return;
+        const { documentRecords } = ctx.chatExport;
+        if (!documentRecords.length || !ctx.crate) return;
+        addChatFilesToCrate(ctx.crate, documentRecords);
+        ctx.log(`Described ${documentRecords.length} CHAT file(s) in the crate.`, "muted");
       },
     },
   },

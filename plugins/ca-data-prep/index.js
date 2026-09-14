@@ -129,13 +129,17 @@ const plugin = {
       },
     },
 
-    "crate:build": {
-      priority: 50,
+    // The CSVs and logs are files derived from the folder's own, so they are
+    // written at files:write — in the Process step, where the person asked for
+    // the processing — rather than waiting for a build. The crate entities
+    // describing them are a separate job, below, since no crate exists yet.
+    "files:write": {
+      priority: 10,
       weight: 2,
       activeWhen: (ctx) => !!ctx.options.processTranscriptDocuments,
       handler: async (ctx) => {
         if (!ctx.options.processTranscriptDocuments || !ctx.caDataPrep) return;
-        const { files, documentRecords } = ctx.caDataPrep;
+        const { documentRecords } = ctx.caDataPrep;
         if (!documentRecords.length) return;
 
         const writeTick = countedProgress(ctx, documentRecords.length, "Writing transcript CSV and log files…");
@@ -146,6 +150,18 @@ const plugin = {
           writeTick(i, `Wrote ${document.baseName}.csv`);
         }
         writeTick.done();
+        ctx.log(`Wrote ${documentRecords.length} transcript CSV and log file(s).`, "ok");
+      },
+    },
+
+    "crate:build": {
+      priority: 50,
+      weight: 1,
+      activeWhen: (ctx) => !!ctx.options.processTranscriptDocuments,
+      handler: async (ctx) => {
+        if (!ctx.options.processTranscriptDocuments || !ctx.caDataPrep) return;
+        const { files, documentRecords } = ctx.caDataPrep;
+        if (!documentRecords.length) return;
 
         // ctx.crate is about to be replaced wholesale below — read the selected
         // profile's own conformsTo (already assembled by processFolder into

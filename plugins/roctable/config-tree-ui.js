@@ -91,7 +91,7 @@ function renderPropertyRow(properties, name, onIncludeChange) {
   function renderSubPanel() {
     subPanel.replaceChildren();
     const hint = document.createElement("div");
-    hint.className = "hint";
+    hint.className = "field-hint";
     if (!propConfig.properties) {
       hint.textContent = "Sub-properties appear here after the next build re-discovers this expansion.";
       subPanel.appendChild(hint);
@@ -140,7 +140,7 @@ function renderPropertyRow(properties, name, onIncludeChange) {
   joinWrap.style.cssText = "font-size:13px; display:flex; align-items:center; gap:4px;";
   const joinLabel = document.createElement("span");
   joinLabel.textContent = "join:";
-  joinLabel.className = "hint";
+  joinLabel.className = "field-hint";
   joinWrap.append(joinLabel, joinSelect);
 
   row.append(includeCb, expandCb, loadTextCb, joinWrap);
@@ -175,7 +175,7 @@ function renderTypeRow(config, type, onSelectionChange) {
 
   const toggle = document.createElement("button");
   toggle.type = "button";
-  toggle.className = "secondary";
+  toggle.className = "button subtle";
   toggle.style.cssText = "padding:2px 8px; font-size:12px; line-height:1.4;";
   toggle.textContent = "▸";
 
@@ -252,7 +252,7 @@ export async function openConfigTreeEditor({ config, openModal }) {
         const types = allTypeNames(working);
         if (!types.length) {
           const empty = document.createElement("p");
-          empty.className = "hint";
+          empty.className = "field-hint";
           empty.textContent = "No entity types were found in this crate.";
           listWrap.appendChild(empty);
           return;
@@ -266,11 +266,12 @@ export async function openConfigTreeEditor({ config, openModal }) {
       const actions = document.createElement("div");
       actions.className = "actions";
       const cancelBtn = document.createElement("button");
-      cancelBtn.type = "button"; cancelBtn.className = "secondary";
+      cancelBtn.type = "button"; cancelBtn.className = "button";
       cancelBtn.textContent = "Cancel";
       cancelBtn.addEventListener("click", () => close(null));
       const saveBtn = document.createElement("button");
       saveBtn.type = "button";
+      saveBtn.className = "button primary";
       saveBtn.textContent = "Save configuration";
       saveBtn.addEventListener("click", () => close(working));
       actions.append(cancelBtn, saveBtn);

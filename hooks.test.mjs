@@ -19,9 +19,9 @@ import { progressFor, countedProgress } from "./src/_progress.js";
 // collection2crate (README). Updating it here is the deliberate act of accepting
 // a contract change from the other side.
 const HOOKS = new Set([
-  "c2c:loaded", "folder:picked", "profile:selected", "crate:prepare",
-  "files:prepare", "metadata:merge", "crate:build", "crate:validate",
-  "crate:write",
+  "c2c:loaded", "folder:picked", "profile:selected",
+  "files:prepare", "files:write", "metadata:merge", "crate:prepare",
+  "crate:build", "crate:validate", "crate:write",
 ]);
 
 // Every deps key any plugin destructures, stubbed. createPlugin() only

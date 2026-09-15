@@ -7,7 +7,7 @@
 //   node transcript.test.mjs
 import assert from "node:assert/strict";
 
-import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities, paragraphNumbersByLine } from "./plugins/ca-data-prep/process.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -245,8 +245,29 @@ await check("the log leads with a count and names the line of every finding", as
   assert.ok(log.includes("Expected format: CODE: name [alternate name] (demographic info) #id"));
   assert.ok(log.includes("Expected format: [turn number][.] CODE: text"));
   for (const entry of nonConforming.body) {
-    assert.ok(log.includes(`Line ${entry.line} [${entry.section}]`), `line ${entry.line} is missing from the log`);
+    assert.ok(log.includes(`Paragraph ${entry.line} [${entry.section}]`), `paragraph ${entry.line} is missing from the log`);
   }
+});
+
+console.log("\nParagraph numbering");
+
+await check("a finding points at the .docx paragraph, not the extracted line", () => {
+  // mammoth terminates every paragraph with a blank line, so consecutive
+  // paragraphs sit two extracted lines apart and an empty paragraph adds two
+  // more. Reporting the raw line number gave a transcriber a figure that
+  // drifted further from their document the further down it went.
+  const extracted = [
+    "Transcript: demo", "",
+    "Recording date: 2020-01-01", "",
+    "", "",
+    "Speakers:", "",
+    "D:\tDora #dora", "",
+  ].join("\n");
+  const numbers = paragraphNumbersByLine(extracted);
+  assert.equal(numbers[0], 1, "the first line is paragraph 1");
+  assert.equal(numbers[2], 2, "two extracted lines on, paragraph 2");
+  assert.equal(numbers[6], 4, "an empty paragraph of its own still counts");
+  assert.equal(numbers[8], 5, "the speaker declaration is paragraph 5");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

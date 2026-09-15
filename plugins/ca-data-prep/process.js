@@ -45,6 +45,33 @@ export function isHeaderLine(value) {
   return HEADER_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+/**
+ * Which .docx paragraph each line of the extracted text belongs to.
+ *
+ * mammoth terminates every paragraph with a blank line, so "\n\n" is the
+ * paragraph separator and a lone "\n" is a soft line break inside one. That
+ * makes a raw line number roughly twice the paragraph's position — and more
+ * than twice once the document has empty paragraphs of its own, each of which
+ * contributes a blank line and a terminator. Reporting those raw numbers gave
+ * a transcriber nothing they could find in their own document.
+ *
+ * Returns a 1-based paragraph number per line, aligned with `text.split("\n")`.
+ */
+export function paragraphNumbersByLine(text) {
+  const paragraphs = String(text || "").split("\n\n");
+  const numbers = [];
+
+  paragraphs.forEach((paragraph, index) => {
+    const lineCount = paragraph.split("\n").length;
+    for (let i = 0; i < lineCount; i += 1) numbers.push(index + 1);
+    // The blank line that separated this paragraph from the next belongs to
+    // this one, so a finding on it still points at the paragraph it came from.
+    if (index < paragraphs.length - 1) numbers.push(index + 1);
+  });
+
+  return numbers;
+}
+
 const sectionName = (section) =>
   section === "PRE" ? "PRELIMINARIES" : section === "POST" ? "POSTLIMINARIES" : "MAIN";
 
@@ -651,9 +678,9 @@ export function formatSectionDiagnostics(sectionDiagnostics) {
   for (const section of sectionDiagnostics) {
     const status = section.processed ? "processed" : "not processed";
     const header = section.headerLine
-      ? `header line ${section.headerLine}: ${JSON.stringify(section.name)}`
+      ? `header paragraph ${section.headerLine}: ${JSON.stringify(section.name)}`
       : `no exact ${JSON.stringify(section.name)} header found`;
-    lines.push(`${section.name}: ${status} (line ${section.line}; ${header}) - ${section.reason}`);
+    lines.push(`${section.name}: ${status} (paragraph ${section.line}; ${header}) - ${section.reason}`);
   }
   return lines.join("\n");
 }
@@ -662,7 +689,7 @@ export function formatHeaderChecks(headerChecks) {
   const lines = ["Section header line checks:"];
   for (const check of headerChecks) {
     const status = check.matchedHeader ? `MATCH (${check.matchedHeader})` : "NO MATCH";
-    lines.push(`Line ${check.line}: ${status} - ${JSON.stringify(check.content)}`);
+    lines.push(`Paragraph ${check.line}: ${status} - ${JSON.stringify(check.content)}`);
   }
   return lines.join("\n");
 }
@@ -713,7 +740,7 @@ export function formatSpeakerBlockReport(diagnostics) {
       ].filter(Boolean).join(", ")
       : "";
     const code = entry.code ? `[${entry.code}] ` : "";
-    lines.push(`Line ${entry.line}: ${entry.conforming ? "ok" : "NON-CONFORMING"} ${code}${fields}`.trimEnd());
+    lines.push(`Paragraph ${entry.line}: ${entry.conforming ? "ok" : "NON-CONFORMING"} ${code}${fields}`.trimEnd());
     for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
     if (!entry.conforming) lines.push(`    source: ${JSON.stringify(entry.content)}`);
   }
@@ -738,7 +765,7 @@ export function formatBodyReport(diagnostics) {
   lines.push("");
 
   for (const entry of diagnostics) {
-    lines.push(`Line ${entry.line} [${entry.section}]: ${JSON.stringify(entry.content)}`);
+    lines.push(`Paragraph ${entry.line} [${entry.section}]: ${JSON.stringify(entry.content)}`);
     for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
   }
 
@@ -764,7 +791,11 @@ export async function processTranscriptText(text, config = {}) {
   const firstPass = mergeContinuationLinesWithMap(timecodeStripped, null);
   const declaredCodes = declaredCodeSet(parseSpeakerBlock(firstPass.text.split("\n")));
 
-  const { text: merged, lineNumbers } = mergeContinuationLinesWithMap(timecodeStripped, declaredCodes);
+  const { text: merged, lineNumbers: rawLines } = mergeContinuationLinesWithMap(timecodeStripped, declaredCodes);
+  // normalizeText and stripTimecodes both preserve line count, so the table
+  // built here lines up with the indices merge reports against.
+  const paragraphTable = paragraphNumbersByLine(timecodeStripped);
+  const lineNumbers = rawLines.map((line) => paragraphTable[line - 1] ?? line);
   const mergedLines = merged.split("\n");
   const speakerMap = parseSpeakerBlock(mergedLines, speakerDiagnostics, lineNumbers);
 
@@ -792,7 +823,7 @@ export async function processTranscriptText(text, config = {}) {
 
   const logLines = [
     `Non-conforming lines: ${nonConforming.total} (${nonConformingSpeakers.length} in the speaker block, ${bodyDiagnostics.length} in the body).`,
-    "Line numbers are lines of the text extracted from the .docx, before continuation repair.",
+    "Paragraph numbers are paragraphs of the .docx, counted as Word counts them — empty paragraphs included.",
     "",
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
     "",

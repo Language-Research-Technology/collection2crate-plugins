@@ -9,12 +9,37 @@ import {
 // Hook names are literal strings and writeFileAtPath (fs_helpers.js) arrives
 // via createPlugin(deps) — see this repo's README.
 import { countedProgress } from "../../src/_progress.js";
+import {
+  GRAMMAR_CONFIG_DIR, grammarPath, grammarFingerprint, listSavedGrammars, loadSavedGrammar,
+} from "../../src/_transcript_grammar.js";
 
-let writeFileAtPath, fileExists;
+let writeFileAtPath, fileExists, readFileTextFromDirectory;
 
 export function createPlugin(deps) {
-  ({ writeFileAtPath, fileExists } = deps);
+  ({ writeFileAtPath, fileExists, readFileTextFromDirectory } = deps);
   return plugin;
+}
+
+/**
+ * The saved grammar this run parses with, or null for the built-in
+ * convention. Loaded once per run and kept on ctx, so chat-export — which
+ * parses the same documents — reads them the same way, and so crate:build can
+ * tell whether the grammar has changed since.
+ *
+ * A grammar that was chosen but can't be read fails the run: quietly falling
+ * back to the built-in convention would produce a CSV from rules the person
+ * didn't ask for.
+ */
+export async function resolveTranscriptGrammar(ctx, readText = readFileTextFromDirectory) {
+  const name = String(ctx.options?.transcriptGrammar || "").trim();
+  if (!name) return null;
+  // Process starts from a fresh ctx, so anything already here was loaded
+  // earlier in this same run.
+  if (ctx.transcriptGrammar?.name === name) return ctx.transcriptGrammar;
+  if (!ctx.dirHandle) throw new Error(`Transcript grammar "${name}" was chosen, but no folder is open to read it from.`);
+  const grammar = await loadSavedGrammar(ctx.dirHandle, name, readText);
+  ctx.transcriptGrammar = { name, grammar, fingerprint: grammarFingerprint(grammar), path: grammarPath(name) };
+  return ctx.transcriptGrammar;
 }
 
 export function addCsvFilesToCrate(crate, documentRecords) {
@@ -47,7 +72,8 @@ export function addCsvFilesToCrate(crate, documentRecords) {
 // Each directory is still declared individually below: _outputs/ itself is
 // shared with the other writing plugins, so claiming it whole would hand this
 // plugin's "delete output before rebuilding" sweep somebody else's files. No
-// _config/ counterpart — nothing here is configurable.
+// _config/ counterpart of its own: the grammar it can parse with lives in
+// _config/transcript-grammar/, which the transcript-grammar plugin owns.
 const CSV_DIR = "_outputs/csv";
 const LOG_DIR = "_outputs/logs";
 
@@ -74,6 +100,17 @@ const plugin = {
     label: "Process plain transcript documents (.docx)",
     default: false,
     hint: "Runs the CAAT/AmAus transcript parser over .docx files in the generic folder build, writing cleaned CSV/log outputs and transcript metadata.",
+    children: [
+      {
+        key: "transcriptGrammar",
+        type: "select",
+        label: "Transcript grammar",
+        placeholder: "— the built-in convention —",
+        hint: `Parse with a grammar saved in ${GRAMMAR_CONFIG_DIR}/ (see "Define a transcript grammar…") instead of the built-in Speakers:/PRELIMINARIES convention.`,
+        // Offered choices depend on the folder, so the host asks for them.
+        choices: async ({ dirHandle }) => listSavedGrammars(dirHandle),
+      },
+    ],
   },
   hooks: {
     "files:prepare": {
@@ -84,6 +121,11 @@ const plugin = {
         if (!ctx.options.processTranscriptDocuments) return;
         const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
         if (!files.length) return;
+
+        // Before the loop, so a missing or broken grammar fails the run once,
+        // up front, rather than once per document.
+        const chosen = await resolveTranscriptGrammar(ctx);
+        if (chosen) ctx.log(`Parsing transcripts with the grammar "${chosen.name}" (${chosen.path}).`, "muted");
 
         const documentRecords = [];
         let nonConformingTotal = 0;
@@ -103,7 +145,11 @@ const plugin = {
             continue;
           }
           const text = await extractDocumentText(buffer);
-          const result = await processTranscriptText(text, ctx.options || {});
+          const result = await processTranscriptText(text, {
+            ...(ctx.options || {}),
+            grammar: chosen?.grammar || null,
+            grammarName: chosen?.name || "",
+          });
           const baseName = (file.fileName || file.name || "").replace(/\.docx$/i, "");
 
           // Document-level warnings (section order, and the like) are few and
@@ -151,7 +197,14 @@ const plugin = {
         }
 
         tick.done();
-        ctx.caDataPrep = { files, documentRecords, nonConformingTotal };
+        ctx.caDataPrep = {
+          files,
+          documentRecords,
+          nonConformingTotal,
+          // What these records were parsed with — crate:build checks it
+          // against the folder before describing them.
+          grammar: chosen ? { name: chosen.name, fingerprint: chosen.fingerprint } : null,
+        };
         ctx.log(`Prepared transcript processing for ${files.length} .docx file(s).`, "muted");
         if (nonConformingTotal) {
           ctx.log(
@@ -210,6 +263,7 @@ const plugin = {
         if (!ctx.options.processTranscriptDocuments || !ctx.caDataPrep) return;
         const { files, documentRecords } = ctx.caDataPrep;
         if (!documentRecords.length) return;
+        await warnIfGrammarChanged(ctx);
 
         // ctx.crate is about to be replaced wholesale below — read the selected
         // profile's own conformsTo (already assembled by processFolder into
@@ -225,3 +279,30 @@ const plugin = {
     },
   },
 };
+
+// Build describes what Process wrote. If the grammar Process parsed with has
+// been re-saved or swapped since, those CSVs are out of date — say so, rather
+// than building a crate over them in silence. (Changing the *choice* of
+// grammar already sends the person back to Process; this catches the file
+// changing under a choice that stayed the same.)
+export async function warnIfGrammarChanged(ctx, readText = readFileTextFromDirectory) {
+  const used = ctx.caDataPrep?.grammar || null;
+  const name = String(ctx.options?.transcriptGrammar || "").trim();
+  if (!used && !name) return false;
+  if (!used || used.name !== name) {
+    ctx.log(`The transcript CSVs were parsed with ${used ? `the grammar "${used.name}"` : "the built-in convention"}, but ${name ? `"${name}"` : "the built-in convention"} is chosen now — run Process again.`, "warn");
+    return true;
+  }
+  let current;
+  try {
+    current = await loadSavedGrammar(ctx.dirHandle, name, readText);
+  } catch (e) {
+    ctx.log(`Could not re-read the transcript grammar: ${e.message}`, "warn");
+    return true;
+  }
+  if (grammarFingerprint(current) !== used.fingerprint) {
+    ctx.log(`${grammarPath(name)} has changed since Process parsed the transcripts with it — run Process again to update the CSVs.`, "warn");
+    return true;
+  }
+  return false;
+}

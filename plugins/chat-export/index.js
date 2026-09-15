@@ -8,10 +8,10 @@ import { countedProgress } from "../../src/_progress.js";
 // configurable.
 const OUTPUT_DIR = "_outputs/chat";
 
-let writeFileAtPath, fileExists;
+let writeFileAtPath, fileExists, readFileTextFromDirectory;
 
 export function createPlugin(deps) {
-  ({ writeFileAtPath, fileExists } = deps);
+  ({ writeFileAtPath, fileExists, readFileTextFromDirectory } = deps);
   return plugin;
 }
 
@@ -59,6 +59,10 @@ export async function generateChatText(text, config = {}) {
   const result = await processTranscriptText(text, {
     headerRows: config.headerRows ?? 0,
     footerRows: config.footerRows ?? 0,
+    // The same grammar ca-data-prep parses with, when one is chosen, so the
+    // CHAT file and the CSV read each document the same way.
+    grammar: config.grammar || null,
+    grammarName: config.grammarName || "",
   });
 
   const speakerCodeByResolved = new Map();
@@ -116,6 +120,9 @@ const plugin = {
         const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
         if (!files.length) return;
 
+        const { resolveTranscriptGrammar } = await import("../ca-data-prep/index.js");
+        const chosen = await resolveTranscriptGrammar(ctx, readFileTextFromDirectory);
+
         const documentRecords = [];
         const tick = countedProgress(ctx, files.length, "Generating CHAT transcripts…");
         for (let index = 0; index < files.length; index++) {
@@ -135,6 +142,8 @@ const plugin = {
             corpusId: ctx.dirHandle && ctx.dirHandle.name ? ctx.dirHandle.name : baseName,
             headerRows: ctx.options.headerRows || 0,
             footerRows: ctx.options.footerRows || 0,
+            grammar: chosen?.grammar || null,
+            grammarName: chosen?.name || "",
           });
 
           documentRecords.push({

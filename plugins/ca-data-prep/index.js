@@ -86,6 +86,7 @@ const plugin = {
         if (!files.length) return;
 
         const documentRecords = [];
+        let nonConformingTotal = 0;
         const tick = countedProgress(ctx, files.length, "Processing transcript documents…");
         for (let index = 0; index < files.length; index++) {
           const file = files[index];
@@ -103,7 +104,24 @@ const plugin = {
           }
           const text = await extractDocumentText(buffer);
           const result = await processTranscriptText(text, ctx.options || {});
-          const baseName = (file.fileName || file.name).replace(/\.docx$/i, "");
+          const baseName = (file.fileName || file.name || "").replace(/\.docx$/i, "");
+
+          // Document-level warnings (section order, and the like) are few and
+          // worth reading here. Per-line non-conformance is not: a transcript
+          // whose turn numbers all lack a period would file one warning per
+          // turn and bury everything else, so the build log gets a count and
+          // the log file gets the lines.
+          for (const warning of result.warnings || []) ctx.log(warning, "warn");
+          const nonConforming = result.nonConforming || { speakers: [], body: [], total: 0 };
+          nonConformingTotal += nonConforming.total;
+          if (nonConforming.total) {
+            ctx.log(
+              `${file.fileName || file.name}: ${nonConforming.total} non-conforming line(s) — ` +
+              `${nonConforming.speakers.length} in the speaker block, ${nonConforming.body.length} in the body. ` +
+              `See ${LOG_DIR}/${baseName}.log.txt`,
+              "warn",
+            );
+          }
           const csvText = toCsv(result.rows);
           const csvDirName = CSV_DIR;
           const logDirName = LOG_DIR;
@@ -133,8 +151,15 @@ const plugin = {
         }
 
         tick.done();
-        ctx.caDataPrep = { files, documentRecords };
+        ctx.caDataPrep = { files, documentRecords, nonConformingTotal };
         ctx.log(`Prepared transcript processing for ${files.length} .docx file(s).`, "muted");
+        if (nonConformingTotal) {
+          ctx.log(
+            `${nonConformingTotal} non-conforming line(s) across ${files.length} transcript(s) — ` +
+            `each document's lines are listed in ${LOG_DIR}/.`,
+            "warn",
+          );
+        }
       },
     },
 

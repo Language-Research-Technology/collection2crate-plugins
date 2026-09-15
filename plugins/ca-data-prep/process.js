@@ -25,6 +25,14 @@ export function normalizeText(text) {
 // before it and the whole transcript collapses into one cell.
 const SPEAKER_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?\s*:|[A-Z][A-Z0-9]?:)\s*(\t|.*)$/;
 const TURN_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?)\s*:\s*(.*)$/;
+// A numbered line that carries no speaker code — a bare pause like
+// "6<tab>(0.4)" — is folded into the turn above it like any other
+// continuation, but its number belongs to the document's layout, not to the
+// turn's words: without this the turn reads "hi ((smiles)) 6\t(0.4)", tab and
+// all. Matched only against a tab so that prose beginning with a year is left
+// alone.
+const NUMBER_COLUMN = /^\d+\t/;
+const withoutNumberColumn = (line) => line.replace(NUMBER_COLUMN, "");
 
 export function mergeContinuationLines(text) {
   let merged = text;
@@ -59,7 +67,7 @@ export function mergeContinuationLines(text) {
 
       if (!isSpeakerLine && repaired.length > 0) {
         const previous = repaired[repaired.length - 1];
-        const nextValue = previous.trimEnd() + " " + line.trim();
+        const nextValue = previous.trimEnd() + " " + withoutNumberColumn(line.trim());
         repaired[repaired.length - 1] = nextValue;
         changed = true;
       } else {
@@ -266,7 +274,7 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
     }
 
     if (!lastRow) continue;
-    lastRow.text = `${lastRow.text} ${line.trim()}`.trim();
+    lastRow.text = `${lastRow.text} ${withoutNumberColumn(line.trim())}`.trim();
   }
 
   validateSectionOrder(sectionOrder, warnings);

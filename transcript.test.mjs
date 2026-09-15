@@ -61,6 +61,21 @@ await check("a continuation line still folds into the turn above it", async () =
   assert.equal(rows[1].text, "hi and hello again");
 });
 
+await check("a numbered line with no speaker folds in without its number", async () => {
+  // A bare pause — "6<tab>(0.4)" — is a continuation, but the number is the
+  // document's layout, not the turn's words.
+  const withPause = NUMBERED.replace("5\tS:\thi ((smiles))", "5\tS:\thi ((smiles))\n\n6\t(0.4)");
+  const { rows } = await processTranscriptText(withPause, {});
+  assert.equal(rows[2].text, "hi ((smiles)) (0.4)");
+  assert.ok(!rows.some((r) => r.text.includes("\t")), "a tab leaked into a turn's text");
+});
+
+await check("a continuation line that opens with a year keeps it", async () => {
+  const wrapped = NUMBERED.replace("4\tD:\thi", "4\tD:\thi\n\n1998 was the year");
+  const { rows } = await processTranscriptText(wrapped, {});
+  assert.equal(rows[1].text, "hi 1998 was the year");
+});
+
 await check("a numeral that isn't a turn number doesn't become a turn", () => {
   const rows = parseRows(mergeContinuationLines(normalizeText(
     doc(["C:\tin 1998 Budget: the figure was", "D:\thi", "S:\thi", "S:\tbye"])

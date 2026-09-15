@@ -16,6 +16,16 @@ export function normalizeText(text) {
   return normalized;
 }
 
+// A turn line is "A:<tab>text", optionally preceded by a turn-number column —
+// "12<tab>A:<tab>text" — which some transcription conventions number and
+// others don't. The number is consumed and dropped: it is a display artefact
+// of the source document, not data about the turn, and the CSV's own row
+// order carries the same information. Without the optional prefix a numbered
+// line is not a turn at all, so mergeContinuationLines glues it onto the line
+// before it and the whole transcript collapses into one cell.
+const SPEAKER_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?\s*:|[A-Z][A-Z0-9]?:)\s*(\t|.*)$/;
+const TURN_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?)\s*:\s*(.*)$/;
+
 export function mergeContinuationLines(text) {
   let merged = text;
   const protectedPatterns = [
@@ -40,7 +50,7 @@ export function mergeContinuationLines(text) {
     for (const rawLine of lines) {
       const line = rawLine;
       const trimmed = line.trim();
-      const isSpeakerLine = /^([A-Z][A-Z0-9]?\s*:|[A-Z][A-Z0-9]?:)\s*(\t|.*)$/.test(line);
+      const isSpeakerLine = SPEAKER_LINE.test(line);
 
       if (isProtectedLine(trimmed)) {
         repaired.push(line);
@@ -222,8 +232,8 @@ export function parseRows(text, warnings = []) {
 
     if (!transcriptStarted) continue;
 
-    if (speakers.size > 0 && /^([A-Z][A-Z0-9]?)\s*:\s*/.test(line)) {
-      const match = line.match(/^([A-Z][A-Z0-9]?)\s*:\s*(.*)$/);
+    if (speakers.size > 0 && TURN_LINE.test(line)) {
+      const match = line.match(TURN_LINE);
       if (!match) continue;
 
       const rawSpeakerID = match[1];

@@ -1,6 +1,113 @@
 import { ROCrate } from "ro-crate";
 import mammoth from "mammoth";
 
+// ---------------------------------------------------------------------------
+// The transcript grammar
+//
+// A source document is three parts: a metadata header, a speaker block, and a
+// body. Two line shapes carry everything the parser reads, and both are
+// declared here so the parser and the conformance report can never drift:
+//
+//   speaker block   CODE: name [alternate name] (demographic info) #id
+//   body row        [turn number][.] CODE: text
+//
+// Departures are logged, not silently corrected. A repair the parser makes is
+// reported against the line it was made on, so a transcriber can fix the
+// source document rather than discover the damage in the CSV.
+// ---------------------------------------------------------------------------
+
+// A speaker code: alphanumeric with light punctuation, no whitespace, no
+// colon. The length bound is what keeps an ordinary word from passing as a
+// code on a line that is missing its colon.
+const CODE = "[A-Za-z0-9][A-Za-z0-9_.'\\-]{0,23}";
+const CODE_WITH_COLON = new RegExp(`^(${CODE})[\\t ]*:[\\t ]*(.*)$`);
+const CODE_WITHOUT_COLON = new RegExp(`^(${CODE})[\\t ]+(.*)$`);
+const TURN_NUMBER_PREFIX = /^(\d+)(\.?)[\t ]+(.*)$/;
+
+export const SECTION_MARKERS = ["PRELIMINARIES", "MAIN", "POSTLIMINARIES"];
+
+// Lines belonging to the metadata header rather than to a turn: never folded
+// into the turn above, never reported as a non-conforming body row.
+const HEADER_PATTERNS = [
+  /^Speakers:$/i,
+  /^PRELIMINARIES$/i,
+  /^MAIN$/i,
+  /^POSTLIMINARIES$/i,
+  /^Transcript:/i,
+  /^Recording date:/i,
+  /^Length of audio recording:/i,
+  /^Length of video recording:/i,
+  /^Transcriber:/i,
+];
+
+export function isHeaderLine(value) {
+  const trimmed = String(value || "").trim();
+  return HEADER_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
+ * Which .docx paragraph each line of the extracted text belongs to.
+ *
+ * mammoth terminates every paragraph with a blank line, so "\n\n" is the
+ * paragraph separator and a lone "\n" is a soft line break inside one. That
+ * makes a raw line number roughly twice the paragraph's position — and more
+ * than twice once the document has empty paragraphs of its own, each of which
+ * contributes a blank line and a terminator. Reporting those raw numbers gave
+ * a transcriber nothing they could find in their own document.
+ *
+ * Returns a 1-based paragraph number per line, aligned with `text.split("\n")`.
+ * The report calls these line numbers, because that is what someone reading a
+ * transcript counts; the paragraph is only how the number is arrived at.
+ */
+export function paragraphNumbersByLine(text) {
+  const paragraphs = String(text || "").split("\n\n");
+  const numbers = [];
+
+  paragraphs.forEach((paragraph, index) => {
+    const lineCount = paragraph.split("\n").length;
+    for (let i = 0; i < lineCount; i += 1) numbers.push(index + 1);
+    // The blank line that separated this paragraph from the next belongs to
+    // this one, so a finding on it still points at the paragraph it came from.
+    if (index < paragraphs.length - 1) numbers.push(index + 1);
+  });
+
+  return numbers;
+}
+
+// A paragraph that reads as a section marker but is not one: wrong case, or
+// stray punctuation around it. A header has to match exactly, and when it does
+// not the whole section silently disappears into the one before it — so a
+// near miss is the single most consequential thing this report can point at.
+const MARKER_NEAR_MISS = /^[^A-Za-z]*([A-Za-z]+)[^A-Za-z]*$/;
+
+export function nearMissMarker(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || SECTION_MARKERS.includes(trimmed)) return null;
+  const match = trimmed.match(MARKER_NEAR_MISS);
+  if (!match) return null;
+  const candidate = match[1].toUpperCase();
+  return SECTION_MARKERS.includes(candidate) ? candidate : null;
+}
+
+const sectionName = (section) =>
+  section === "PRE" ? "PRELIMINARIES" : section === "POST" ? "POSTLIMINARIES" : "MAIN";
+
+// Every way a line can depart from the grammar, with the wording the report
+// groups by. Keeping the label out of the interpolated message is what lets
+// the log lead with "310 rows missing a turn-number period" instead of 310
+// individually-worded lines a reader has to count for themselves.
+export const ISSUE_LABELS = {
+  "turn-number-missing-period": "turn number is missing its period",
+  "speaker-code-missing-colon": "speaker code is not followed by a colon",
+  "speaker-code-undeclared": "speaker code was not declared in the Speakers block",
+  "speaker-code-missing": "no speaker code found",
+  "speaker-code-duplicate": "speaker code was declared more than once",
+  "text-missing": "turn has no text",
+  "speaker-name-missing": "no speaker name found",
+  "speaker-id-missing": "no #id found",
+  "speaker-name-unbalanced-bracket": "unbalanced bracket in the speaker name",
+};
+
 export function normalizeText(text) {
   let normalized = String(text || "");
 
@@ -8,101 +115,256 @@ export function normalizeText(text) {
   normalized = normalized.replace(/\r/g, "\n");
   normalized = normalized.replace(/\u00A0/g, " ");
   normalized = normalized.replace(/^[\t ]+/gm, "\t");
-  normalized = normalized.replace(/^([A-Z]):[\t ]+/gm, "$1:\t");
-  normalized = normalized.replace(/^([A-Z])[\t ]+/gm, "$1:\t");
+  // Regularise the gap after a code's colon — but never insert the colon
+  // itself. An earlier version of this function rewrote any line starting
+  // with a capital and a space into "X:\ttext", which silently turned every
+  // wrapped line beginning "I ..." or "A ..." into a turn by a speaker called
+  // "I" or "A", with nothing in the log to say so. A missing colon is a
+  // non-conformance the body scan has to be able to see.
+  normalized = normalized.replace(new RegExp(`^(${CODE}):[\\t ]+`, "gm"), "$1:\t");
   normalized = normalized.replace(/(\t.*) \t/gm, "$1 ");
   normalized = normalized.replace(/^.*END OF TRANSCRIPT.*$/gm, "");
 
   return normalized;
 }
 
-// A turn line is "A:<tab>text", optionally preceded by a turn-number column —
-// "12<tab>A:<tab>text" — which some transcription conventions number and
-// others don't. The number is consumed and dropped: it is a display artefact
-// of the source document, not data about the turn, and the CSV's own row
-// order carries the same information. Without the optional prefix a numbered
-// line is not a turn at all, so mergeContinuationLines glues it onto the line
-// before it and the whole transcript collapses into one cell.
-const SPEAKER_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?\s*:|[A-Z][A-Z0-9]?:)\s*(\t|.*)$/;
-const TURN_LINE = /^(?:\d+\s*)?([A-Z][A-Z0-9]?)\s*:\s*(.*)$/;
+/**
+ * Read one body line against the row grammar.
+ *
+ * Returns what the line is, the fields it yielded, and every way it departed
+ * from the grammar. A departure never stops the line being parsed — the row
+ * still reaches the CSV — it only gets recorded, which is what the report
+ * this feeds exists to show.
+ *
+ * `declaredCodes` is the set of codes the Speakers block declared (both the
+ * short code and its #id). Without it the shape of a line is all there is to
+ * go on; with it, a line missing its colon can still be recognised, and a
+ * colon-bearing line whose code nobody declared can be called out.
+ */
+export function classifyBodyLine(rawLine, declaredCodes = null) {
+  const line = String(rawLine || "").trim();
+  const issues = [];
 
-export function mergeContinuationLines(text) {
-  let merged = text;
-  const protectedPatterns = [
-    /^Speakers:$/i,
-    /^PRELIMINARIES$/i,
-    /^MAIN$/i,
-    /^POSTLIMINARIES$/i,
-    /^Transcript:/i,
-    /^Recording date:/i,
-    /^Length of audio recording:/i,
-    /^Length of video recording:/i,
-    /^Transcriber:/i,
-  ];
+  if (!line) return { kind: "blank", issues };
+  if (SECTION_MARKERS.includes(line)) return { kind: "section", marker: line, issues };
+  if (isHeaderLine(line)) return { kind: "header", issues };
 
-  const isProtectedLine = (value) => protectedPatterns.some((pattern) => pattern.test(value.trim()));
+  const declared = declaredCodes instanceof Set && declaredCodes.size ? declaredCodes : null;
 
-  for (let iteration = 0; iteration < 100; iteration += 1) {
-    const lines = merged.split("\n");
-    const repaired = [];
-    let changed = false;
+  const readCode = (candidate) => {
+    const withColon = candidate.match(CODE_WITH_COLON);
+    if (withColon) return { code: withColon[1], text: withColon[2].trim(), colon: true };
+    // Without a colon there is nothing in the line's shape to distinguish a
+    // code from the first word of prose, so only a declared code counts.
+    const withoutColon = candidate.match(CODE_WITHOUT_COLON);
+    if (withoutColon && declared && declared.has(withoutColon[1])) {
+      return { code: withoutColon[1], text: withoutColon[2].trim(), colon: false };
+    }
+    return null;
+  };
 
-    for (const rawLine of lines) {
-      const line = rawLine;
-      const trimmed = line.trim();
-      const isSpeakerLine = SPEAKER_LINE.test(line);
+  const numbered = line.match(TURN_NUMBER_PREFIX);
+  let turnNumber = null;
+  let periodPresent = true;
+  let parsed = null;
 
-      if (isProtectedLine(trimmed)) {
-        repaired.push(line);
-        continue;
+  // The leading number is only a turn number if a code follows it. That is
+  // what keeps a wrapped line like "1998 Budget: the figure was" from being
+  // read as turn 1998 by a speaker called Budget.
+  if (numbered) {
+    parsed = readCode(numbered[3]);
+    if (parsed) {
+      turnNumber = numbered[1];
+      periodPresent = numbered[2] === ".";
+    }
+  }
+  if (!parsed) parsed = readCode(line);
+
+  if (!parsed) {
+    // A turn-number column is proof on its own that the line is a new row: a
+    // wrapped continuation is the tail of a paragraph and never carries one.
+    // Reading the number only once a code had been found is what made a row
+    // whose speaker code is missing — a bare pause like "6\t(0.4)" — look
+    // exactly like a wrap, so it folded into the turn above and its text
+    // disappeared into that row's cell with nothing reported against it.
+    //
+    // The tab is what tells a turn-number column from prose that merely opens
+    // with a numeral, and it has to: accepting a space-separated number on the
+    // strength of the document being numbered elsewhere turns a wrapped
+    // "1998 was the year" into turn 1998 reading "was the year", losing the
+    // numeral out of the text. A space-delimited column would need the number
+    // to continue the numbering run before it could be trusted.
+    const columnDelimited = /^\d+\.?\t/.test(line);
+    if (numbered && columnDelimited) {
+      const rowIssues = [];
+      if (numbered[2] !== ".") {
+        rowIssues.push({ field: "turnNumber", kind: "turn-number-missing-period", detail: `turn number "${numbered[1]}"` });
       }
-
-      if (!isSpeakerLine && repaired.length > 0) {
-        const previous = repaired[repaired.length - 1];
-        const nextValue = previous.trimEnd() + " " + line.trim();
-        repaired[repaired.length - 1] = nextValue;
-        changed = true;
-      } else {
-        repaired.push(line);
-      }
+      rowIssues.push({ field: "speakerCode", kind: "speaker-code-missing", detail: `turn number "${numbered[1]}"` });
+      const rowText = numbered[3].trim();
+      if (!rowText) rowIssues.push({ field: "text", kind: "text-missing", detail: `turn number "${numbered[1]}"` });
+      return { kind: "turn", turnNumber: numbered[1], code: null, text: rowText, issues: rowIssues };
     }
 
-    const candidate = repaired.join("\n");
-    if (!changed || candidate === merged) {
-      merged = candidate;
-      break;
-    }
-    merged = candidate;
+    return {
+      kind: "continuation",
+      content: line,
+      issues: [{ field: "speakerCode", kind: "speaker-code-missing", detail: "the line was folded into the turn above it" }],
+    };
   }
 
-  return merged;
+  if (turnNumber !== null && !periodPresent) {
+    issues.push({ field: "turnNumber", kind: "turn-number-missing-period", detail: `turn number "${turnNumber}"` });
+  }
+  if (!parsed.colon) {
+    issues.push({ field: "speakerCode", kind: "speaker-code-missing-colon", detail: `speaker code "${parsed.code}"` });
+  }
+  if (declared && !declared.has(parsed.code)) {
+    issues.push({ field: "speakerCode", kind: "speaker-code-undeclared", detail: `speaker code "${parsed.code}"` });
+  }
+  if (!parsed.text) {
+    issues.push({ field: "text", kind: "text-missing", detail: `speaker code "${parsed.code}"` });
+  }
+
+  return { kind: "turn", turnNumber, code: parsed.code, text: parsed.text, issues };
+}
+
+/**
+ * Fold wrapped lines back into the turn they belong to, and report where each
+ * surviving line came from.
+ *
+ * `lineNumbers[i]` is the 1-based line number, in the text handed in, that
+ * merged line `i` started on — which is what lets the conformance report
+ * point a transcriber at a line of their own document rather than at a line
+ * of an intermediate the parser never shows them.
+ */
+export function mergeContinuationLinesWithMap(text, declaredCodes = null) {
+  const sourceLines = String(text || "").split("\n");
+  const lines = [];
+  const lineNumbers = [];
+  let inSpeakerBlock = false;
+
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const raw = sourceLines[index];
+    const trimmed = raw.trim();
+
+    // Nothing folds inside the speaker block: one declaration per line is the
+    // block's whole layout, so a line there always starts a new one. Folding
+    // by line shape instead would swallow a declaration whose colon is
+    // missing — exactly the non-conformance this is meant to report — into
+    // the declaration above it, handing one speaker another's name and #id.
+    if (/^Speakers:$/i.test(trimmed)) inSpeakerBlock = true;
+    else if (SECTION_MARKERS.includes(trimmed)) inSpeakerBlock = false;
+
+    const classified = classifyBodyLine(raw, declaredCodes);
+    const startsLine = inSpeakerBlock
+      ? classified.kind !== "blank"
+      : classified.kind !== "continuation" && classified.kind !== "blank";
+
+    if (startsLine || !lines.length) {
+      lines.push(raw);
+      lineNumbers.push(index + 1);
+      continue;
+    }
+
+    // A blank line ends nothing — the source wraps turns across blank lines,
+    // so what folds is decided by what a line says, not by the gap before it.
+    const addition = raw.trim();
+    if (!addition) continue;
+
+    // Nothing folds into a section marker or a metadata header. A wrap can
+    // only continue a turn, and gluing one onto "MAIN" destroys the marker,
+    // taking the section boundary — and every row's section — with it.
+    const previous = lines[lines.length - 1].trim();
+    if (SECTION_MARKERS.includes(previous) || isHeaderLine(previous)) {
+      lines.push(raw);
+      lineNumbers.push(index + 1);
+      continue;
+    }
+
+    lines[lines.length - 1] = `${lines[lines.length - 1].trimEnd()} ${addition}`;
+  }
+
+  return { text: lines.join("\n"), lineNumbers };
+}
+
+export function mergeContinuationLines(text, declaredCodes = null) {
+  return mergeContinuationLinesWithMap(text, declaredCodes).text;
+}
+
+/**
+ * Break a speaker declaration's value into its fields.
+ *
+ *   Dora [Dora Leung] (Australian, male) #dora
+ *   └ name
+ *        └ alternate
+ *                    └ demographic
+ *                                   └ id
+ *
+ * Read right to left, because only the name is free text: whatever survives
+ * once the three delimited fields are taken off the end is the name. Reading
+ * left to right is what used to leave "[Dora Leung]" glued inside the name
+ * and onto the Person entity built from it.
+ */
+export function parseSpeakerDetails(speakerText) {
+  let rest = String(speakerText || "").trim();
+  const issues = [];
+
+  const idMatch = rest.match(/(?:^|\s)(#\S+)\s*$/);
+  const optionalCode = idMatch ? idMatch[1] : null;
+  if (idMatch) rest = rest.slice(0, idMatch.index).trim();
+
+  const demographicMatch = rest.match(/\(([^()]*)\)\s*$/);
+  const demographic = demographicMatch ? demographicMatch[1].trim() : null;
+  if (demographicMatch) rest = rest.slice(0, demographicMatch.index).trim();
+
+  const alternateMatch = rest.match(/\[([^[\]]*)\]\s*$/);
+  const alternateName = alternateMatch ? alternateMatch[1].trim() : null;
+  if (alternateMatch) rest = rest.slice(0, alternateMatch.index).trim();
+
+  const name = rest.trim();
+
+  if (!name) issues.push({ field: "name", kind: "speaker-name-missing", detail: "" });
+  if (!optionalCode) issues.push({ field: "id", kind: "speaker-id-missing", detail: "" });
+  if (/[[\]()]/.test(name)) {
+    issues.push({ field: "name", kind: "speaker-name-unbalanced-bracket", detail: JSON.stringify(name) });
+  }
+
+  return {
+    name,
+    alternateName,
+    demographic,
+    // Kept under its old name, parentheses included, because chat-export
+    // reads it as CHAT's @ID group field.
+    affiliation: demographic ? `(${demographic})` : null,
+    optionalCode,
+    issues,
+  };
 }
 
 export function splitSpeakerNameAndAffiliation(speakerText) {
-  const trimmed = String(speakerText || "").trim();
-  if (!trimmed) return { name: "", affiliation: null };
-
-  const withoutCode = trimmed.replace(/\s*#\S+\s*$/, "").trim();
-  const match = withoutCode.match(/^(.*?)(?:\s*\(([^()]+)\))\s*$/);
-
-  if (!match) {
-    return { name: withoutCode, affiliation: null };
-  }
-
-  const baseName = match[1].trim();
-  const affiliation = match[2].trim();
-  return { name: baseName, affiliation: affiliation ? `(${affiliation})` : null };
+  const { name, affiliation } = parseSpeakerDetails(speakerText);
+  return { name, affiliation };
 }
 
-export function parseSpeakerBlock(lines, warnings = []) {
+/**
+ * Read the speaker block, recording a diagnostic for every line in it.
+ *
+ * Every line gets an entry, conforming or not. A line that yields no code at
+ * all used to be skipped in silence, which is the worst case there is: the
+ * speaker vanishes, and then every turn of theirs in the body shows up as an
+ * unresolved speakerID with nothing to explain why.
+ */
+export function parseSpeakerBlock(lines, diagnostics = [], lineNumbers = null) {
   const speakers = new Map();
   let inSpeakerSection = false;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = String(lines[index] ?? "").trim();
+    const lineNumber = lineNumbers ? lineNumbers[index] ?? index + 1 : index + 1;
     if (!trimmed) continue;
 
-    if (trimmed === "Speakers:") {
+    if (/^Speakers:$/i.test(trimmed)) {
       inSpeakerSection = true;
       continue;
     }
@@ -114,26 +376,66 @@ export function parseSpeakerBlock(lines, warnings = []) {
 
     if (!inSpeakerSection) continue;
 
-    const speakerMatch = trimmed.match(/^([A-Z][A-Z0-9]?)\s*:\s*(.*)$/);
-    if (!speakerMatch) continue;
+    const withColon = trimmed.match(CODE_WITH_COLON);
+    const withoutColon = withColon ? null : trimmed.match(CODE_WITHOUT_COLON);
+    const match = withColon || withoutColon;
 
-    const speakerID = speakerMatch[1];
-    const speakerText = speakerMatch[2].trim();
-    const optionalCode = speakerText.match(/(#\S+)/)?.[1] ?? null;
-    const resolvedSpeakerID = optionalCode || speakerID;
-    const { name, affiliation } = splitSpeakerNameAndAffiliation(speakerText);
+    if (!match) {
+      diagnostics.push({
+        line: lineNumber,
+        content: trimmed,
+        code: null,
+        conforming: false,
+        details: null,
+        issues: [{ field: "speakerCode", kind: "speaker-code-missing", detail: "the declaration was skipped" }],
+      });
+      continue;
+    }
+
+    const speakerID = match[1];
+    const speakerText = match[2].trim();
+    const details = parseSpeakerDetails(speakerText);
+    const issues = [...details.issues];
+
+    if (!withColon) {
+      issues.unshift({ field: "speakerCode", kind: "speaker-code-missing-colon", detail: `speaker code "${speakerID}"` });
+    }
+    if (speakers.has(speakerID)) {
+      issues.push({ field: "speakerCode", kind: "speaker-code-duplicate", detail: `speaker code "${speakerID}"` });
+    }
+
     speakers.set(speakerID, {
-      label: name || speakerText.replace(/\s*#\S+\s*$/, "").trim(),
-      name,
-      affiliation,
-      optionalCode,
-      resolvedSpeakerID,
+      label: details.name || speakerText.replace(/\s*#\S+\s*$/, "").trim(),
+      name: details.name,
+      alternateName: details.alternateName,
+      demographic: details.demographic,
+      affiliation: details.affiliation,
+      optionalCode: details.optionalCode,
+      resolvedSpeakerID: details.optionalCode || speakerID,
+      line: lineNumber,
     });
 
-    if (!optionalCode) warnings.push(`Speaker ${speakerID} is missing an optional #speaker code.`);
+    diagnostics.push({
+      line: lineNumber,
+      content: trimmed,
+      code: speakerID,
+      conforming: issues.length === 0,
+      details,
+      issues,
+    });
   }
 
   return speakers;
+}
+
+/** Both spellings of every declared code — the short one and its #id. */
+export function declaredCodeSet(speakerMap) {
+  const codes = new Set();
+  for (const [code, details] of speakerMap.entries()) {
+    codes.add(code);
+    if (details.optionalCode) codes.add(details.optionalCode);
+  }
+  return codes;
 }
 
 export function buildSpeakerPersonEntities(speakerMap) {
@@ -147,6 +449,7 @@ export function buildSpeakerPersonEntities(speakerMap) {
       name: details.name || details.label || speakerID,
     };
 
+    if (details.alternateName) entity.alternateName = details.alternateName;
     if (details.affiliation) entity.affiliation = details.affiliation;
     if (details.optionalCode) entity.identifier = details.optionalCode;
     entities.push(entity);
@@ -191,11 +494,13 @@ export function validateSectionOrder(foundSections, warnings = []) {
   }
 }
 
-export function parseRows(text, warnings = [], sectionDiagnostics = [], headerChecks = []) {
+export function parseRows(text, warnings = [], sectionDiagnostics = [], headerChecks = [], options = {}) {
+  const { speakers: providedSpeakers = null, lineNumbers = null, bodyDiagnostics = [] } = options;
   const rows = [];
-  const lines = text.split("\n");
-  const speakers = parseSpeakerBlock(lines, warnings);
-  let sectionOrder = [];
+  const lines = String(text || "").split("\n");
+  const speakers = providedSpeakers || parseSpeakerBlock(lines);
+  const declaredCodes = declaredCodeSet(speakers);
+  const sectionOrder = [];
   let currentSection = "MAIN";
   let transcriptStarted = false;
   let lastRow = null;
@@ -207,66 +512,69 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const rawLine = lines[lineIndex];
-    const lineNumber = lineIndex + 1;
+    const lineNumber = lineNumbers ? lineNumbers[lineIndex] ?? lineIndex + 1 : lineIndex + 1;
     const line = rawLine.trim();
-    const matchedHeader = ["PRELIMINARIES", "MAIN", "POSTLIMINARIES"].includes(line)
-      ? line
-      : null;
-    headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader });
+    const matchedHeader = SECTION_MARKERS.includes(line) ? line : null;
     if (!line) continue;
 
-    if (line === "Speakers:") {
+    // Only the markers and the paragraphs that nearly are one. Recording every
+    // paragraph turned the log into a copy of the document in which each
+    // ordinary turn was labelled "NO MATCH", which reads as a finding when it
+    // only means the paragraph is not a section marker.
+    if (matchedHeader) {
+      headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader, nearMiss: null });
+    } else {
+      const nearMiss = nearMissMarker(line);
+      if (nearMiss) headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader: null, nearMiss });
+    }
+
+    if (/^Speakers:$/i.test(line)) {
       transcriptStarted = false;
       continue;
     }
 
-    if (line === "PRELIMINARIES") {
+    if (matchedHeader) {
       transcriptStarted = true;
-      currentSection = "PRE";
-      sections.PRELIMINARIES.markerLine = lineNumber;
-      sectionOrder.push(line);
-      continue;
-    }
-
-    if (line === "MAIN") {
-      transcriptStarted = true;
-      currentSection = "MAIN";
-      sections.MAIN.markerLine = lineNumber;
-      sectionOrder.push(line);
-      continue;
-    }
-
-    if (line === "POSTLIMINARIES") {
-      transcriptStarted = true;
-      currentSection = "POST";
-      sections.POSTLIMINARIES.markerLine = lineNumber;
-      sectionOrder.push(line);
+      currentSection = matchedHeader === "PRELIMINARIES" ? "PRE" : matchedHeader === "POSTLIMINARIES" ? "POST" : "MAIN";
+      sections[matchedHeader].markerLine = lineNumber;
+      sectionOrder.push(matchedHeader);
+      // A turn does not continue across a section boundary, so the first
+      // stray line of a new section has nothing to fold into and is reported
+      // rather than appended to the last turn of the section before it.
+      lastRow = null;
       continue;
     }
 
     if (!transcriptStarted) continue;
 
-    if (speakers.size > 0 && TURN_LINE.test(line)) {
-      const match = line.match(TURN_LINE);
-      if (!match) continue;
+    const classified = classifyBodyLine(line, declaredCodes);
+    if (classified.kind === "header") continue;
 
-      const rawSpeakerID = match[1];
-      const transcriptText = match[2].trim();
-      const speakerDetails = speakers.get(rawSpeakerID);
-      const speakerID = speakerDetails?.optionalCode || rawSpeakerID;
-      if (!speakerID || !transcriptText) continue;
+    const record = (issues, code = null) => {
+      if (!issues.length) return;
+      bodyDiagnostics.push({ line: lineNumber, content: line, section: sectionName(currentSection), code, issues });
+    };
 
-      lastRow = { speakerID, text: transcriptText, section: currentSection };
+    if (classified.kind === "turn") {
+      record(classified.issues, classified.code);
+      // A row with no code is still a row — with an empty speakerID, so the
+      // gap shows in the CSV instead of hiding inside the cell above it.
+      const speakerID = classified.code
+        ? speakers.get(classified.code)?.optionalCode || classified.code
+        : "";
+      lastRow = { speakerID, text: classified.text, section: currentSection };
       rows.push(lastRow);
-      const sectionName = currentSection === "PRE"
-        ? "PRELIMINARIES"
-        : currentSection === "POST" ? "POSTLIMINARIES" : "MAIN";
-      sections[sectionName].rowCount += 1;
+      sections[sectionName(currentSection)].rowCount += 1;
       continue;
     }
 
-    if (!lastRow) continue;
-    lastRow.text = `${lastRow.text} ${line.trim()}`.trim();
+    if (!lastRow) {
+      record([{ field: "speakerCode", kind: "speaker-code-missing", detail: "no turn above it to fold into — the line was dropped" }]);
+      continue;
+    }
+
+    record(classified.issues);
+    lastRow.text = `${lastRow.text} ${line}`.trim();
   }
 
   validateSectionOrder(sectionOrder, warnings);
@@ -303,12 +611,12 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
 
 export function cleanCharacterValues(value) {
   const replacements = {
-    "“": '"',
-    "”": '"',
-    "‘": "'",
-    "’": "'",
-    "—": "-",
-    "–": "-",
+    "\u201C": '"',
+    "\u201D": '"',
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u2014": "-",
+    "\u2013": "-",
   };
 
   if (typeof value !== "string") return value;
@@ -405,11 +713,101 @@ export function formatSectionDiagnostics(sectionDiagnostics) {
 }
 
 export function formatHeaderChecks(headerChecks) {
-  const lines = ["Section header line checks:"];
-  for (const check of headerChecks) {
-    const status = check.matchedHeader ? `MATCH (${check.matchedHeader})` : "NO MATCH";
-    lines.push(`Line ${check.line}: ${status} - ${JSON.stringify(check.content)}`);
+  const found = headerChecks.filter((check) => check.matchedHeader);
+  const nearMisses = headerChecks.filter((check) => !check.matchedHeader && check.nearMiss);
+  const lines = ["Section headers:"];
+
+  if (found.length) {
+    for (const check of found) lines.push(`Line ${check.line}: ${check.matchedHeader}`);
+  } else {
+    lines.push("None found.");
   }
+
+  if (nearMisses.length) {
+    lines.push("", `Near misses (${nearMisses.length}) — a header must be a line whose text is exactly PRELIMINARIES, MAIN, or POSTLIMINARIES:`);
+    for (const check of nearMisses) {
+      lines.push(`Line ${check.line}: ${JSON.stringify(check.content)} — did you mean ${check.nearMiss}?`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/** One line per issue, as "<label> (<detail>)". */
+export function formatIssue(issue) {
+  const label = ISSUE_LABELS[issue.kind] || issue.kind;
+  return issue.detail ? `${label} — ${issue.detail}` : label;
+}
+
+/** Tally issues by kind, commonest first — the shape of the problem, before the list of it. */
+export function summariseIssues(entries) {
+  const counts = new Map();
+  for (const entry of entries) {
+    for (const issue of entry.issues || []) {
+      counts.set(issue.kind, (counts.get(issue.kind) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([kind, count]) => ({ kind, count, label: ISSUE_LABELS[kind] || kind }));
+}
+
+export function formatSpeakerBlockReport(diagnostics) {
+  const lines = [
+    "Speaker block:",
+    "Expected format: CODE: name [alternate name] (demographic info) #id",
+    "The alternate name and the demographic note are optional; the code, its colon, the name and the #id are not.",
+  ];
+
+  if (!diagnostics.length) {
+    lines.push("No speaker declarations found.");
+    return lines.join("\n");
+  }
+
+  const nonConforming = diagnostics.filter((entry) => !entry.conforming);
+  lines.push(`Declarations: ${diagnostics.length}, non-conforming: ${nonConforming.length}`);
+  for (const { label, count } of summariseIssues(diagnostics)) lines.push(`  ${count} x ${label}`);
+  lines.push("");
+
+  for (const entry of diagnostics) {
+    const fields = entry.details
+      ? [
+        `name ${JSON.stringify(entry.details.name || "")}`,
+        entry.details.alternateName ? `alternate ${JSON.stringify(entry.details.alternateName)}` : null,
+        entry.details.demographic ? `demographic ${JSON.stringify(entry.details.demographic)}` : null,
+        entry.details.optionalCode ? `id ${entry.details.optionalCode}` : null,
+      ].filter(Boolean).join(", ")
+      : "";
+    const code = entry.code ? `[${entry.code}] ` : "";
+    lines.push(`Line ${entry.line}: ${entry.conforming ? "ok" : "NON-CONFORMING"} ${code}${fields}`.trimEnd());
+    for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
+    if (!entry.conforming) lines.push(`    source: ${JSON.stringify(entry.content)}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatBodyReport(diagnostics) {
+  const lines = [
+    "Body rows:",
+    "Expected format: [turn number][.] CODE: text",
+    "The turn number is optional and its period is expected when it is present; the speaker code, its colon, and the text are required.",
+  ];
+
+  if (!diagnostics.length) {
+    lines.push("Non-conforming rows: none");
+    return lines.join("\n");
+  }
+
+  lines.push(`Non-conforming rows: ${diagnostics.length}`);
+  for (const { label, count } of summariseIssues(diagnostics)) lines.push(`  ${count} x ${label}`);
+  lines.push("");
+
+  for (const entry of diagnostics) {
+    lines.push(`Line ${entry.line} [${entry.section}]: ${JSON.stringify(entry.content)}`);
+    for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
+  }
+
   return lines.join("\n");
 }
 
@@ -418,11 +816,33 @@ export async function processTranscriptText(text, config = {}) {
   const removedTimecodes = [];
   const sectionDiagnostics = [];
   const headerChecks = [];
+  const speakerDiagnostics = [];
+  const bodyDiagnostics = [];
+
   const normalized = normalizeText(text);
   const timecodeStripped = stripTimecodes(normalized, removedTimecodes);
-  const merged = mergeContinuationLines(timecodeStripped);
-  const speakerMap = parseSpeakerBlock(merged.split("\n"), warnings);
-  let rows = parseRows(merged, warnings, sectionDiagnostics, headerChecks);
+
+  // Two passes, because the halves of the grammar depend on each other: a body
+  // line missing its colon can only be recognised against the codes the
+  // Speakers block declared, and the Speakers block itself has to survive
+  // continuation repair before it can be read. The first pass repairs on line
+  // shape alone, which is enough to read the declarations off it.
+  const firstPass = mergeContinuationLinesWithMap(timecodeStripped, null);
+  const declaredCodes = declaredCodeSet(parseSpeakerBlock(firstPass.text.split("\n")));
+
+  const { text: merged, lineNumbers: rawLines } = mergeContinuationLinesWithMap(timecodeStripped, declaredCodes);
+  // normalizeText and stripTimecodes both preserve line count, so the table
+  // built here lines up with the indices merge reports against.
+  const paragraphTable = paragraphNumbersByLine(timecodeStripped);
+  const lineNumbers = rawLines.map((line) => paragraphTable[line - 1] ?? line);
+  const mergedLines = merged.split("\n");
+  const speakerMap = parseSpeakerBlock(mergedLines, speakerDiagnostics, lineNumbers);
+
+  let rows = parseRows(merged, warnings, sectionDiagnostics, headerChecks, {
+    speakers: speakerMap,
+    lineNumbers,
+    bodyDiagnostics,
+  });
 
   if (config.headerRows > 0) rows = rows.slice(config.headerRows);
   if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
@@ -433,8 +853,22 @@ export async function processTranscriptText(text, config = {}) {
     section: cleanCharacterValues(row.section || "MAIN"),
   }));
 
+  const nonConformingSpeakers = speakerDiagnostics.filter((entry) => !entry.conforming);
+  const nonConforming = {
+    speakers: nonConformingSpeakers,
+    body: bodyDiagnostics,
+    total: nonConformingSpeakers.length + bodyDiagnostics.length,
+  };
+
   const logLines = [
+    `Non-conforming lines: ${nonConforming.total} (${nonConformingSpeakers.length} in the speaker block, ${bodyDiagnostics.length} in the body).`,
+    "Line numbers count the lines of the document as Word shows them, blank lines included.",
+    "",
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
+    "",
+    formatSpeakerBlockReport(speakerDiagnostics),
+    "",
+    formatBodyReport(bodyDiagnostics),
     "",
     formatSectionDiagnostics(sectionDiagnostics),
     "",
@@ -455,6 +889,9 @@ export async function processTranscriptText(text, config = {}) {
     warnings,
     removedTimecodes,
     sectionDiagnostics,
+    speakerDiagnostics,
+    bodyDiagnostics,
+    nonConforming,
     log: logLines.join("\n"),
   };
 }

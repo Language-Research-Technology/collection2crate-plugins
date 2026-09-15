@@ -1,5 +1,6 @@
 import { ROCrate } from "ro-crate";
 import mammoth from "mammoth";
+import { processWithGrammar, formatMetadata, GRAMMAR_ISSUE_LABELS } from "./grammar_process.js";
 
 // ---------------------------------------------------------------------------
 // The transcript grammar
@@ -106,6 +107,8 @@ export const ISSUE_LABELS = {
   "speaker-name-missing": "no speaker name found",
   "speaker-id-missing": "no #id found",
   "speaker-name-unbalanced-bracket": "unbalanced bracket in the speaker name",
+  // Findings only a saved grammar's reader produces (grammar_process.js).
+  ...GRAMMAR_ISSUE_LABELS,
 };
 
 export function normalizeText(text) {
@@ -697,11 +700,10 @@ export function escapeCsv(value) {
   return stringValue;
 }
 
-export function formatSectionDiagnostics(sectionDiagnostics) {
-  const lines = [
-    "Section processing:",
-    "Section header rule: a header must be a complete line whose surrounding whitespace is trimmed and whose text exactly matches PRELIMINARIES, MAIN, or POSTLIMINARIES.",
-  ];
+const SECTION_RULE = "Section header rule: a header must be a complete line whose surrounding whitespace is trimmed and whose text exactly matches PRELIMINARIES, MAIN, or POSTLIMINARIES.";
+
+export function formatSectionDiagnostics(sectionDiagnostics, rule = SECTION_RULE) {
+  const lines = ["Section processing:", rule];
   for (const section of sectionDiagnostics) {
     const status = section.processed ? "processed" : "not processed";
     const header = section.headerLine
@@ -752,12 +754,13 @@ export function summariseIssues(entries) {
     .map(([kind, count]) => ({ kind, count, label: ISSUE_LABELS[kind] || kind }));
 }
 
-export function formatSpeakerBlockReport(diagnostics) {
-  const lines = [
-    "Speaker block:",
-    "Expected format: CODE: name [alternate name] (demographic info) #id",
-    "The alternate name and the demographic note are optional; the code, its colon, the name and the #id are not.",
-  ];
+const SPEAKER_EXPECTED = [
+  "Expected format: CODE: name [alternate name] (demographic info) #id",
+  "The alternate name and the demographic note are optional; the code, its colon, the name and the #id are not.",
+];
+
+export function formatSpeakerBlockReport(diagnostics, expected = SPEAKER_EXPECTED) {
+  const lines = ["Speaker block:", ...expected];
 
   if (!diagnostics.length) {
     lines.push("No speaker declarations found.");
@@ -787,12 +790,13 @@ export function formatSpeakerBlockReport(diagnostics) {
   return lines.join("\n");
 }
 
-export function formatBodyReport(diagnostics) {
-  const lines = [
-    "Body rows:",
-    "Expected format: [turn number][.] CODE: text",
-    "The turn number is optional and its period is expected when it is present; the speaker code, its colon, and the text are required.",
-  ];
+const BODY_EXPECTED = [
+  "Expected format: [turn number][.] CODE: text",
+  "The turn number is optional and its period is expected when it is present; the speaker code, its colon, and the text are required.",
+];
+
+export function formatBodyReport(diagnostics, expected = BODY_EXPECTED) {
+  const lines = ["Body rows:", ...expected];
 
   if (!diagnostics.length) {
     lines.push("Non-conforming rows: none");
@@ -811,7 +815,16 @@ export function formatBodyReport(diagnostics) {
   return lines.join("\n");
 }
 
+/**
+ * Rows, speakers and a conformance report for one transcript's text.
+ *
+ * `config.grammar` — a saved grammar (src/_transcript_grammar.js) — replaces
+ * the built-in convention below with that grammar's line shapes;
+ * `config.grammarName` names it in the report. Either way the result has the
+ * same shape.
+ */
 export async function processTranscriptText(text, config = {}) {
+  if (config.grammar) return processTranscriptTextWithGrammar(text, config);
   const warnings = [];
   const removedTimecodes = [];
   const sectionDiagnostics = [];
@@ -891,6 +904,63 @@ export async function processTranscriptText(text, config = {}) {
     sectionDiagnostics,
     speakerDiagnostics,
     bodyDiagnostics,
+    nonConforming,
+    log: logLines.join("\n"),
+  };
+}
+
+async function processTranscriptTextWithGrammar(text, config) {
+  const removedTimecodes = [];
+  const result = processWithGrammar(text, config.grammar, {
+    grammarName: config.grammarName || config.grammar.name,
+    // Timecode removal keeps the line count, so line numbers still hold.
+    strip: (t) => stripTimecodes(t, removedTimecodes),
+  });
+
+  let rows = result.rows;
+  if (config.headerRows > 0) rows = rows.slice(config.headerRows);
+  if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
+  rows = rows.map((row) => ({
+    speakerID: cleanCharacterValues(row.speakerID),
+    text: cleanCharacterValues(row.text),
+    section: cleanCharacterValues(row.section || "MAIN"),
+  }));
+
+  const { nonConforming, report } = result;
+  const logLines = [
+    report.grammarLine,
+    `Non-conforming lines: ${nonConforming.total} (${nonConforming.speakers.length} in the speaker block, ${nonConforming.body.length} in the body, ${nonConforming.header.length} in the header).`,
+    "Line numbers count the lines of the document as Word shows them, blank lines included.",
+    "",
+    "Transformations applied: timecode removal, grammar parsing, continuation repair, character cleanup.",
+    "",
+    formatMetadata(result.metadata, nonConforming.header),
+    "",
+    formatSpeakerBlockReport(result.speakerDiagnostics, report.speakerExpected),
+    "",
+    formatBodyReport(result.bodyDiagnostics, report.bodyExpected),
+    "",
+    formatSectionDiagnostics(result.sectionDiagnostics, report.sectionRule),
+    "",
+    `Ignored lines: ${result.ignored.length ? result.ignored.map((i) => i.line).join(", ") : "none"}`,
+    "",
+    formatUnresolvedSpeakerRows(rows),
+    "",
+    await formatCharacterInventory(rows),
+  ];
+  if (removedTimecodes.length) {
+    logLines.splice(1, 0, `Timecodes removed (${removedTimecodes.length}): ${removedTimecodes.join(", ")}`);
+  }
+
+  return {
+    rows,
+    speakerMap: result.speakerMap,
+    metadata: result.metadata,
+    warnings: result.warnings,
+    removedTimecodes,
+    sectionDiagnostics: result.sectionDiagnostics,
+    speakerDiagnostics: result.speakerDiagnostics,
+    bodyDiagnostics: result.bodyDiagnostics,
     nonConforming,
     log: logLines.join("\n"),
   };

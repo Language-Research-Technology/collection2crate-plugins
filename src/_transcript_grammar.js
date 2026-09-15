@@ -354,7 +354,7 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
   const first = fieldInfo[0];
   // Optional or not, and whether or not the samples had a period after it.
   const rowStart = first && first.kind === "number" && fieldInfo.length > 1 && first.sepAfter
-    ? `^${WS}*${first.prefix}${VALUE_PATTERNS.number}\\.?${first.sepAfter}`
+    ? `^${WS}*${first.prefix}${VALUE_PATTERNS.number}${first.suffix.startsWith("\\.") ? "" : "\\.?"}${first.suffix}${first.sepAfter}`
     : null;
 
   return {
@@ -434,7 +434,8 @@ const cleanGroups = (groups) => Object.fromEntries(
  * Every non-blank line is accounted for in the result: as a metadata field, a
  * speaker, a turn, a section marker, an ignored line, a continuation folded
  * into the turn above it, or — when nothing fits — in `unmatched`, with the
- * region it was in. Line numbers are 1-based positions in the lines array.
+ * region it was in. A line that opens like a row (a turn number) but doesn't
+ * match is a turn with `malformed: true` and no speaker, not an unmatched line. Line numbers are 1-based positions in the lines array.
  */
 export function parseWithGrammar(input, grammar) {
   const lines = Array.isArray(input) ? input : textToLines(input);
@@ -529,7 +530,19 @@ export function parseWithGrammar(input, grammar) {
       result.continuations.push({ line: lineNumber, into: openTurn.line, text: line });
       return note(index, "main:continuation");
     }
-    if (looksLikeRow) openTurn = null;
+    if (looksLikeRow) {
+      // Opens with a turn number but doesn't match the row: still a row, as
+      // the built-in reader treats one — kept with no speaker, so the gap
+      // shows in the CSV, and flagged. Lines after it fold into it, not into
+      // the turn before it.
+      const start = line.match(re.turnRowStart)[0];
+      openTurn = {
+        line: lineNumber, section, turn: (start.match(/\d+/) || [""])[0], speaker: "",
+        text: line.slice(start.length).replace(/\s+/g, " ").trim(), malformed: true,
+      };
+      result.turns.push(openTurn);
+      return note(index, "main:malformed");
+    }
     result.unmatched.push({ line: lineNumber, region, text: line });
     return note(index, "main:unmatched");
   });
@@ -649,4 +662,83 @@ export function suggestSamples(lines, roles, markers, region, spec, limit = 2) {
   const sparser = candidates.find((c) => c !== richest && c.spans.length < richKeys.size);
   if (sparser && picked.length < limit) picked.push(sparser);
   return picked.sort((a, b) => a.index - b.index);
+}
+
+// ---------------------------------------------------------------------------
+// Saved grammars in a collection folder
+// ---------------------------------------------------------------------------
+//
+// Shared by the editor (plugins/transcript-grammar) and the parsers that use a
+// saved grammar (ca-data-prep, chat-export). Folder access goes through the
+// File System Access handle and the host's readFileTextFromDirectory, which
+// each caller already holds.
+
+export const GRAMMAR_CONFIG_DIR = "_config/transcript-grammar";
+
+export const grammarPath = (name) => `${GRAMMAR_CONFIG_DIR}/${name}.json`;
+
+export async function listSavedGrammars(dirHandle) {
+  if (!dirHandle) return [];
+  let dir = dirHandle;
+  try {
+    for (const part of GRAMMAR_CONFIG_DIR.split("/")) dir = await dir.getDirectoryHandle(part, { create: false });
+  } catch {
+    return [];
+  }
+  const names = [];
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind === "file" && /\.json$/i.test(name)) names.push(name.replace(/\.json$/i, ""));
+  }
+  return names.sort();
+}
+
+/** Read and validate a saved grammar. Throws with the path in the message. */
+export async function loadSavedGrammar(dirHandle, name, readFileTextFromDirectory) {
+  const path = grammarPath(name);
+  const text = await readFileTextFromDirectory(dirHandle, path);
+  if (text == null) throw new Error(`${path} not found.`);
+  let grammar;
+  try { grammar = JSON.parse(text); }
+  catch (e) { throw new Error(`${path} is not valid JSON: ${e.message}`); }
+  const problems = validateGrammar(grammar);
+  if (problems.length) throw new Error(`${path}: ${problems.join("; ")}`);
+  return grammar;
+}
+
+/**
+ * A short, stable fingerprint of what a grammar parses — its patterns and
+ * regions, not when it was saved or what it was marked up from. Two saves of
+ * the same markup fingerprint the same, so re-saving without a change does
+ * not read as a change.
+ */
+export function grammarFingerprint(grammar) {
+  const { regions, ignore, headerField, speakerRow, turnRow } = grammar || {};
+  const strip = (row) => (row ? { pattern: row.pattern, flags: row.flags, rowStart: row.rowStart ?? null } : null);
+  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow)]);
+  // FNV-1a, 32-bit. Collisions only matter as a missed "grammar changed"
+  // warning, and a person saving grammars is not an adversary.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Split extracted document text into lines, choosing the reading by shape:
+ * mammoth's (every paragraph followed by a blank line) gives paragraphs,
+ * anything else gives its own lines.
+ */
+export function documentLines(text) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  let filled = 0;
+  let spaced = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    filled++;
+    if (i + 1 >= lines.length || lines[i + 1] === "") spaced++;
+  }
+  const mammothShaped = filled > 0 && spaced / filled >= 0.9;
+  return textToLines(text, { paragraphs: mammothShaped });
 }

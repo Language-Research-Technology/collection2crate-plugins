@@ -21,7 +21,7 @@ import {
   REGIONS, IGNORE, SPEAKER_FIELDS, TURN_FIELDS, HEADER_FIELD_PATTERN,
   DEFAULT_GRAMMAR, buildGrammar, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines,
-} from "./grammar.js";
+} from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
 const RENDER_CAP = 300;

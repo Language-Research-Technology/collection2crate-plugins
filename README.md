@@ -19,6 +19,7 @@ plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
 src/_csv.js              CSV building and download, for visualisation panels
 src/_panel.js            the DOM vocabulary those panels share
+src/_transcript_grammar.js  transcript grammars: generation, parsing, saved-grammar I/O
 hooks.test.mjs           the hook/priority/progress contract test
 visualisation.test.mjs   the panels' pure seams: matching, counting, scaling
 ```
@@ -272,8 +273,8 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `xlsx-crate-input` | `readFileBytes`, `readJsonFromFolder`, `loadMasp`, `statFile` (handed to `xlsx_crate.js`'s own `configure(deps)` on each dynamic import) |
 | `austlang` | `addLanguageEntities` |
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
-| `ca-data-prep` | `writeFileAtPath`, `fileExists` |
-| `chat-export` | `writeFileAtPath`, `fileExists` (its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
+| `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar) |
+| `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
@@ -352,9 +353,33 @@ regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
 markers, section names and ignore patterns. Only the shape of the sample is
 kept — delimiters, brackets, which fields are optional — never its text,
 since the rows marked up are real speaker declarations. `parseWithGrammar(text,
-grammar)` is pure and exported for a build-time consumer; nothing reads these
-configs during a build yet. `transcript-grammar.test.mjs` covers generation
-and parsing.
+grammar)` is pure; it and the folder helpers live in
+`src/_transcript_grammar.js`, since three plugins use them.
+`transcript-grammar.test.mjs` covers generation and parsing.
+
+**Parsing with a saved grammar.** `ca-data-prep`'s `transcriptGrammar` option
+(a child of "Process plain transcript documents", listing the grammars saved
+in the folder) swaps the built-in convention for the chosen grammar;
+`chat-export` reads the same option, so the CSV and the CHAT file agree. The
+result has the same shape either way — CSV rows, Person entities, the log —
+so nothing downstream knows which reader ran. Differences worth knowing:
+
+- sections are the grammar's own markers; `PRELIMINARIES` / `MAIN` /
+  `POSTLIMINARIES` still abbreviate to `PRE` / `MAIN` / `POST` in the CSV, any
+  other name is written as is;
+- a row the grammar cannot read is reported (`turn-row-unmatched`) and left
+  out of the CSV, and a wrapped line folded into the row above is reported on
+  its own line (`line-folded`); header lines that aren't `Key: value` are
+  counted as non-conforming too;
+- a chosen grammar that is missing or invalid fails Process rather than
+  falling back to the built-in convention;
+- Process records a fingerprint of the grammar it parsed with, and Build
+  warns if the saved grammar has changed since (re-saving the same markup
+  does not count).
+
+`transcript-with-grammar.test.mjs` covers this, including that the grammar
+marked up from the built-in convention's own fixture reproduces the built-in
+reader row for row.
 
 The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP

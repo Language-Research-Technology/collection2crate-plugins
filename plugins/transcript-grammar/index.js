@@ -17,14 +17,15 @@
 // output before rebuilding". The file holds the patterns and the field
 // structure only; the sample text it was marked up from is never written.
 //
-// The parser is grammar.js's parseWithGrammar(), pure and importable, for a
-// build-time consumer such as ca-data-prep to read a saved grammar with.
-import { GRAMMAR_VERSION, textToLines, validateGrammar } from "./grammar.js";
+// The grammar itself — generation, parsing, and reading saved grammars from
+// the folder — is src/_transcript_grammar.js, shared with ca-data-prep and
+// chat-export, which parse with a saved grammar when one is chosen.
+import {
+  GRAMMAR_CONFIG_DIR, GRAMMAR_VERSION, grammarPath, listSavedGrammars, loadSavedGrammar, textToLines,
+} from "../../src/_transcript_grammar.js";
 import { openGrammarEditor, openGrammarTester } from "./ui.js";
 
-export { parseWithGrammar, validateGrammar } from "./grammar.js";
-
-export const CONFIG_DIR = "_config/transcript-grammar";
+export const CONFIG_DIR = GRAMMAR_CONFIG_DIR;
 
 let writeFileAtPath, readFileTextFromDirectory, openModal;
 
@@ -33,37 +34,8 @@ export function createPlugin(deps) {
   return plugin;
 }
 
-async function configDirectory(dirHandle) {
-  let dir = dirHandle;
-  try {
-    for (const part of CONFIG_DIR.split("/")) dir = await dir.getDirectoryHandle(part, { create: false });
-    return dir;
-  } catch {
-    return null;
-  }
-}
-
-export async function listGrammars(dirHandle) {
-  const dir = await configDirectory(dirHandle);
-  if (!dir) return [];
-  const names = [];
-  for await (const [name, handle] of dir.entries()) {
-    if (handle.kind === "file" && /\.json$/i.test(name)) names.push(name.replace(/\.json$/i, ""));
-  }
-  return names.sort();
-}
-
-export async function loadGrammar(dirHandle, name) {
-  const path = `${CONFIG_DIR}/${name}.json`;
-  const text = await readFileTextFromDirectory(dirHandle, path);
-  if (text == null) throw new Error(`${path} not found.`);
-  let grammar;
-  try { grammar = JSON.parse(text); }
-  catch (e) { throw new Error(`${path} is not valid JSON: ${e.message}`); }
-  const problems = validateGrammar(grammar);
-  if (problems.length) throw new Error(`${path}: ${problems.join("; ")}`);
-  return grammar;
-}
+const listGrammars = listSavedGrammars;
+const loadGrammar = (dirHandle, name) => loadSavedGrammar(dirHandle, name, readFileTextFromDirectory);
 
 // A .docx goes through ca-data-prep's own mammoth extraction, so the lines
 // marked up here are exactly the lines that plugin reads. Imported on demand:
@@ -102,9 +74,9 @@ const plugin = {
         markedUpFrom: sourceName || null,
         savedAt: new Date().toISOString(),
       };
-      const path = `${CONFIG_DIR}/${grammar.name}.json`;
+      const path = grammarPath(grammar.name);
       await writeFileAtPath(dirHandle, path, JSON.stringify(saved, null, 2) + "\n");
-      log(`transcript-grammar: saved ${path}.`, "ok");
+      log(`transcript-grammar: saved ${path}. Choose "${grammar.name}" under "Transcript grammar" (transcript processing) to parse with it.`, "ok");
     },
     children: [
       {

@@ -12,7 +12,7 @@ import {
   buildRowPattern, buildRegions, buildGrammar, checkRegionOrder, decomposeSample,
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
   textToLines, validateGrammar,
-} from "./plugins/transcript-grammar/grammar.js";
+} from "./src/_transcript_grammar.js";
 
 let failures = 0;
 const check = (label, fn) => {
@@ -214,16 +214,24 @@ check("speakers are read with their fields, trimmed, blanks for absent optionals
 });
 
 check("turns carry their section, and a wrapped line folds into the turn above", () => {
-  assert.deepEqual(parsed.turns.map((t) => `${t.section}/${t.turn}/${t.speaker}/${t.text}`), [
+  assert.deepEqual(parsed.turns.filter((t) => !t.malformed).map((t) => `${t.section}/${t.turn}/${t.speaker}/${t.text}`), [
     "OPENING/1/CC/hello",
     "OPENING/2/DD/hi there and more",
     "BODY/3/CC/bye",
   ]);
-  assert.deepEqual(parsed.continuations.map((c) => [c.line, c.into]), [[9, 8]]);
+  assert.deepEqual(parsed.continuations.map((c) => [c.line, c.into]), [[9, 8], [13, 12]]);
 });
 
-check("a numbered line with no speaker is reported, not folded — and nothing after it folds into it", () => {
-  assert.deepEqual(parsed.unmatched.map((u) => [u.line, u.region]), [[12, "main"], [13, "main"]]);
+check("a numbered line that doesn't match is a malformed row with no speaker — and what follows folds into it, not the turn before", () => {
+  const malformed = parsed.turns.filter((t) => t.malformed);
+  assert.deepEqual(malformed, [{ line: 12, section: "BODY", turn: "4", speaker: "", text: "(1.2) stray line", malformed: true }]);
+  assert.equal(parsed.turns.find((t) => t.turn === "3").text, "bye");
+  assert.deepEqual(parsed.unmatched, []);
+});
+
+check("a line with nothing above it to fold into is unmatched", () => {
+  const result = parseWithGrammar(["Participants", "OPENING", "stray", "1\tCC:\thi"], GRAMMAR);
+  assert.deepEqual(result.unmatched.map((u) => [u.line, u.region]), [[3, "main"]]);
 });
 
 check("an ignored line is recorded as ignored", () => {
@@ -313,9 +321,10 @@ check("suggested samples regenerate a grammar that parses the sample itself", ()
   const grammar = buildGrammar({ name: "x", lines: LINES, roles: ROLES, markers: MARKERS, speakerSamples, turnSamples });
   const result = parseWithGrammar(LINES, grammar);
   assert.equal(result.speakers.length, 2);
-  assert.equal(result.turns.length, 3);
-  // "4\t(0.5)" and the period-numbered row: both reported, neither folded.
-  assert.deepEqual(result.unmatched.map((u) => u.line), [14, 15]);
+  assert.equal(result.turns.filter((t) => !t.malformed).length, 3);
+  // "4\t(0.5)" and the period-numbered row: both kept as malformed rows, neither folded.
+  assert.deepEqual(result.turns.filter((t) => t.malformed).map((t) => t.line), [14, 15]);
+  assert.deepEqual(result.unmatched, []);
 });
 
 if (failures) {

@@ -72,6 +72,21 @@ export function paragraphNumbersByLine(text) {
   return numbers;
 }
 
+// A paragraph that reads as a section marker but is not one: wrong case, or
+// stray punctuation around it. A header has to match exactly, and when it does
+// not the whole section silently disappears into the one before it — so a
+// near miss is the single most consequential thing this report can point at.
+const MARKER_NEAR_MISS = /^[^A-Za-z]*([A-Za-z]+)[^A-Za-z]*$/;
+
+export function nearMissMarker(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || SECTION_MARKERS.includes(trimmed)) return null;
+  const match = trimmed.match(MARKER_NEAR_MISS);
+  if (!match) return null;
+  const candidate = match[1].toUpperCase();
+  return SECTION_MARKERS.includes(candidate) ? candidate : null;
+}
+
 const sectionName = (section) =>
   section === "PRE" ? "PRELIMINARIES" : section === "POST" ? "POSTLIMINARIES" : "MAIN";
 
@@ -498,8 +513,18 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
     const lineNumber = lineNumbers ? lineNumbers[lineIndex] ?? lineIndex + 1 : lineIndex + 1;
     const line = rawLine.trim();
     const matchedHeader = SECTION_MARKERS.includes(line) ? line : null;
-    headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader });
     if (!line) continue;
+
+    // Only the markers and the paragraphs that nearly are one. Recording every
+    // paragraph turned the log into a copy of the document in which each
+    // ordinary turn was labelled "NO MATCH", which reads as a finding when it
+    // only means the paragraph is not a section marker.
+    if (matchedHeader) {
+      headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader, nearMiss: null });
+    } else {
+      const nearMiss = nearMissMarker(line);
+      if (nearMiss) headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader: null, nearMiss });
+    }
 
     if (/^Speakers:$/i.test(line)) {
       transcriptStarted = false;
@@ -686,11 +711,23 @@ export function formatSectionDiagnostics(sectionDiagnostics) {
 }
 
 export function formatHeaderChecks(headerChecks) {
-  const lines = ["Section header line checks:"];
-  for (const check of headerChecks) {
-    const status = check.matchedHeader ? `MATCH (${check.matchedHeader})` : "NO MATCH";
-    lines.push(`Paragraph ${check.line}: ${status} - ${JSON.stringify(check.content)}`);
+  const found = headerChecks.filter((check) => check.matchedHeader);
+  const nearMisses = headerChecks.filter((check) => !check.matchedHeader && check.nearMiss);
+  const lines = ["Section headers:"];
+
+  if (found.length) {
+    for (const check of found) lines.push(`Paragraph ${check.line}: ${check.matchedHeader}`);
+  } else {
+    lines.push("None found.");
   }
+
+  if (nearMisses.length) {
+    lines.push("", `Near misses (${nearMisses.length}) — a header must be a paragraph whose text is exactly PRELIMINARIES, MAIN, or POSTLIMINARIES:`);
+    for (const check of nearMisses) {
+      lines.push(`Paragraph ${check.line}: ${JSON.stringify(check.content)} — did you mean ${check.nearMiss}?`);
+    }
+  }
+
   return lines.join("\n");
 }
 

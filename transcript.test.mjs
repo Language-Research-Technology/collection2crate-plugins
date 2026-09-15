@@ -7,7 +7,7 @@
 //   node transcript.test.mjs
 import assert from "node:assert/strict";
 
-import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities, paragraphNumbersByLine } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities, paragraphNumbersByLine, nearMissMarker } from "./plugins/ca-data-prep/process.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -268,6 +268,30 @@ await check("a finding points at the .docx paragraph, not the extracted line", (
   assert.equal(numbers[2], 2, "two extracted lines on, paragraph 2");
   assert.equal(numbers[6], 4, "an empty paragraph of its own still counts");
   assert.equal(numbers[8], 5, "the speaker declaration is paragraph 5");
+});
+
+console.log("\nSection headers");
+
+await check("a near-miss marker is recognised, an ordinary line is not", () => {
+  assert.equal(nearMissMarker("Main"), "MAIN");
+  assert.equal(nearMissMarker("MAIN:"), "MAIN");
+  assert.equal(nearMissMarker(" preliminaries. "), "PRELIMINARIES");
+  assert.equal(nearMissMarker("MAIN"), null, "an exact marker is not a near miss");
+  assert.equal(nearMissMarker("MAIN points to discuss"), null, "a line that merely starts with the word is not");
+  assert.equal(nearMissMarker("D:\thi"), null);
+});
+
+await check("the header report lists the markers found and any near miss, not every paragraph", async () => {
+  const misspelt = UNNUMBERED.replace("\n\nMAIN\n\n", "\n\nMain\n\n");
+  const { log } = await processTranscriptText(misspelt, {});
+  const section = log.split("Section headers:")[1].split("\n\nUnresolved")[0];
+  assert.ok(section.includes("PRELIMINARIES"), "the markers that did match should be listed");
+  assert.ok(section.includes("did you mean MAIN?"), `expected a near-miss line, got:\n${section}`);
+  assert.ok(!log.includes("NO MATCH"), "the per-paragraph MATCH/NO MATCH dump should be gone");
+  assert.ok(
+    !section.includes("can you tell me your name again?"),
+    "an ordinary turn should not appear in the header report",
+  );
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

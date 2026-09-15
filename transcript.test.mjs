@@ -107,6 +107,34 @@ await check("a stray line at the top of a section is reported, not glued onto th
   });
 });
 
+await check("a numbered row with no speaker code is its own row, not a wrap", async () => {
+  // The turn-number column is what proves this is a row. Without reading it,
+  // a bare pause looked exactly like a wrapped line: it folded into the turn
+  // above, "6\t(0.4)" ended up inside that row's text cell, and the report —
+  // which reads the repaired text — had nothing left to find.
+  const withPause = doc(["C:\tcan you tell me your name again?", "5\tS:\thi ((smiles))", "6\t(0.4)", "7\tD:\tso"]);
+  const result = await processTranscriptText(withPause, {});
+  const main = result.rows.filter((row) => row.section === "MAIN");
+  assert.deepEqual(main.map((row) => row.text), ["hi ((smiles))", "(0.4)"], "the pause was folded into the turn above");
+  assert.equal(main[1].speakerID, "", "a row with no code gets an empty speakerID, not the one above it");
+  const kinds = result.nonConforming.body
+    .filter((entry) => entry.content.includes("(0.4)"))
+    .flatMap((entry) => entry.issues.map((issue) => issue.kind));
+  assert.ok(kinds.includes("speaker-code-missing"), `expected a missing-code finding, got ${kinds.join(", ")}`);
+});
+
+await check("a wrapped line opening with a numeral is still a wrap", async () => {
+  // The tab is what separates a turn-number column from prose. Accepting a
+  // space-separated numeral because the document is numbered elsewhere would
+  // read "1998 was the year" as turn 1998 and drop the numeral from the text.
+  const withYear = doc(["C:\tcan you tell me your name again?", "5\tS:\tthe figure was", "1998 was the year", "7\tD:\tso"]);
+  const result = await processTranscriptText(withYear, {});
+  assert.ok(
+    result.rows.some((row) => row.text === "the figure was 1998 was the year"),
+    `the numeral should have stayed in the turn's text, got ${JSON.stringify(result.rows.map((r) => r.text))}`,
+  );
+});
+
 console.log("\nSpeaker declarations");
 
 await check("a declaration splits into name, alternate name, demographic note and id", () => {

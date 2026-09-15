@@ -137,6 +137,31 @@ export function classifyBodyLine(rawLine, declaredCodes = null) {
   if (!parsed) parsed = readCode(line);
 
   if (!parsed) {
+    // A turn-number column is proof on its own that the line is a new row: a
+    // wrapped continuation is the tail of a paragraph and never carries one.
+    // Reading the number only once a code had been found is what made a row
+    // whose speaker code is missing — a bare pause like "6\t(0.4)" — look
+    // exactly like a wrap, so it folded into the turn above and its text
+    // disappeared into that row's cell with nothing reported against it.
+    //
+    // The tab is what tells a turn-number column from prose that merely opens
+    // with a numeral, and it has to: accepting a space-separated number on the
+    // strength of the document being numbered elsewhere turns a wrapped
+    // "1998 was the year" into turn 1998 reading "was the year", losing the
+    // numeral out of the text. A space-delimited column would need the number
+    // to continue the numbering run before it could be trusted.
+    const columnDelimited = /^\d+\.?\t/.test(line);
+    if (numbered && columnDelimited) {
+      const rowIssues = [];
+      if (numbered[2] !== ".") {
+        rowIssues.push({ field: "turnNumber", kind: "turn-number-missing-period", detail: `turn number "${numbered[1]}"` });
+      }
+      rowIssues.push({ field: "speakerCode", kind: "speaker-code-missing", detail: `turn number "${numbered[1]}"` });
+      const rowText = numbered[3].trim();
+      if (!rowText) rowIssues.push({ field: "text", kind: "text-missing", detail: `turn number "${numbered[1]}"` });
+      return { kind: "turn", turnNumber: numbered[1], code: null, text: rowText, issues: rowIssues };
+    }
+
     return {
       kind: "continuation",
       content: line,
@@ -478,7 +503,11 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
 
     if (classified.kind === "turn") {
       record(classified.issues, classified.code);
-      const speakerID = speakers.get(classified.code)?.optionalCode || classified.code;
+      // A row with no code is still a row — with an empty speakerID, so the
+      // gap shows in the CSV instead of hiding inside the cell above it.
+      const speakerID = classified.code
+        ? speakers.get(classified.code)?.optionalCode || classified.code
+        : "";
       lastRow = { speakerID, text: classified.text, section: currentSection };
       rows.push(lastRow);
       sections[sectionName(currentSection)].rowCount += 1;

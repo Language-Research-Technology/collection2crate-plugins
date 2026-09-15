@@ -56,6 +56,8 @@ export function isHeaderLine(value) {
  * a transcriber nothing they could find in their own document.
  *
  * Returns a 1-based paragraph number per line, aligned with `text.split("\n")`.
+ * The report calls these line numbers, because that is what someone reading a
+ * transcript counts; the paragraph is only how the number is arrived at.
  */
 export function paragraphNumbersByLine(text) {
   const paragraphs = String(text || "").split("\n\n");
@@ -703,9 +705,9 @@ export function formatSectionDiagnostics(sectionDiagnostics) {
   for (const section of sectionDiagnostics) {
     const status = section.processed ? "processed" : "not processed";
     const header = section.headerLine
-      ? `header paragraph ${section.headerLine}: ${JSON.stringify(section.name)}`
+      ? `header line ${section.headerLine}: ${JSON.stringify(section.name)}`
       : `no exact ${JSON.stringify(section.name)} header found`;
-    lines.push(`${section.name}: ${status} (paragraph ${section.line}; ${header}) - ${section.reason}`);
+    lines.push(`${section.name}: ${status} (line ${section.line}; ${header}) - ${section.reason}`);
   }
   return lines.join("\n");
 }
@@ -716,15 +718,15 @@ export function formatHeaderChecks(headerChecks) {
   const lines = ["Section headers:"];
 
   if (found.length) {
-    for (const check of found) lines.push(`Paragraph ${check.line}: ${check.matchedHeader}`);
+    for (const check of found) lines.push(`Line ${check.line}: ${check.matchedHeader}`);
   } else {
     lines.push("None found.");
   }
 
   if (nearMisses.length) {
-    lines.push("", `Near misses (${nearMisses.length}) — a header must be a paragraph whose text is exactly PRELIMINARIES, MAIN, or POSTLIMINARIES:`);
+    lines.push("", `Near misses (${nearMisses.length}) — a header must be a line whose text is exactly PRELIMINARIES, MAIN, or POSTLIMINARIES:`);
     for (const check of nearMisses) {
-      lines.push(`Paragraph ${check.line}: ${JSON.stringify(check.content)} — did you mean ${check.nearMiss}?`);
+      lines.push(`Line ${check.line}: ${JSON.stringify(check.content)} — did you mean ${check.nearMiss}?`);
     }
   }
 
@@ -777,7 +779,7 @@ export function formatSpeakerBlockReport(diagnostics) {
       ].filter(Boolean).join(", ")
       : "";
     const code = entry.code ? `[${entry.code}] ` : "";
-    lines.push(`Paragraph ${entry.line}: ${entry.conforming ? "ok" : "NON-CONFORMING"} ${code}${fields}`.trimEnd());
+    lines.push(`Line ${entry.line}: ${entry.conforming ? "ok" : "NON-CONFORMING"} ${code}${fields}`.trimEnd());
     for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
     if (!entry.conforming) lines.push(`    source: ${JSON.stringify(entry.content)}`);
   }
@@ -802,7 +804,7 @@ export function formatBodyReport(diagnostics) {
   lines.push("");
 
   for (const entry of diagnostics) {
-    lines.push(`Paragraph ${entry.line} [${entry.section}]: ${JSON.stringify(entry.content)}`);
+    lines.push(`Line ${entry.line} [${entry.section}]: ${JSON.stringify(entry.content)}`);
     for (const issue of entry.issues) lines.push(`    ${formatIssue(issue)}`);
   }
 
@@ -860,7 +862,7 @@ export async function processTranscriptText(text, config = {}) {
 
   const logLines = [
     `Non-conforming lines: ${nonConforming.total} (${nonConformingSpeakers.length} in the speaker block, ${bodyDiagnostics.length} in the body).`,
-    "Paragraph numbers are paragraphs of the .docx, counted as Word counts them — empty paragraphs included.",
+    "Line numbers count the lines of the document as Word shows them, blank lines included.",
     "",
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
     "",

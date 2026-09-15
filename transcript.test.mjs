@@ -245,13 +245,13 @@ await check("the log leads with a count and names the line of every finding", as
   assert.ok(log.includes("Expected format: CODE: name [alternate name] (demographic info) #id"));
   assert.ok(log.includes("Expected format: [turn number][.] CODE: text"));
   for (const entry of nonConforming.body) {
-    assert.ok(log.includes(`Paragraph ${entry.line} [${entry.section}]`), `paragraph ${entry.line} is missing from the log`);
+    assert.ok(log.includes(`Line ${entry.line} [${entry.section}]`), `line ${entry.line} is missing from the log`);
   }
 });
 
 console.log("\nParagraph numbering");
 
-await check("a finding points at the .docx paragraph, not the extracted line", () => {
+await check("a line number counts .docx paragraphs, not extracted lines", () => {
   // mammoth terminates every paragraph with a blank line, so consecutive
   // paragraphs sit two extracted lines apart and an empty paragraph adds two
   // more. Reporting the raw line number gave a transcriber a figure that

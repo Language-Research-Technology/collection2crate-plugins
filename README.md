@@ -310,6 +310,27 @@ function itself, so `ro-crate-masp` (a heavy validator library) stays
 dynamically imported from collection2crate's own tree instead of becoming a
 static import anywhere in this package.
 
+`ca-data-prep` (`plugins/ca-data-prep/`) parses transcripts by line shape,
+not by Word style, so the authoring convention is the contract:
+
+```
+Speakers:
+D:→Dora [Dora Leung] (Australian, male) #dora     ← code, then the speaker
+…
+PRELIMINARIES                                            ← section marker, alone on its line
+1→D:→so I'm Dora?                                      ← optional turn number, code, turn
+MAIN
+D:→hi                                                    ← unnumbered is equally fine
+```
+
+A line that is not a turn is folded into the turn above it, which is what
+makes wrapped text work — and what makes an unrecognised turn shape fail
+silently and completely rather than partially: every following line, section
+markers included, collapses into the last line the parser did recognise, and
+the CSV comes out as a header and nothing else. `transcript.test.mjs` pins
+the shapes that must parse; add to it before touching `SPEAKER_LINE` or
+`TURN_LINE` in `process.js`.
+
 The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP
 library not yet on npm — installed as a git dependency pinned to a

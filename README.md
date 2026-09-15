@@ -276,6 +276,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `chat-export` | `writeFileAtPath`, `fileExists` (its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
+| `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
 | `validate-crate` | `loadMasp` |
 | `concordance`, `ngrams`, `chart` (panels) | none — a panel receives its data in `ctx`, and never touches the folder |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
@@ -330,6 +331,29 @@ markers included, collapses into the last line the parser did recognise, and
 the CSV comes out as a header and nothing else. `transcript.test.mjs` pins
 the shapes that must parse; add to it before touching `SPEAKER_LINE` or
 `TURN_LINE` in `process.js`.
+
+`transcript-grammar` (`plugins/transcript-grammar/`) lets a person define that
+convention for their own documents instead of accepting it. It taps no build
+stage; it offers two Build-panel actions:
+
+- **Define a transcript grammar…** — paste a transcript or choose a `.txt` /
+  `.docx`; mark line ranges as **header metadata**, **speaker info** or
+  **main** (plus marker lines such as `Speakers:` or `PRELIMINARIES`, and lines
+  to ignore); then, in individual rows, select characters and mark them as a
+  speaker's code / name / alternate name / affiliation / id, or a turn's
+  number / speaker / text. The patterns are generated from that markup
+  (`grammar.js`'s `buildGrammar`) and re-run over the whole sample as you go,
+  so you see what they parse and what they miss before saving.
+- **Test a transcript grammar…** — parse another document with a saved one.
+
+A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group
+regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
+markers, section names and ignore patterns. Only the shape of the sample is
+kept — delimiters, brackets, which fields are optional — never its text,
+since the rows marked up are real speaker declarations. `parseWithGrammar(text,
+grammar)` is pure and exported for a build-time consumer; nothing reads these
+configs during a build yet. `transcript-grammar.test.mjs` covers generation
+and parsing.
 
 The `roctable` plugin (`plugins/roctable/`) takes its name from the
 [`roctable`](https://github.com/ptsefton/roctable) library it wraps — a WIP

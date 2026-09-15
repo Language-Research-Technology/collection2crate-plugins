@@ -334,7 +334,8 @@ the shapes that must parse; add to it before touching `SPEAKER_LINE` or
 
 `transcript-grammar` (`plugins/transcript-grammar/`) lets a person define that
 convention for their own documents instead of accepting it. It taps no build
-stage; it offers two Build-panel actions:
+stage; it offers two actions, shown on collection2crate's Process page next to
+the transcript processing option:
 
 - **Define a transcript grammar…** — paste a transcript or choose a `.txt` /
   `.docx`; mark line ranges as **header metadata**, **speaker info** or

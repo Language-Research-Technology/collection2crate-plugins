@@ -2,9 +2,10 @@
 // and save the regular expressions that markup implies as standing
 // configuration for parsing other documents in the same format.
 //
-// This plugin taps no build stage. It offers two actions in the Build panel
-// (collection2crate runs an `action` node's run() there and then, outside a
-// build — SPEC.md §6.2 and §9):
+// This plugin taps no build stage. It offers two actions, which
+// collection2crate shows on its Process page (they are about how files are
+// read, so main.js lists transcriptGrammarEdit in PROCESS_OPTION_KEYS) and
+// runs there and then, outside a build:
 //
 //   Define a transcript grammar…  — the three-step editor in ui.js: source
 //                                   document → regions → row markup → save.

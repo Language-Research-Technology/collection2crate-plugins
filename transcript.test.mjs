@@ -7,7 +7,7 @@
 //   node transcript.test.mjs
 import assert from "node:assert/strict";
 
-import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities } from "./plugins/ca-data-prep/process.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -28,6 +28,7 @@ const doc = (turns) => [
 
 const UNNUMBERED = doc(["C:\tcan you tell me your name again?", "D:\thi", "S:\thi ((smiles))", "S:\toh (0.2) @"]);
 const NUMBERED = doc(["1\tC:\tcan you tell me your name again?", "4\tD:\thi", "5\tS:\thi ((smiles))", "9\tS:\toh (0.2) @"]);
+const NUMBERED_WITH_PERIOD = doc(["1.\tC:\tcan you tell me your name again?", "4.\tD:\thi", "5.\tS:\thi ((smiles))", "9.\tS:\toh (0.2) @"]);
 
 const shape = (result) => result.rows.map((r) => `${r.section}/${r.speakerID}/${r.text}`);
 
@@ -41,6 +42,12 @@ await check("an unnumbered transcript parses its turns and sections", async () =
 
 await check("a leading turn-number column parses identically — the number is dropped", async () => {
   const numbered = await processTranscriptText(NUMBERED, {});
+  const plain = await processTranscriptText(UNNUMBERED, {});
+  assert.deepEqual(shape(numbered), shape(plain));
+});
+
+await check("a dotted turn-number column parses identically — the number is dropped", async () => {
+  const numbered = await processTranscriptText(NUMBERED_WITH_PERIOD, {});
   const plain = await processTranscriptText(UNNUMBERED, {});
   assert.deepEqual(shape(numbered), shape(plain));
 });
@@ -61,12 +68,157 @@ await check("a continuation line still folds into the turn above it", async () =
   assert.equal(rows[1].text, "hi and hello again");
 });
 
+await check("a line with no speaker code folds into the turn above without being reported", () => {
+  // The report is only worth reading if it is quiet when nothing is wrong. A
+  // wrapped line is repaired before the body is scanned, so it is not a
+  // finding — an earlier version scanned the pre-repair text and filed one
+  // "unreviewed line" warning for every wrapped line in the document.
+  const malformed = doc(["C:\tcan you tell me your name again?", "D:\thi", "this is a wrap of the line above", "S:\tbye"]);
+  return processTranscriptText(malformed, {}).then((result) => {
+    assert.equal(result.nonConforming.body.length, 0, "a repaired wrap should not be reported as non-conforming");
+    assert.ok(
+      result.rows.some((row) => row.text.includes("this is a wrap of the line above")),
+      "the wrapped text should have folded into the turn above it",
+    );
+  });
+});
+
 await check("a numeral that isn't a turn number doesn't become a turn", () => {
   const rows = parseRows(mergeContinuationLines(normalizeText(
     doc(["C:\tin 1998 Budget: the figure was", "D:\thi", "S:\thi", "S:\tbye"])
   )));
   assert.equal(rows.length, 4);
   assert.equal(rows[0].text, "in 1998 Budget: the figure was");
+});
+
+await check("a stray line at the top of a section is reported, not glued onto the marker", () => {
+  // Two failures at once if a section's first line is a stray: the marker
+  // stops being an exact match, so the section boundary disappears, and the
+  // text is credited to the last turn of the section before it.
+  const stray = doc(["C:\tcan you tell me your name again?", "a stray opening line", "D:\thi", "S:\tbye"]);
+  return processTranscriptText(stray, {}).then((result) => {
+    assert.deepEqual(result.rows.map((row) => row.section), ["PRE", "MAIN", "POST"], "the section boundaries were lost");
+    assert.ok(
+      !result.rows.some((row) => row.text.includes("a stray opening line")),
+      "the stray line was credited to a turn in another section",
+    );
+    const kinds = result.nonConforming.body.flatMap((entry) => entry.issues.map((issue) => issue.kind));
+    assert.ok(kinds.includes("speaker-code-missing"), `expected a missing-code finding, got ${kinds.join(", ")}`);
+  });
+});
+
+console.log("\nSpeaker declarations");
+
+await check("a declaration splits into name, alternate name, demographic note and id", () => {
+  const parsed = parseSpeakerDetails("Dora [Dora Leung] (Australian, male) #dora");
+  assert.equal(parsed.name, "Dora");
+  assert.equal(parsed.alternateName, "Dora Leung");
+  assert.equal(parsed.demographic, "Australian, male");
+  assert.equal(parsed.optionalCode, "#dora");
+  assert.deepEqual(parsed.issues, []);
+});
+
+await check("the alternate name and the demographic note are both optional", () => {
+  const parsed = parseSpeakerDetails("Charlie (research assistant) #charlie");
+  assert.equal(parsed.name, "Charlie");
+  assert.equal(parsed.alternateName, null);
+  assert.equal(parsed.demographic, "research assistant");
+  assert.deepEqual(parsed.issues, []);
+});
+
+await check("the alternate name reaches the Person entity instead of the name", async () => {
+  const { speakerMap } = await processTranscriptText(UNNUMBERED, {});
+  const dora = buildSpeakerPersonEntities(speakerMap).find((entity) => entity["@id"] === "#dora");
+  assert.equal(dora.name, "Dora", "the bracketed alternate used to be glued into the name");
+  assert.equal(dora.alternateName, "Dora Leung");
+});
+
+await check("a declaration with no #id is reported", async () => {
+  const noId = UNNUMBERED.replace("C:\tCharlie (research assistant) #charlie", "C:\tCharlie (research assistant)");
+  const { nonConforming } = await processTranscriptText(noId, {});
+  const issues = nonConforming.speakers.flatMap((entry) => entry.issues.map((issue) => issue.kind));
+  assert.ok(issues.includes("speaker-id-missing"), `expected a missing-id finding, got ${issues.join(", ")}`);
+});
+
+await check("a declaration missing its colon is read, reported, and does not rob the one above it", async () => {
+  // The failure this guards is silent and cross-contaminating: without a
+  // colon the line looked like a continuation, so it folded into the
+  // declaration above and handed that speaker this one's name and #id.
+  const noColon = UNNUMBERED.replace("S:\tSona", "S\tSona");
+  const { speakerMap, nonConforming } = await processTranscriptText(noColon, {});
+  assert.equal(speakerMap.get("D").optionalCode, "#dora", "Dora's declaration was contaminated");
+  assert.equal(speakerMap.get("S").optionalCode, "#sona", "Sona's declaration was lost");
+  const issues = nonConforming.speakers.flatMap((entry) => entry.issues.map((issue) => issue.kind));
+  assert.ok(issues.includes("speaker-code-missing-colon"), `expected a missing-colon finding, got ${issues.join(", ")}`);
+});
+
+console.log("\nBody row conformance");
+
+const bodyKinds = async (source) => {
+  const { nonConforming } = await processTranscriptText(source, {});
+  return nonConforming.body.flatMap((entry) => entry.issues.map((issue) => issue.kind));
+};
+
+await check("a turn number without its period is reported, and the row is unaffected", async () => {
+  const kinds = await bodyKinds(NUMBERED);
+  assert.ok(kinds.includes("turn-number-missing-period"), `expected a missing-period finding, got ${kinds.join(", ")}`);
+  assert.deepEqual(shape(await processTranscriptText(NUMBERED, {})), shape(await processTranscriptText(UNNUMBERED, {})));
+});
+
+await check("a turn number with its period is not reported", async () => {
+  const kinds = await bodyKinds(NUMBERED_WITH_PERIOD);
+  assert.ok(!kinds.includes("turn-number-missing-period"), `expected no missing-period finding, got ${kinds.join(", ")}`);
+});
+
+await check("a declared code without its colon is still attributed, and reported", async () => {
+  const noColon = UNNUMBERED.replace("D:\thi", "D\thi");
+  const result = await processTranscriptText(noColon, {});
+  assert.equal(result.rows[1].speakerID, "#dora", "the turn should still be Dora's");
+  const kinds = result.nonConforming.body.flatMap((entry) => entry.issues.map((issue) => issue.kind));
+  assert.ok(kinds.includes("speaker-code-missing-colon"), `expected a missing-colon finding, got ${kinds.join(", ")}`);
+});
+
+await check("a code nobody declared is reported", async () => {
+  const kinds = await bodyKinds(UNNUMBERED.replace("D:\thi", "X:\thi"));
+  assert.ok(kinds.includes("speaker-code-undeclared"), `expected an undeclared-code finding, got ${kinds.join(", ")}`);
+});
+
+await check("a turn with no text is reported", async () => {
+  const kinds = await bodyKinds(UNNUMBERED.replace("D:\thi", "D:"));
+  assert.ok(kinds.includes("text-missing"), `expected a missing-text finding, got ${kinds.join(", ")}`);
+});
+
+await check("a multi-character code is a turn when the Speakers block declared it", async () => {
+  const widened = UNNUMBERED
+    .replace("C:\tCharlie (research assistant) #charlie", "INT:\tCharlie (research assistant) #charlie")
+    .replace("C:\tcan you tell me your name again?", "INT:\tcan you tell me your name again?");
+  const result = await processTranscriptText(widened, {});
+  assert.equal(result.rows[0].speakerID, "#charlie");
+  assert.equal(result.nonConforming.body.length, 0, "a declared multi-character code is not a finding");
+});
+
+await check("a wrapped line starting with a capital does not become a speaker", async () => {
+  // normalizeText used to rewrite any line starting with a capital and a
+  // space into "X:\ttext", so "I came back home" became a turn by a speaker
+  // called "I" — splitting the turn, misattributing the text, and reporting
+  // nothing at all.
+  const wrapped = doc(["C:\thow was it?", "D:\tI went to the shop and then", "I came back home again", "S:\tbye"]);
+  const result = await processTranscriptText(wrapped, {});
+  assert.ok(!result.rows.some((row) => row.speakerID === "I"), "a phantom speaker was created from a wrapped line");
+  assert.ok(
+    result.rows.some((row) => row.text === "I went to the shop and then I came back home again"),
+    `the wrap should have folded into Dora's turn, got ${JSON.stringify(result.rows.map((r) => r.text))}`,
+  );
+});
+
+await check("the log leads with a count and names the line of every finding", async () => {
+  const { log, nonConforming } = await processTranscriptText(NUMBERED.replace("5\tS:\thi ((smiles))", "5\tS:"), {});
+  assert.ok(log.startsWith(`Non-conforming lines: ${nonConforming.total}`), "the log should open with the total");
+  assert.ok(log.includes("Expected format: CODE: name [alternate name] (demographic info) #id"));
+  assert.ok(log.includes("Expected format: [turn number][.] CODE: text"));
+  for (const entry of nonConforming.body) {
+    assert.ok(log.includes(`Line ${entry.line} [${entry.section}]`), `line ${entry.line} is missing from the log`);
+  }
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

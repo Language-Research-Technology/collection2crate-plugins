@@ -191,7 +191,7 @@ export function validateSectionOrder(foundSections, warnings = []) {
   }
 }
 
-export function parseRows(text, warnings = []) {
+export function parseRows(text, warnings = [], sectionDiagnostics = [], headerChecks = []) {
   const rows = [];
   const lines = text.split("\n");
   const speakers = parseSpeakerBlock(lines, warnings);
@@ -199,9 +199,20 @@ export function parseRows(text, warnings = []) {
   let currentSection = "MAIN";
   let transcriptStarted = false;
   let lastRow = null;
+  const sections = {
+    PRELIMINARIES: { markerLine: null, rowCount: 0 },
+    MAIN: { markerLine: null, rowCount: 0 },
+    POSTLIMINARIES: { markerLine: null, rowCount: 0 },
+  };
 
-  for (const rawLine of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex];
+    const lineNumber = lineIndex + 1;
     const line = rawLine.trim();
+    const matchedHeader = ["PRELIMINARIES", "MAIN", "POSTLIMINARIES"].includes(line)
+      ? line
+      : null;
+    headerChecks.push({ line: lineNumber, content: rawLine, matchedHeader });
     if (!line) continue;
 
     if (line === "Speakers:") {
@@ -212,6 +223,7 @@ export function parseRows(text, warnings = []) {
     if (line === "PRELIMINARIES") {
       transcriptStarted = true;
       currentSection = "PRE";
+      sections.PRELIMINARIES.markerLine = lineNumber;
       sectionOrder.push(line);
       continue;
     }
@@ -219,6 +231,7 @@ export function parseRows(text, warnings = []) {
     if (line === "MAIN") {
       transcriptStarted = true;
       currentSection = "MAIN";
+      sections.MAIN.markerLine = lineNumber;
       sectionOrder.push(line);
       continue;
     }
@@ -226,6 +239,7 @@ export function parseRows(text, warnings = []) {
     if (line === "POSTLIMINARIES") {
       transcriptStarted = true;
       currentSection = "POST";
+      sections.POSTLIMINARIES.markerLine = lineNumber;
       sectionOrder.push(line);
       continue;
     }
@@ -244,6 +258,10 @@ export function parseRows(text, warnings = []) {
 
       lastRow = { speakerID, text: transcriptText, section: currentSection };
       rows.push(lastRow);
+      const sectionName = currentSection === "PRE"
+        ? "PRELIMINARIES"
+        : currentSection === "POST" ? "POSTLIMINARIES" : "MAIN";
+      sections[sectionName].rowCount += 1;
       continue;
     }
 
@@ -252,6 +270,34 @@ export function parseRows(text, warnings = []) {
   }
 
   validateSectionOrder(sectionOrder, warnings);
+  const lastLine = Math.max(1, lines.length);
+  for (const [name, details] of Object.entries(sections)) {
+    if (details.markerLine === null) {
+      sectionDiagnostics.push({
+        name,
+        processed: false,
+        headerLine: null,
+        line: lastLine,
+        reason: "section marker was not found before the end of the document",
+      });
+    } else if (!details.rowCount) {
+      sectionDiagnostics.push({
+        name,
+        processed: false,
+        headerLine: details.markerLine,
+        line: details.markerLine,
+        reason: "section marker was found, but no valid transcript rows were found",
+      });
+    } else {
+      sectionDiagnostics.push({
+        name,
+        processed: true,
+        headerLine: details.markerLine,
+        line: details.markerLine,
+        reason: `${details.rowCount} transcript row(s) processed`,
+      });
+    }
+  }
   return rows;
 }
 
@@ -343,14 +389,40 @@ export function escapeCsv(value) {
   return stringValue;
 }
 
+export function formatSectionDiagnostics(sectionDiagnostics) {
+  const lines = [
+    "Section processing:",
+    "Section header rule: a header must be a complete line whose surrounding whitespace is trimmed and whose text exactly matches PRELIMINARIES, MAIN, or POSTLIMINARIES.",
+  ];
+  for (const section of sectionDiagnostics) {
+    const status = section.processed ? "processed" : "not processed";
+    const header = section.headerLine
+      ? `header line ${section.headerLine}: ${JSON.stringify(section.name)}`
+      : `no exact ${JSON.stringify(section.name)} header found`;
+    lines.push(`${section.name}: ${status} (line ${section.line}; ${header}) - ${section.reason}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatHeaderChecks(headerChecks) {
+  const lines = ["Section header line checks:"];
+  for (const check of headerChecks) {
+    const status = check.matchedHeader ? `MATCH (${check.matchedHeader})` : "NO MATCH";
+    lines.push(`Line ${check.line}: ${status} - ${JSON.stringify(check.content)}`);
+  }
+  return lines.join("\n");
+}
+
 export async function processTranscriptText(text, config = {}) {
   const warnings = [];
   const removedTimecodes = [];
+  const sectionDiagnostics = [];
+  const headerChecks = [];
   const normalized = normalizeText(text);
   const timecodeStripped = stripTimecodes(normalized, removedTimecodes);
   const merged = mergeContinuationLines(timecodeStripped);
   const speakerMap = parseSpeakerBlock(merged.split("\n"), warnings);
-  let rows = parseRows(merged, warnings);
+  let rows = parseRows(merged, warnings, sectionDiagnostics, headerChecks);
 
   if (config.headerRows > 0) rows = rows.slice(config.headerRows);
   if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
@@ -363,6 +435,10 @@ export async function processTranscriptText(text, config = {}) {
 
   const logLines = [
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
+    "",
+    formatSectionDiagnostics(sectionDiagnostics),
+    "",
+    formatHeaderChecks(headerChecks),
     "",
     formatUnresolvedSpeakerRows(rows),
     "",
@@ -378,6 +454,7 @@ export async function processTranscriptText(text, config = {}) {
     speakerMap,
     warnings,
     removedTimecodes,
+    sectionDiagnostics,
     log: logLines.join("\n"),
   };
 }

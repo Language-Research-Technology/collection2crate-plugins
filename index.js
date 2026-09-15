@@ -14,9 +14,9 @@ import { createPlugin as createDocxInput } from "./plugins/docx-input/index.js";
 import { createPlugin as createXlsxCrateInput } from "./plugins/xlsx-crate-input/index.js";
 import { createPlugin as createAustlang } from "./plugins/austlang/index.js";
 import { createPlugin as createFileFormatIdentify } from "./plugins/file-format-identify/index.js";
+import { createPlugin as createTranscriptGrammar } from "./plugins/transcript-grammar/index.js";
 import { createPlugin as createCaDataPrep } from "./plugins/ca-data-prep/index.js";
 import { createPlugin as createChatExport } from "./plugins/chat-export/index.js";
-import { createPlugin as createTranscriptGrammar } from "./plugins/transcript-grammar/index.js";
 import { createPlugin as createMerge } from "./plugins/merge/index.js";
 import { createPlugin as createRoctable } from "./plugins/roctable/index.js";
 import { createPlugin as createValidateCrate } from "./plugins/validate-crate/index.js";
@@ -40,10 +40,12 @@ export const REGISTRY = {
   "xlsx-crate-input": createXlsxCrateInput,
   "austlang": createAustlang,
   "file-format-identify": createFileFormatIdentify,
+  // Process-page actions only (a grammar editor and tester): no hooks. Listed
+  // ahead of ca-data-prep so its buttons sit above the transcript options that
+  // use the grammars it saves — registry order is option order on the page.
+  "transcript-grammar": createTranscriptGrammar,
   "ca-data-prep": createCaDataPrep,
   "chat-export": createChatExport,
-  // Build-panel actions only (a grammar editor and tester): no hooks.
-  "transcript-grammar": createTranscriptGrammar,
   "merge": createMerge,
   "roctable": createRoctable,
   "validate-crate": createValidateCrate,

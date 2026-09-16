@@ -11,6 +11,7 @@
 //
 //   node hooks.test.mjs
 import assert from "node:assert/strict";
+import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
 import { progressFor, countedProgress } from "./src/_progress.js";
 
@@ -197,11 +198,34 @@ const quietCtx = (extra) => ({ log: noop, options: {}, config: {}, ...extra });
     assert.ok(merges[0].source.getEntity("#interview"), "the transcript crate carries the document");
   });
 
-  const first = caCtx({ crate: { scanned: true } });
+  // A first build: collection2crate seeded an empty crate and generic-input
+  // scanned into it. The scan's entities go; the Describe form's stay.
+  const scanned = new ROCrate({ array: true, link: true });
+  scanned.rootDataset.name = ["From the Describe form"];
+  scanned.rootDataset.author = [{ "@id": "#ann", "@type": "Person", name: "Ann" }];
+  scanned.rootDataset.hasPart = [{ "@id": "#folder" }, { "@id": "notes.txt" }];
+  scanned.addEntity({ "@id": "#folder", "@type": "RepositoryObject", hasPart: [{ "@id": "audio/a.wav" }] });
+  scanned.addEntity({ "@id": "audio/a.wav", "@type": "File", inLanguage: { "@id": "#lang" } });
+  scanned.addEntity({ "@id": "notes.txt", "@type": "File" });
+  scanned.addEntity({ "@id": "#lang", "@type": "Language", name: "Some language" });
+  const first = caCtx({ crate: scanned });
   await plugin.hooks["crate:build"].handler(first);
-  check("ca-data-prep: on a first build, the transcript crate is the crate, as before", () => {
-    assert.ok(first.crate.getEntity?.("#interview"));
-    assert.equal(merges.length, 1, "nothing merged without an existing crate");
+  check("ca-data-prep: on a first build, clears the scan out of the seeded crate and merges into it", () => {
+    assert.equal(first.crate, scanned, "ctx.crate was replaced");
+    const ids = scanned.getGraph().map((e) => e["@id"]).sort();
+    assert.deepEqual(ids, ["#ann", "./", "ro-crate-metadata.json"],
+      "scan entities and the orphans they leave are gone; the form's linked entity stays");
+    assert.deepEqual(scanned.rootDataset.name, ["From the Describe form"]);
+    assert.equal(scanned.rootDataset.hasPart, undefined, "the root no longer lists the scan's members");
+    assert.equal(merges.length, 2);
+    assert.equal(merges[1].target, scanned);
+  });
+
+  const legacy = caCtx({ crate: null });
+  await plugin.hooks["crate:build"].handler(legacy);
+  check("ca-data-prep: with a host that seeds nothing, the transcript crate is the crate", () => {
+    assert.ok(legacy.crate.getEntity("#interview"));
+    assert.equal(merges.length, 2, "nothing merged");
   });
 }
 

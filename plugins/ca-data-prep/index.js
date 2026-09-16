@@ -271,18 +271,24 @@ const plugin = {
         const selectedConformsTo = ctx.config?.rootDataset?.conformsTo?.["@id"];
         const transcriptCrate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
         addCsvFilesToCrate(transcriptCrate, documentRecords);
-        if (ctx.existingCrate) {
-          // The folder already had a crate: ctx.crate is that crate, seeded by
-          // the pipeline and extended by the builder with the files the user
-          // chose to add. Replacing it would throw the existing metadata
-          // away (and fail the build — collection2crate SPEC.md §4.4), so the
-          // transcript crate lands in it, existing values winning.
-          const { added, enriched } = mergeCrateInto(ctx.crate, transcriptCrate);
-          ctx.log(`Added ${added} transcript entit(ies) to the existing crate; filled in ${enriched} it already had.`, "muted");
-        } else {
-          // A first build: the transcript crate is the crate, as before — the
-          // generic scan's entities for the folder's other files are dropped.
+        if (!ctx.crate) {
+          // A host that doesn't seed a crate (older collection2crate).
           ctx.crate = transcriptCrate;
+        } else {
+          // collection2crate seeds ctx.crate for every run and fails a build
+          // that swaps it out (its SPEC.md §4.4), so the transcript crate
+          // lands in that object, existing values winning.
+          if (!ctx.existingCrate) {
+            // A first build keeps its old shape — the transcript crate, not
+            // the generic scan's entities for the folder's other files — by
+            // clearing the scan's work out of the seeded crate first.
+            // Deliberately temporary: which outputs go into the crate is
+            // meant to become a choice in the UI.
+            const removed = clearFolderScan(ctx.crate);
+            ctx.log(`First build: replaced ${removed} folder-scan entit(ies) with the transcript crate.`, "muted");
+          }
+          const { added, enriched } = mergeCrateInto(ctx.crate, transcriptCrate);
+          ctx.log(`Added ${added} transcript entit(ies) to the crate; filled in ${enriched} it already had.`, "muted");
         }
         ctx.sourceCount = files.length;
         ctx.log(`Built transcript crate from ${files.length} .docx file(s).`, "ok");
@@ -290,6 +296,62 @@ const plugin = {
     },
   },
 };
+
+const STRUCTURAL_TYPES = new Set(["File", "RepositoryObject", "RepositoryCollection"]);
+const MEMBERSHIP_PROPS = ["hasPart", "hasMember", "pcdm:hasMember"];
+
+const refIdsOf = (value) => (Array.isArray(value) ? value : [value])
+  .map((v) => (v && typeof v === "object" ? v["@id"] : null))
+  .filter(Boolean);
+
+/**
+ * Take a folder scan's work back out of a crate, in place: every File /
+ * RepositoryObject / RepositoryCollection entity bar the root, the root's
+ * membership lists, and then anything left that nothing points at any more
+ * (the scan's language and property-definition entities). The root's own
+ * values — the Describe form's, and the entities they link to — stay.
+ *
+ * @returns {number} how many entities were removed
+ */
+export function clearFolderScan(crate) {
+  const rootId = crate.rootId;
+  const descriptorId = crate.metadataFileEntity?.["@id"] || "ro-crate-metadata.json";
+  const keep = (id) => id === rootId || id === descriptorId;
+  let removed = 0;
+
+  for (const entity of [...crate.getGraph()]) {
+    const id = entity["@id"];
+    if (keep(id)) continue;
+    const types = (Array.isArray(entity["@type"]) ? entity["@type"] : [entity["@type"]]).map(String);
+    if (types.some((t) => STRUCTURAL_TYPES.has(t))) {
+      crate.deleteEntity(id);
+      removed++;
+    }
+  }
+  // ro-crate's entity proxy refuses to delete a property that isn't there.
+  for (const prop of MEMBERSHIP_PROPS) {
+    if (crate.rootDataset[prop] !== undefined) delete crate.rootDataset[prop];
+  }
+
+  // Sweep orphans until nothing changes: deleting one can orphan another.
+  for (let changed = true; changed;) {
+    changed = false;
+    const referenced = new Set();
+    for (const entity of crate.getGraph()) {
+      for (const [key, value] of Object.entries(entity)) {
+        if (key !== "@id") refIdsOf(value).forEach((id) => referenced.add(id));
+      }
+    }
+    for (const entity of [...crate.getGraph()]) {
+      const id = entity["@id"];
+      if (keep(id) || referenced.has(id)) continue;
+      crate.deleteEntity(id);
+      removed++;
+      changed = true;
+    }
+  }
+  return removed;
+}
 
 // Build describes what Process wrote. If the grammar Process parsed with has
 // been re-saved or swapped since, those CSVs are out of date — say so, rather

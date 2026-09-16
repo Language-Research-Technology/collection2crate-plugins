@@ -157,7 +157,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
   nameInput.addEventListener("input", describeBase);
   describeBase();
 
-  const textarea = element("textarea", { className: "mono", attrs: { rows: 14, spellcheck: "false", placeholder: "Paste a transcript here, or choose a file below." } });
+  const textarea = element("textarea", { className: "mono", attrs: { rows: 6, spellcheck: "false", placeholder: "Paste a transcript here, or choose a file below." } });
   const draft = state.draftLines || state.lines;
   textarea.value = draft ? draft.join("\n") : "";
   textarea.style.whiteSpace = "pre";

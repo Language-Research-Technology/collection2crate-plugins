@@ -215,6 +215,45 @@ await check("with no speaker list, the turns' speakers become the Person entitie
   assert.ok(result.log.includes("Cleanup: 1 line-skip rule(s) (2 line(s) skipped), 0 removal rule(s): none"), result.log.slice(0, 600));
 });
 
+console.log("\nA speaker block is optional per document");
+
+await check("a document without the grammar's speaker block still parses, with speakers from its turns", async () => {
+  const text = asDocx(OWN_LAYOUT.filter((_, i) => i < 1 || i > 3));   // drop Participants and both declarations
+  const result = await processTranscriptText(text, { grammar: OWN, grammarName: "own" });
+  assert.deepEqual(result.rows.map((r) => r.speakerID), ["#AA", "#BB", "#ZZ", "", "#AA"]);
+  assert.deepEqual([...result.speakerMap.keys()], ["AA", "BB", "ZZ"]);
+  assert.equal(result.bodyDiagnostics.some((d) => d.issues.some((i) => i.kind === "speaker-code-undeclared")), false);
+  assert.deepEqual(result.warnings, []);
+  assert.ok(result.log.includes("This document has no speaker block (it is optional)"));
+  assert.deepEqual(result.metadata, { Title: "demo-03" });
+});
+
+await check("…and without a main marker either, the body starts at the first turn — but a known header key stays header", async () => {
+  const noMarkers = { ...OWN, regions: { ...OWN.regions, speakers: { start: null }, main: { start: null, sections: [], sectionPattern: null } } };
+  const turnShaped = { ...noMarkers, turnRow: { ...noMarkers.turnRow, pattern: "^[\\t ]*(?<speaker>[\\p{L}\\p{N}]{1,24})[\\t ]*:[\\t ]*(?<text>.*?)[\\t ]*$" }, regions: { ...noMarkers.regions, header: { keys: ["Title"] } } };
+  const result = await processTranscriptText(asDocx(["Title: t", "AA: hello", "BB: hi"]), { grammar: turnShaped });
+  assert.deepEqual(result.metadata, { Title: "t" });
+  assert.deepEqual(result.rows.map((r) => `${r.speakerID} ${r.text}`), ["#AA hello", "#BB hi"]);
+});
+
+console.log("\nThe built-in convention without a Speakers block");
+
+await check("turns still parse, speakers come from their codes, and no markers means all MAIN", async () => {
+  const d = (ps) => ps.join("\n\n") + "\n\n";
+  const marked = await processTranscriptText(d(["Transcript: demo", "PRELIMINARIES", "1.\tA:\thello", "MAIN", "2.\tB:\thi"]), {});
+  assert.deepEqual(marked.rows, [
+    { speakerID: "#A", text: "hello", section: "PRE" },
+    { speakerID: "#B", text: "hi", section: "MAIN" },
+  ]);
+  assert.deepEqual(buildSpeakerPersonEntities(marked.speakerMap).map((p) => p["@id"]), ["#A", "#B"]);
+  assert.ok(marked.log.includes("no Speakers block (it is optional)"));
+  const bare = await processTranscriptText(d(["Transcript: demo", "A:\thello", "B:\thi"]), {});
+  assert.deepEqual(bare.rows.map((r) => `${r.section} ${r.speakerID} ${r.text}`), ["MAIN #A hello", "MAIN #B hi"]);
+  // With a Speakers block, nothing changes: the body still waits for a marker.
+  const blocked = await processTranscriptText(d(["Speakers:", "A:\tAl #al", "A:\tnot a turn yet", "MAIN", "A:\thi"]), {});
+  assert.deepEqual(blocked.rows.map((r) => r.text), ["hi"]);
+});
+
 console.log("\nchat-export");
 
 await check("a CHAT file is generated from the grammar's reading", async () => {

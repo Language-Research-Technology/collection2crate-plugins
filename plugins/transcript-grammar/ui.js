@@ -333,7 +333,7 @@ async function regionStep(state, { openModal, error }) {
       ensureStyle();
       if (error) body.append(element("p", { className: "tg-error", text: error }));
       body.append(
-        element("p", { className: "field-hint", text: "Click a line, then shift-click or drag to select a range, and mark it. A marker line (◆) is structure, not content: the heading that opens the speaker info, or a section name such as PRELIMINARIES inside the main body. Keys: ↑/↓ move (shift extends), 1–4 mark, M toggles marker, Delete clears." }),
+        element("p", { className: "field-hint", text: "Only Main is required — header metadata and speaker info are optional, and documents parsed later may leave either out. Click a line, then shift-click or drag to select a range, and mark it. A marker line (◆) is structure, not content: the heading that opens the speaker info, or a section name such as PRELIMINARIES inside the main body. Keys: ↑/↓ move (shift extends), 1–4 mark, M toggles marker, Delete clears." }),
         element("div", { className: "tg-toolbar" }, [
           regionButton("header", "Header metadata", "1"),
           regionButton("speakers", "Speaker info", "2"),
@@ -908,7 +908,7 @@ async function rowStep(state, { openModal, existing, error }) {
 
   const tabs = [
     { key: "header", label: "Header metadata" },
-    { key: "speakers", label: "Speaker info" },
+    { key: "speakers", label: "Speaker info (optional)" },
     { key: "main", label: "Main" },
   ];
   const bar = element("div", { className: "tab-bar", attrs: { role: "tablist" } });
@@ -916,7 +916,9 @@ async function rowStep(state, { openModal, existing, error }) {
   const speakerTest = testPanel(state, "speakers");
   const turnTest = testPanel(state, "main");
   panes.header = headerPreview(state);
+  const hasSpeakerLines = state.roles.some((role, i) => role === "speakers" && !state.markers[i] && rowLines(state)[i].trim());
   panes.speakers = element("div", {}, [
+    hasSpeakerLines ? null : element("p", { className: "field-hint", text: "No lines are marked Speaker info, and that's fine: a speaker block is optional, like the header. Without one, the speakers are whoever the Main rows name. Documents parsed with this grammar may also leave the block out." }),
     rowPanel(state, { region: "speakers", fields: SPEAKER_FIELDS, samplesKey: "speakerSamples", optionalKey: "speakerRow", title: "Speaker", onChange: () => speakerTest.update() }),
     speakerTest.node,
   ]);

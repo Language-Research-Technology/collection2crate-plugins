@@ -108,9 +108,14 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   speakerDiagnostics.sort((a, b) => a.line - b.line);
 
   // A grammar with no speaker rows names the speaker on every turn instead
-  // ("<u speaker=Daiki>"). The speakers are then whoever the turns name, in
-  // order of first appearance, and there is no declaration to check against.
-  const declaresSpeakers = !!grammar.speakerRow?.pattern;
+  // ("<u speaker=Daiki>"), and a document may leave its speaker block out even
+  // when the grammar has one — it is optional, like the header. Either way the
+  // speakers are whoever the turns name, in order of first appearance, and
+  // there is no declaration to check against.
+  const grammarHasSpeakers = !!grammar.speakerRow?.pattern;
+  const documentHasSpeakerBlock = parsed.speakers.length > 0 || unmatchedIn("speakers").length > 0
+    || parsed.roles.some((role) => role === "speakers:marker");
+  const declaresSpeakers = grammarHasSpeakers && documentHasSpeakerBlock;
   if (!declaresSpeakers) {
     for (const turn of parsed.turns) {
       const name = turn.speaker;
@@ -215,7 +220,9 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
           `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,
           `Pattern: ${grammar.speakerRow.pattern}`,
         ]
-        : [`The grammar "${grammarName}" has no speaker rows; the speakers are the names the turns give (${speakerMap.size} found).`],
+        : [grammarHasSpeakers
+          ? `This document has no speaker block (it is optional); the speakers are the names the turns give (${speakerMap.size} found).`
+          : `The grammar "${grammarName}" has no speaker rows; the speakers are the names the turns give (${speakerMap.size} found).`],
       bodyExpected: [
         `Expected format (grammar "${grammarName}"): ${describeRow(grammar.turnRow, TURN_FIELDS)} — bracketed fields are optional.`,
         `Pattern: ${grammar.turnRow?.pattern ?? "(none)"}`,

@@ -194,22 +194,25 @@ profile to enable — nothing in the host changes. Exactly one builder in the
 registry may go ungated; `hooks.test.mjs` enforces that, since a second
 unconditional one could never run.
 
-**A builder adds to an existing crate; it never replaces it.** When the
-picked folder already has a crate, collection2crate loads it, asks the user
-what to do about new and missing files, and seeds `ctx.crate` with it just
-before `crate:build` (collection2crate SPEC.md §4.4a). A builder that finds
-`ctx.crate` set adds to that object — `buildCrate(files, config, log, { crate:
-ctx.crate })` for a folder scan, `mergeCrateInto(ctx.crate, ownCrate)` for a
-builder that assembles its own graph. Either way the existing crate wins:
-properties an entity already has keep their values. When `ctx.crate` is
-`null` there was no existing crate, and the builder creates one.
+**A builder adds to the run's crate; it never replaces it.** collection2crate
+gives every pipeline run its own crate from the first stage on: a copy of the
+folder's existing crate (after asking the user about new and missing files),
+or an empty one when the folder has none (collection2crate SPEC.md §4.4a). So
+`ctx.crate` is already set in `files:prepare`, and a builder adds to that
+object — `buildCrate(files, config, log, { crate: ctx.crate })` for a folder
+scan, `mergeCrateInto(ctx.crate, ownCrate)` for a builder that assembles its
+own graph. The existing crate wins: properties an entity already has keep
+their values. `ctx.existingCrate` says whether the folder had a crate. A
+`null` `ctx.crate` only happens with a host that doesn't seed one, and then
+the builder creates it.
 
 collection2crate checks this itself. A build fails with an error naming the
 builder if the builder never ran, if it ends with no `ctx.crate`, or if it
 replaced a seeded crate with a different object. The same rule holds for any
-tap at 20 and above: `ca-data-prep` still replaces the scan's crate on a first
-build, but lands its transcript crate in the seeded one when there is an
-existing crate.
+tap at 20 and above, and for any stage before `crate:build`: `ca-data-prep`
+keeps a first build transcript-only by clearing the scan's entities out of the
+run's crate (`clearFolderScan`) before merging into it, rather than swapping
+the crate.
 
 ### Progress
 

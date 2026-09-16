@@ -509,6 +509,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
   // derived from lines marked Ignore (it starts from those, and may edit them).
   const ignore = cleanup ? [...new Set(cleanup.drop.map((p) => p.trim()).filter(Boolean))] : markedIgnore;
   const strip = cleanup ? cleanup.strip.map((p) => p.trim()).filter(Boolean).map((pattern) => ({ pattern, flags: "u" })) : [];
+  const dropColumns = uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
   const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
   const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow });
   return {
@@ -517,6 +518,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
     regions,
     ignore,
     strip,
+    dropColumns,
     headerField: { pattern: HEADER_FIELD_PATTERN, flags: "u" },
     speakerRow: withoutSampleText(speakerRow),
     turnRow: withoutSampleText(turnRow),
@@ -547,6 +549,11 @@ export function validateGrammar(grammar) {
   tryCompile("regions.main.sectionPattern", grammar.regions?.main?.sectionPattern);
   (grammar.ignore || []).forEach((p, i) => tryCompile(`ignore[${i}]`, p));
   (grammar.strip || []).forEach((s, i) => tryCompile(`strip[${i}]`, s?.pattern, s?.flags));
+  if (grammar.dropColumns != null && !Array.isArray(grammar.dropColumns)) problems.push("dropColumns: not a list");
+  else (grammar.dropColumns || []).forEach((rule, i) => {
+    const problem = columnRuleError(rule);
+    if (problem) problems.push(`dropColumns[${i}]: ${problem}`);
+  });
   return problems;
 }
 
@@ -566,6 +573,7 @@ function compile(grammar) {
     section: marker(grammar.regions?.main?.sectionPattern),
     ignore: (grammar.ignore || []).map(plain),
     strip: compileStrip(grammar.strip),
+    columns: (grammar.dropColumns || []).filter((rule) => !columnRuleError(rule)),
   };
 }
 
@@ -616,7 +624,10 @@ export function parseWithGrammar(input, grammar) {
     }
     // Row shapes were marked up on cleaned lines, so rows are read from the
     // line with the cleanup step's removals applied. Markers are read as is.
-    const rowLine = applyStrip(line, re.strip);
+    // Dropped columns come out of main rows only, and before the removals:
+    // a column is a position in the line as the document has it.
+    let rowLine = applyStrip(line, re.strip);
+    const mainRowLine = re.columns.length ? applyStrip(dropColumns(line, re.columns), re.strip) : rowLine;
 
     // Region boundaries: a declared start marker when there is one, otherwise
     // the first line of the next region's row shape.
@@ -637,7 +648,7 @@ export function parseWithGrammar(input, grammar) {
       // header had. The speaker block, when a grammar's marker opened it,
       // still waits for the main marker, so a malformed declaration there is
       // reported rather than read as a turn.
-      const looksLikeTurn = () => !!re.turnRow?.test(rowLine) && !re.speakerRow?.test(rowLine) && !isKnownHeaderLine(line);
+      const looksLikeTurn = () => !!re.turnRow?.test(mainRowLine) && !re.speakerRow?.test(rowLine) && !isKnownHeaderLine(line);
       // A format with no header has nothing to hold before the rows, so
       // whatever didn't open the speaker info starts the main region.
       const starts = markerHere || (region === "header"
@@ -654,6 +665,8 @@ export function parseWithGrammar(input, grammar) {
         }
       }
     }
+
+    if (region === "main") rowLine = mainRowLine;
 
     if (region === "main" && re.section?.test(line)) {
       openTurn = null;
@@ -802,6 +815,132 @@ function applyStrip(line, regexes) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Columns to drop from main rows
+// ---------------------------------------------------------------------------
+//
+// A rule is one of two shapes, 0-based:
+//   { tab: n }             the n-th tab-separated field — applies to lines
+//                          that have tabs
+//   { from: a, to: b }     characters a up to (not including) b — applies to
+//                          lines without tabs, where columns are aligned with
+//                          spaces
+// Keeping the two apart means a position never has to be reconciled with a
+// tab: a document is read one way or the other, line by line.
+
+const isCount = (n) => Number.isInteger(n) && n >= 0;
+
+/** What is wrong with a column rule, or null. */
+export function columnRuleError(rule) {
+  if (!rule || typeof rule !== "object") return "not a column rule";
+  if ("tab" in rule) return isCount(rule.tab) ? null : "tab must be a whole number from 0";
+  if ("from" in rule || "to" in rule) {
+    if (!isCount(rule.from) || !isCount(rule.to)) return "from and to must be whole numbers from 0";
+    return rule.to > rule.from ? null : "to must be after from";
+  }
+  return "needs either tab, or from and to";
+}
+
+const columnKey = (rule) => ("tab" in rule ? `t${rule.tab}` : `c${rule.from}-${rule.to}`);
+
+function uniqueColumnRules(rules) {
+  const seen = new Set();
+  const out = [];
+  for (const rule of rules) {
+    const clean = "tab" in rule ? { tab: rule.tab } : { from: rule.from, to: rule.to };
+    const key = columnKey(clean);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out.sort((a, b) => ("tab" in a) - ("tab" in b) || (a.tab ?? a.from) - (b.tab ?? b.from));
+}
+
+/** A rule as the editor describes it, counting from 1. */
+export function describeColumnRule(rule) {
+  return "tab" in rule
+    ? `Tab-separated column ${rule.tab + 1}`
+    : `Characters ${rule.from + 1}–${rule.to}`;
+}
+
+// Where each tab-separated field sits in the line.
+function tabFields(line) {
+  const fields = [];
+  let start = 0;
+  for (const part of line.split("\t")) {
+    fields.push({ start, end: start + part.length });
+    start += part.length + 1;
+  }
+  return fields;
+}
+
+/**
+ * The character ranges `rules` take out of `line` — for showing a dropped
+ * column in place. A tab-separated column's range is its field, without the
+ * tab either side.
+ */
+export function droppedColumnRanges(line, rules) {
+  const text = String(line ?? "");
+  const valid = (rules || []).filter((rule) => !columnRuleError(rule));
+  if (text.includes("\t")) {
+    const fields = tabFields(text);
+    return valid.filter((rule) => "tab" in rule && fields[rule.tab])
+      .map((rule) => fields[rule.tab])
+      .filter((f) => f.end > f.start);
+  }
+  return valid.filter((rule) => "from" in rule && rule.from < text.length)
+    .map((rule) => ({ start: rule.from, end: Math.min(rule.to, text.length) }));
+}
+
+/**
+ * `line` without the columns `rules` drop. Tab-separated fields go with
+ * their tab, so the fields either side stay one tab apart. Space-aligned
+ * columns close up to a single space, and leave nothing at either end.
+ */
+export function dropColumns(line, rules) {
+  const text = String(line ?? "");
+  if (!rules?.length) return text;
+  if (text.includes("\t")) {
+    const drop = new Set(rules.filter((rule) => !columnRuleError(rule) && "tab" in rule).map((rule) => rule.tab));
+    if (!drop.size) return text;
+    const parts = text.split("\t");
+    if (![...drop].some((i) => i < parts.length)) return text;
+    return parts.filter((_, i) => !drop.has(i)).join("\t");
+  }
+  const ranges = droppedColumnRanges(text, rules);
+  if (!ranges.length) return text;
+  const chars = [...text.split("")];
+  for (const { start, end } of ranges) for (let i = start; i < end; i++) chars[i] = "\u0000";
+  return chars.join("")
+    .replace(/^[ \u0000]*\u0000[ \u0000]*/, "")
+    .replace(/[ \u0000]*\u0000[ \u0000]*$/, "")
+    .replace(/ *\u0000[ \u0000]*/g, " ");
+}
+
+/**
+ * The rule(s) for a column selected in `line` (character offsets start–end).
+ *
+ * In a line with tabs, every field the selection touches. In a line without,
+ * the selected characters widened over the spaces either side, up to the
+ * neighbouring columns — so a value that is longer in another row, or aligned
+ * to the other edge, still falls inside the column.
+ */
+export function columnRulesFor(line, { start, end }) {
+  const text = String(line ?? "");
+  if (!(end > start)) return [];
+  if (text.includes("\t")) {
+    return tabFields(text)
+      .map((f, tab) => ({ ...f, tab }))
+      .filter((f) => f.start < end && start <= f.end && !(f.start === f.end && start !== f.start))
+      .map(({ tab }) => ({ tab }));
+  }
+  let from = start;
+  let to = end;
+  while (from > 0 && text[from - 1] === " ") from--;
+  while (to < text.length && text[to] === " ") to++;
+  return [{ from, to }];
+}
+
 /** Text to remove exactly as selected (whitespace inside it may vary). */
 export function exactPattern(text) {
   return String(text).trim().split(/\s+/).map(escapeRegex).join("\\s+");
@@ -835,16 +974,20 @@ export function patternError(pattern, { global = false } = {}) {
 
 /**
  * What a cleanup does to a document, for the editor's preview and for the
- * rows step to work on. `cleanup` is `{ drop: [pattern], strip: [pattern] }`.
+ * rows step to work on. `cleanup` is
+ * `{ drop: [pattern], strip: [pattern], columns: [column rule] }`.
  * Returns the cleaned lines (a dropped line becomes ""), which lines each
  * rule touched, and the before/after of every changed line. Removals apply
- * only to speaker-info and main lines, and never to marker lines.
+ * only to speaker-info and main lines, and never to marker lines; dropped
+ * columns only to main lines, before the removals.
  */
 export function applyCleanup(lines, roles, markers, cleanup) {
   const drop = (cleanup?.drop || []).map((p) => (patternError(p) ? null : new RegExp(p.trim(), "u")));
   const strip = (cleanup?.strip || []).map((p) => (patternError(p, { global: true }) ? null : new RegExp(p.trim(), "gu")));
   const dropHits = drop.map(() => []);
   const stripHits = strip.map(() => []);
+  const columns = (cleanup?.columns || []).map((rule) => (columnRuleError(rule) ? null : rule));
+  const columnHits = columns.map(() => []);
   const changes = [];
   const cleaned = lines.map((raw, index) => {
     const line = String(raw ?? "");
@@ -857,6 +1000,12 @@ export function applyCleanup(lines, roles, markers, cleanup) {
     }
     if (markers[index] || (roles[index] !== "speakers" && roles[index] !== "main")) return line;
     let out = line;
+    if (roles[index] === "main" && columns.some(Boolean)) {
+      columns.forEach((rule, i) => {
+        if (rule && dropColumns(line, [rule]) !== line) columnHits[i].push(index);
+      });
+      out = dropColumns(line, columns.filter(Boolean));
+    }
     strip.forEach((re, i) => {
       if (!re) return;
       const next = removeAll(out, re);
@@ -866,7 +1015,7 @@ export function applyCleanup(lines, roles, markers, cleanup) {
     if (out !== line) changes.push({ index, before: line, after: out });
     return out;
   });
-  return { lines: cleaned, dropHits, stripHits, changes };
+  return { lines: cleaned, dropHits, stripHits, columnHits, changes };
 }
 
 // ---------------------------------------------------------------------------
@@ -983,7 +1132,10 @@ export async function loadSavedGrammar(dirHandle, name, readFileTextFromDirector
 export function grammarFingerprint(grammar) {
   const { regions, ignore, headerField, speakerRow, turnRow } = grammar || {};
   const strip = (row) => (row ? { pattern: row.pattern, flags: row.flags, rowStart: row.rowStart ?? null } : null);
-  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow)]);
+  // Dropped columns count only when there are some, so a grammar saved
+  // before they existed keeps the fingerprint it had.
+  const columns = grammar?.dropColumns?.length ? [grammar.dropColumns] : [];
+  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow), ...columns]);
   // FNV-1a, 32-bit. Collisions only matter as a missed "grammar changed"
   // warning, and a person saving grammars is not an adversary.
   let hash = 0x811c9dc5;

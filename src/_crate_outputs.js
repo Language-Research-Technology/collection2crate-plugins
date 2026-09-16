@@ -59,6 +59,46 @@ export function removeOutputEntities(crate, dirs) {
   return doomed.length + orphans;
 }
 
+/**
+ * Replace entities an earlier build gave a "./"-prefixed @id ("./_outputs/…")
+ * with the plain folder-relative id, keeping every reference pointing at
+ * them. A loaded crate resolves "_outputs/chat/x.cha" to the file but not
+ * "./_outputs/chat/x.cha". In place.
+ *
+ * @param {ROCrate} crate
+ * @param {string[]} ids  the plain ids, e.g. "_outputs/chat/x.cha"
+ * @returns {number} how many entities were replaced
+ */
+export function replaceDotSlashIds(crate, ids) {
+  if (!crate) return 0;
+  let replaced = 0;
+  for (const id of ids) {
+    const legacy = `./${normalise(id)}`;
+    const old = crate.getEntity(legacy);
+    if (!old) continue;
+    const { "@id": _, ...values } = old.toJSON ? old.toJSON() : { ...old };
+    const referrers = [];
+    for (const entity of crate.getGraph()) {
+      for (const key of Object.keys(entity)) {
+        if (key === "@id" || key === "@type") continue;
+        if ([].concat(entity[key] ?? []).some((v) => v && typeof v === "object" && v["@id"] === legacy)) {
+          referrers.push([entity["@id"], key]);
+        }
+      }
+    }
+    removeWithReferences(crate, legacy);
+    if (!crate.hasEntity(id)) crate.addEntity({ "@id": id, ...values });
+    for (const [entityId, key] of referrers) {
+      const entity = crate.getEntity(entityId === legacy ? id : entityId);
+      if (!entity) continue;
+      const values = [].concat(entity[key] ?? []);
+      if (!values.some((v) => v && typeof v === "object" && v["@id"] === id)) entity[key] = [...values, { "@id": id }];
+    }
+    replaced++;
+  }
+  return replaced;
+}
+
 function removeWithReferences(crate, id) {
   crate.deleteEntity(id);
   for (const entity of crate.getGraph()) {

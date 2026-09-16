@@ -141,16 +141,31 @@ const chatCtx = (crate, options = {}) => ({
 await check("ticked: the .cha is added", async () => {
   const crate = new ROCrate({ array: true, link: true });
   await REGISTRY["chat-export"](deps).hooks["crate:build"].handler(chatCtx(crate, { [CHAT_KEY]: true }));
-  assert.ok(crate.getEntity("./_outputs/chat/interview.cha"));
+  assert.ok(crate.getEntity("_outputs/chat/interview.cha"));
+  assert.equal(crate.getGraph().some((e) => e["@id"].startsWith("./_outputs")), false, "no ./ ids");
+});
+
+await check("ticked: an earlier build's ./ id is replaced by the plain one, references kept", async () => {
+  const crate = new ROCrate({ array: true, link: true });
+  crate.rootDataset.hasPart = [{ "@id": "./_outputs/chat/interview.cha" }];
+  crate.addEntity({ "@id": "#interview", "@type": "RepositoryObject", hasPart: [{ "@id": "interview.docx" }, { "@id": "./_outputs/chat/interview.cha" }] });
+  crate.addEntity({ "@id": "./_outputs/chat/interview.cha", "@type": "File", name: "interview.cha", encodingFormat: "text/plain", isPartOf: { "@id": "#interview" } });
+  await REGISTRY["chat-export"](deps).hooks["crate:build"].handler(chatCtx(crate, { [CHAT_KEY]: true }));
+  const ids = crate.getGraph().map((e) => e["@id"]);
+  assert.ok(ids.includes("_outputs/chat/interview.cha"));
+  assert.ok(!ids.includes("./_outputs/chat/interview.cha"));
+  assert.deepEqual(refs(crate.getEntity("#interview").hasPart), ["interview.docx", "_outputs/chat/interview.cha"]);
+  assert.deepEqual(refs(crate.rootDataset.hasPart), ["_outputs/chat/interview.cha"]);
+  assert.deepEqual(refs(crate.getEntity("_outputs/chat/interview.cha").isPartOf), ["#interview"]);
 });
 
 await check("unticked: nothing is added, and an earlier build's .cha entity is removed", async () => {
   const crate = new ROCrate({ array: true, link: true });
   const handler = REGISTRY["chat-export"](deps).hooks["crate:build"].handler;
   await handler(chatCtx(crate, { [CHAT_KEY]: true }));
-  crate.rootDataset.hasPart = [{ "@id": "./_outputs/chat/interview.cha" }];
+  crate.rootDataset.hasPart = [{ "@id": "_outputs/chat/interview.cha" }];
   await handler(chatCtx(crate, { [CHAT_KEY]: false }));
-  assert.equal(crate.getEntity("./_outputs/chat/interview.cha"), undefined);
+  assert.equal(crate.getEntity("_outputs/chat/interview.cha"), undefined);
   assert.equal(crate.rootDataset.hasPart, undefined);
 });
 

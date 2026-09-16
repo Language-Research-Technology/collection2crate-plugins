@@ -341,7 +341,11 @@ the transcript processing option:
 - **Define a transcript grammar…** — paste a transcript or choose a `.txt` /
   `.docx`; mark line ranges as **header metadata**, **speaker info** or
   **main** (plus marker lines such as `Speakers:` or `PRELIMINARIES`, and lines
-  to ignore); then, in individual rows, select characters and mark them as a
+  to ignore); in a **cleanup** step, build rules for lines to skip (a
+  timestamp line "and every line like it") and text to remove from rows
+  wherever it appears (inline timecodes, markup — "exactly this" or "anything
+  shaped like this"), with a before/after preview; then, in individual cleaned
+  rows, select characters and mark them as a
   speaker's code / name / alternate name / affiliation / id, or a turn's
   number / speaker / text. Fixed text every row has but nobody wants kept —
   a tag like `<u speaker=`, the `>` after a name, a `[05:36]` timestamp — is
@@ -355,7 +359,7 @@ the transcript processing option:
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group
 regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
-markers, section names and ignore patterns. Only the shape of the sample is
+markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read). Only the shape of the sample is
 kept — delimiters, brackets, which fields are optional — never its text,
 since the rows marked up are real speaker declarations. `parseWithGrammar(text,
 grammar)` is pure; it and the folder helpers live in

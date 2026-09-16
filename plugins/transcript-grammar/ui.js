@@ -1,11 +1,14 @@
-// The transcript grammar editor: three dialogs in sequence, each an ordinary
+// The transcript grammar editor: four dialogs in sequence, each an ordinary
 // openModal (collection2crate SPEC.md §6.2) whose footer carries Back / Next.
 //
 //   1. Source   — paste a transcript or choose a file, and name the grammar.
 //   2. Regions  — mark line ranges as header metadata, speaker info or main,
 //                 flag the marker lines ("Speakers:", "PRELIMINARIES"), and
 //                 flag lines to ignore ("END OF TRANSCRIPT").
-//   3. Rows     — select characters inside sample rows and say what they are:
+//   3. Cleanup  — rules for lines to skip and text to remove from rows,
+//                 with a before/after preview of the whole document.
+//   4. Rows     — select characters inside the cleaned sample rows and say
+//                 what they are:
 //                 a speaker's code / name / alternate name / affiliation / id,
 //                 or a turn's number / speaker / text. The generated patterns
 //                 are re-run over the whole document on every change, so the
@@ -19,7 +22,8 @@
 import { element, button, field, dataTable } from "../../src/_panel.js";
 import {
   REGIONS, IGNORE, SPEAKER_FIELDS, TURN_FIELDS, HEADER_FIELD_PATTERN,
-  DEFAULT_GRAMMAR, IGNORE_FIELD, buildGrammar, buildRowPattern, checkRegionOrder,
+  DEFAULT_GRAMMAR, IGNORE_FIELD, applyCleanup, buildGrammar, buildRegions, exactPattern,
+  ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines,
 } from "../../src/_transcript_grammar.js";
 
@@ -98,6 +102,9 @@ function ensureStyle() {
 .tg-summary .ok { color: var(--ok); } .tg-summary .warn { color: var(--warn); }
 .tg-unmatched { font-family: var(--mono); font-size: 12px; white-space: pre; color: var(--warn); margin: 4px 0; }
 .tg-section-title { font-size: 14px; margin: 14px 0 6px; }
+.tg-toolbar input[type="text"] { flex: 1; width: auto; min-width: 14em; }
+.tg-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin-bottom: 6px; }
+.tg-rule .field-hint { margin: 0; white-space: nowrap; }
 .tg-optional { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 ${fieldRules}
 `;
@@ -148,7 +155,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
   });
 
   const result = await openModal({
-    title: "Transcript grammar — 1 of 3: source document",
+    title: "Transcript grammar — 1 of 4: source document",
     modalClassName: MODAL_CLASS,
     onMount(body) {
       ensureStyle();
@@ -195,6 +202,13 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.speakerSamples = null;
     state.turnSamples = null;
     state.optional = { speakerRow: [], turnRow: [] };
+    // A saved grammar brings its cleanup rules with it.
+    state.cleanup = {
+      drop: [...(base?.ignore || [])],
+      strip: (base?.strip || []).map((r) => r.pattern),
+      seen: new Set(base?.ignore || []),
+    };
+    state.clean = null;
   }
   return { nav: "next" };
 }
@@ -313,7 +327,7 @@ async function regionStep(state, { openModal, error }) {
   };
 
   const result = await openModal({
-    title: "Transcript grammar — 2 of 3: regions",
+    title: "Transcript grammar — 2 of 4: regions",
     modalClassName: MODAL_CLASS,
     onMount(body) {
       ensureStyle();
@@ -338,7 +352,7 @@ async function regionStep(state, { openModal, error }) {
     actions: [
       { label: "Cancel", value: null },
       { label: "Back", value: () => ({ nav: "back" }) },
-      { label: "Next: rows", primary: true, value: () => ({ nav: "next" }) },
+      { label: "Next: cleanup", primary: true, value: () => ({ nav: "next" }) },
     ],
   });
   document.removeEventListener("mouseup", stopDrag);
@@ -356,7 +370,207 @@ async function regionStep(state, { openModal, error }) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — rows
+// Step 3 — cleanup
+// ---------------------------------------------------------------------------
+//
+// Two kinds of rule, both saved with the grammar and applied before rows are
+// read: lines to skip altogether (timestamps between turns, "END OF
+// TRANSCRIPT"), and text to remove from speaker and main lines (inline
+// timecodes, markup). The rows step then works on the cleaned lines, so the
+// fields are marked on text that looks the way the parser will see it.
+
+const CLEANUP_PREVIEW_CAP = 60;
+
+function cleanupRuleList({ rules, hits, describeHit, onChange, global, emptyText }) {
+  const list = element("div");
+  const draw = () => {
+    list.replaceChildren();
+    if (!rules.length) list.append(element("p", { className: "empty-note", text: emptyText }));
+    rules.forEach((pattern, i) => {
+      const input = element("input", { className: "mono", attrs: { type: "text", value: pattern, spellcheck: "false", "aria-label": `Rule ${i + 1}` } });
+      const status = element("span", { className: "field-hint" });
+      const problem = patternError(pattern, { global });
+      status.textContent = problem ? `✕ ${problem}` : describeHit(hits()[i] || []);
+      status.style.color = problem ? "var(--err)" : "";
+      input.addEventListener("change", () => { rules[i] = input.value; onChange(); });
+      const remove = button("Remove", { onClick: () => { rules.splice(i, 1); onChange(true, pattern); } });
+      list.append(element("div", { className: "tg-rule" }, [input, status, remove]));
+    });
+  };
+  return { node: list, draw };
+}
+
+async function cleanupStep(state, { openModal, error }) {
+  const { lines, roles, markers } = state;
+  const cleanup = state.cleanup || (state.cleanup = { drop: [], strip: [], seen: new Set() });
+  // Lines marked Ignore in the regions step become skip rules — once each, so
+  // a rule removed here is not brought back by returning to this step.
+  for (const pattern of buildRegions(lines, roles, markers).ignore) {
+    if (cleanup.seen.has(pattern)) continue;
+    cleanup.seen.add(pattern);
+    if (!cleanup.drop.includes(pattern)) cleanup.drop.push(pattern);
+  }
+
+  let result = applyCleanup(lines, roles, markers, cleanup);
+  const preview = element("div", { attrs: { "aria-live": "polite" } });
+  const summary = element("p", { className: "tg-summary" });
+
+  const dropList = cleanupRuleList({
+    rules: cleanup.drop,
+    hits: () => result.dropHits,
+    describeHit: (hit) => (hit.length ? `skips ${hit.length} line(s): ${hit.slice(0, 6).map((i) => i + 1).join(", ")}${hit.length > 6 ? "…" : ""}` : "matches no line"),
+    onChange: () => refresh(),
+    global: false,
+    emptyText: "No lines are skipped.",
+  });
+  const stripList = cleanupRuleList({
+    rules: cleanup.strip,
+    hits: () => result.stripHits,
+    describeHit: (hit) => (hit.length ? `changes ${hit.length} line(s)` : "changes no line"),
+    onChange: () => refresh(),
+    global: true,
+    emptyText: "Nothing is removed from rows.",
+  });
+
+  // Adding a skip rule from a line.
+  const skipPicker = element("select", { attrs: { "aria-label": "Line to skip" } });
+  const fillSkipPicker = () => {
+    skipPicker.replaceChildren(...lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line, index }) => line.trim() && !markers[index] && !result.changes.some((c) => c.index === index && c.after === null))
+      .map(({ line, index }) => element("option", { text: `${index + 1}: ${truncate(shown(line))}`, attrs: { value: index } })));
+  };
+  const addSkip = (make) => {
+    if (!skipPicker.value) return;
+    const pattern = make(lines[Number(skipPicker.value)]);
+    if (!cleanup.drop.includes(pattern)) cleanup.drop.push(pattern);
+    refresh();
+  };
+
+  // Adding a removal from a selection in a sample line.
+  const rowLines = () => lines
+    .map((line, index) => ({ line: result.lines[index], index }))
+    .filter(({ line, index }) => line.trim() && !markers[index] && (roles[index] === "speakers" || roles[index] === "main"));
+  const samplePicker = element("select", { attrs: { "aria-label": "Line to select text in" } });
+  const sampleStrip = element("div", { className: "tg-strip", attrs: { tabindex: "0" } });
+  const stripHint = element("span", { className: "field-hint", text: "Select text in the line, then choose how to remove it." });
+  let sampleText = "";
+  const showSample = () => {
+    sampleText = samplePicker.value === "" ? "" : result.lines[Number(samplePicker.value)];
+    renderStrip(sampleStrip, { line: sampleText, spans: [] });
+  };
+  const fillSamplePicker = () => {
+    const keep = samplePicker.value;
+    samplePicker.replaceChildren(...rowLines().map(({ line, index }) => element("option", { text: `${index + 1}: ${truncate(shown(line))}`, attrs: { value: index } })));
+    if ([...samplePicker.options].some((o) => o.value === keep)) samplePicker.value = keep;
+    showSample();
+  };
+  samplePicker.addEventListener("change", showSample);
+  const selection = selectionTracker(sampleStrip, () => sampleText);
+  const addRemoval = (make, how) => {
+    const range = selection.take();
+    if (!range) { stripHint.textContent = "Select part of the line first."; return; }
+    const text = sampleText.slice(range.start, range.end);
+    const pattern = make(text);
+    if (!cleanup.strip.includes(pattern)) cleanup.strip.push(pattern);
+    stripHint.textContent = `Removing "${text}" ${how}.`;
+    refresh();
+  };
+
+  const customInput = (rules, global, label) => {
+    const input = element("input", { className: "mono", attrs: { type: "text", spellcheck: "false", placeholder: "or type a regular expression", "aria-label": label } });
+    const add = button("Add", {
+      onClick: () => {
+        const problem = patternError(input.value, { global });
+        if (problem) { input.setCustomValidity(problem); input.reportValidity(); return; }
+        input.setCustomValidity("");
+        if (!rules.includes(input.value)) rules.push(input.value);
+        input.value = "";
+        refresh();
+      },
+    });
+    return [input, add];
+  };
+
+  function refresh() {
+    result = applyCleanup(lines, roles, markers, cleanup);
+    dropList.draw();
+    stripList.draw();
+    fillSkipPicker();
+    fillSamplePicker();
+    const dropped = result.changes.filter((c) => c.after === null).length;
+    const edited = result.changes.length - dropped;
+    summary.textContent = `${dropped} line(s) skipped · ${edited} line(s) changed`;
+    preview.replaceChildren(...result.changes.slice(0, CLEANUP_PREVIEW_CAP).map((c) => element("div", {
+      className: "tg-unmatched",
+      attrs: { style: c.after === null ? "color: var(--muted); text-decoration: line-through" : "color: var(--text)" },
+      text: c.after === null ? `${c.index + 1}: ${shown(c.before)}` : `${c.index + 1}: ${shown(c.before)}  ⟶  ${shown(c.after)}`,
+    })));
+    if (result.changes.length > CLEANUP_PREVIEW_CAP) preview.append(element("p", { className: "field-hint", text: `…and ${result.changes.length - CLEANUP_PREVIEW_CAP} more.` }));
+  }
+
+  const outcome = await openModal({
+    title: "Transcript grammar — 3 of 4: cleanup",
+    modalClassName: MODAL_CLASS,
+    onMount(body) {
+      ensureStyle();
+      if (error) body.append(element("p", { className: "tg-error", text: error }));
+      body.append(
+        element("p", { className: "field-hint", text: "Rules applied before rows are read, and saved with the grammar. Digits in a rule made from a line or a shape match any digits." }),
+
+        element("h3", { className: "tg-section-title", text: "Lines to skip" }),
+        element("p", { className: "field-hint", text: "Whole lines the parser steps over wherever they appear — timestamps between turns, page furniture, \"END OF TRANSCRIPT\". Lines marked Ignore in the regions step start out here." }),
+        dropList.node,
+        element("div", { className: "tg-toolbar" }, [
+          skipPicker,
+          button("Skip lines like this", { onClick: () => addSkip(ignoreLinePattern), title: "Digits match any digits" }),
+          button("Skip exactly this line", { onClick: () => addSkip(literalLinePattern) }),
+        ]),
+        element("div", { className: "tg-toolbar" }, customInput(cleanup.drop, false, "Skip-line pattern")),
+
+        element("h3", { className: "tg-section-title", text: "Text to remove from rows" }),
+        element("p", { className: "field-hint", text: "Removed from speaker-info and main lines wherever it appears — inline timecodes, markup, notes — before the rows step. Select it in a line below." }),
+        stripList.node,
+        element("div", { className: "tg-toolbar" }, [samplePicker]),
+        sampleStrip,
+        element("div", { className: "tg-toolbar" }, [
+          stripHint,
+          keepsSelection(button("Remove exactly this", { onClick: () => addRemoval(exactPattern, "wherever it appears as written") })),
+          keepsSelection(button("Remove anything shaped like this", { onClick: () => addRemoval(shapePattern, "and anything shaped like it"), title: "Digits match any digits and letters any letters; punctuation is kept" })),
+        ]),
+        element("div", { className: "tg-toolbar" }, customInput(cleanup.strip, true, "Removal pattern")),
+
+        element("h3", { className: "tg-section-title", text: "Effect on the sample" }),
+        summary,
+        preview,
+      );
+      refresh();
+    },
+    actions: [
+      { label: "Cancel", value: null },
+      { label: "Back", value: () => ({ nav: "back" }) },
+      { label: "Next: rows", primary: true, value: () => ({ nav: "next" }) },
+    ],
+  });
+  if (!outcome) return null;
+
+  const invalid = [
+    ...cleanup.drop.map((p) => patternError(p)),
+    ...cleanup.strip.map((p) => patternError(p, { global: true })),
+  ].filter(Boolean);
+  if (outcome.nav === "next" && invalid.length) return { nav: "stay", error: `Fix the cleanup rules first: ${invalid.join("; ")}.` };
+
+  // The rows step works on the cleaned lines. A sample whose line the cleanup
+  // changed (or skipped) no longer shows what the pattern will read.
+  state.clean = applyCleanup(lines, roles, markers, cleanup);
+  for (const key of ["speakerSamples", "turnSamples"]) {
+    if (state[key]) state[key] = state[key].filter((sample) => state.clean.lines[sample.index] === sample.line);
+  }
+  return outcome;
+}
+
+// ---------------------------------------------------------------------------
+// Step 4 — rows
 // ---------------------------------------------------------------------------
 
 function offsetWithin(container, node, offset) {
@@ -387,17 +601,16 @@ function renderStrip(strip, sample) {
   }
 }
 
-// One marked-up row: the line as selectable text, and a button per field.
-function sampleCard(sample, fields, { onChange, onRemove }) {
-  const labelOf = (key) => [...fields, IGNORE_BUTTON].find((f) => f.key === key).label;
-  const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
-  const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
-
-  // The selection, read as character offsets into the line. A drag that runs
-  // past the end of the line (onto the padding, or down onto the buttons)
-  // ends outside the strip; it is clamped to the strip rather than rejected,
-  // which is what made "Text" — always the last field — so often do nothing.
-  const readSelection = () => {
+/**
+ * The selection inside a strip of text, as character offsets into that text.
+ *
+ * A drag that runs past the end of the line (onto the padding, or down onto
+ * the buttons) ends outside the strip; it is clamped to the strip rather than
+ * rejected. The selection is also remembered as it is made, so a click that
+ * disturbs the live selection still acts on what was selected.
+ */
+function selectionTracker(strip, getText) {
+  const read = () => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
     const range = sel.getRangeAt(0);
@@ -410,31 +623,27 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     const startAt = where(range.startContainer, range.startOffset);
     const endAt = where(range.endContainer, range.endOffset);
     if (startAt === null || endAt === null || startAt > 0 || endAt < 0) return null; // no overlap
-    const startsBefore = startAt < 0;
-    const endsAfter = endAt > 0;
-    let start = startsBefore ? 0 : offsetWithin(strip, range.startContainer, range.startOffset);
-    let end = endsAfter ? sample.line.length : offsetWithin(strip, range.endContainer, range.endOffset);
-    // Snap to the text: a selection dragged over the tab either side of a
-    // field is a selection of the field.
-    while (start < end && /\s/.test(sample.line[start])) start++;
-    while (end > start && /\s/.test(sample.line[end - 1])) end--;
+    const text = getText();
+    let start = startAt < 0 ? 0 : offsetWithin(strip, range.startContainer, range.startOffset);
+    let end = endAt > 0 ? text.length : offsetWithin(strip, range.endContainer, range.endOffset);
+    // Snap to the text: a selection dragged over the whitespace either side
+    // of a field is a selection of the field.
+    while (start < end && /\s/.test(text[start])) start++;
+    while (end > start && /\s/.test(text[end - 1])) end--;
     return end > start ? { start, end } : null;
   };
 
-  // Remembered as the person selects, so a click that disturbs the live
-  // selection (a browser that clears it on mousedown, a click that lands a
-  // pixel off the button) still marks what they selected.
   let pending = null;
   let wasConnected = false;
   const remember = () => {
-    // The card is rebuilt when rows are added or removed and gone when the
-    // dialog closes; a detached strip stops listening.
+    // A strip is rebuilt when rows change and gone when the dialog closes; a
+    // detached strip stops listening.
     if (!strip.isConnected) {
       if (wasConnected) document.removeEventListener("selectionchange", remember);
       return;
     }
     wasConnected = true;
-    const now = readSelection();
+    const now = read();
     if (now) pending = now;
     else if (window.getSelection()?.isCollapsed === false) pending = null; // selected elsewhere
   };
@@ -442,11 +651,33 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   strip.addEventListener("keyup", remember);
   document.addEventListener("selectionchange", remember);
 
-  const selectedRange = () => readSelection() || pending;
+  return {
+    /** The current (or last) selection, consumed: it is cleared afterwards. */
+    take() {
+      const range = read() || pending;
+      pending = null;
+      if (range) window.getSelection().removeAllRanges();
+      return range;
+    },
+  };
+}
+
+// A button that acts on a text selection must not take the selection away.
+const keepsSelection = (node) => {
+  node.addEventListener("mousedown", (e) => e.preventDefault());
+  return node;
+};
+
+// One marked-up row: the line as selectable text, and a button per field.
+function sampleCard(sample, fields, { onChange, onRemove }) {
+  const labelOf = (key) => [...fields, IGNORE_BUTTON].find((f) => f.key === key).label;
+  const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
+  const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
+
+  const selection = selectionTracker(strip, () => sample.line);
 
   const mark = (field) => {
-    const range = selectedRange();
-    pending = null;
+    const range = selection.take();
     if (!range) {
       hint.textContent = `Select part of line ${sample.index + 1} first, then choose "${labelOf(field)}".`;
       return;
@@ -454,7 +685,6 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     // A row has one of each field but may have several ignored runs.
     sample.spans = sample.spans.filter((s) => (field === IGNORE_FIELD || s.field !== field) && (s.end <= range.start || s.start >= range.end));
     sample.spans.push({ field, ...range });
-    window.getSelection().removeAllRanges();
     hint.textContent = `Line ${sample.index + 1} — marked "${sample.line.slice(range.start, range.end)}" as ${labelOf(field).toLowerCase()}.`;
     renderStrip(strip, sample);
     onChange();
@@ -480,6 +710,9 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   ]);
 }
 
+// The lines rows are marked up on: cleaned, once the cleanup step has run.
+const rowLines = (state) => state.clean?.lines || state.lines;
+
 function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onChange }) {
   const wrap = element("div");
   const cards = element("div");
@@ -489,7 +722,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
   const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
 
-  const candidates = () => state.lines
+  const candidates = () => rowLines(state)
     .map((line, index) => ({ line, index }))
     .filter(({ line, index }) => state.roles[index] === region && !state.markers[index] && line.trim());
 
@@ -550,7 +783,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     onClick: () => {
       if (picker.disabled) return;
       const index = Number(picker.value);
-      state[samplesKey].push({ index, line: state.lines[index], spans: [] });
+      state[samplesKey].push({ index, line: rowLines(state)[index], spans: [] });
       state[samplesKey].sort((a, b) => a.index - b.index);
       drawCards();
       update();
@@ -616,7 +849,7 @@ function testPanel(state, region) {
         }
         unmatched.sort((a, b) => a.line - b.line);
       }
-      const total = state.lines.filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
+      const total = rowLines(state).filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
       const items = region === "speakers" ? parsed.speakers : parsed.turns.filter((t) => !t.malformed);
       const columns = region === "speakers"
         ? ["line", ...SPEAKER_FIELDS.map((f) => f.key)]
@@ -660,16 +893,17 @@ function currentGrammar(state) {
     speakerSamples: state.speakerSamples,
     turnSamples: state.turnSamples,
     optional: state.optional,
+    cleanup: state.cleanup,
   });
 }
 
 async function rowStep(state, { openModal, existing, error }) {
   const seed = state.base || DEFAULT_GRAMMAR;
   if (!state.speakerSamples) {
-    state.speakerSamples = suggestSamples(state.lines, state.roles, state.markers, "speakers", seed.speakerRow);
+    state.speakerSamples = suggestSamples(rowLines(state), state.roles, state.markers, "speakers", seed.speakerRow);
   }
   if (!state.turnSamples) {
-    state.turnSamples = suggestSamples(state.lines, state.roles, state.markers, "main", seed.turnRow);
+    state.turnSamples = suggestSamples(rowLines(state), state.roles, state.markers, "main", seed.turnRow);
   }
 
   const tabs = [
@@ -706,7 +940,7 @@ async function rowStep(state, { openModal, existing, error }) {
 
   const target = `_config/transcript-grammar/${state.name}.json`;
   const result = await openModal({
-    title: "Transcript grammar — 3 of 3: rows",
+    title: "Transcript grammar — 4 of 4: rows",
     modalClassName: MODAL_CLASS,
     onMount(body) {
       ensureStyle();
@@ -746,7 +980,7 @@ async function rowStep(state, { openModal, existing, error }) {
  */
 export async function openGrammarEditor({ openModal, grammars, loadGrammar, readDocument }) {
   const state = { name: "default", sourceName: "", lines: null, optional: { speakerRow: [], turnRow: [] } };
-  const steps = [sourceStep, regionStep, rowStep];
+  const steps = [sourceStep, regionStep, cleanupStep, rowStep];
   let step = 0;
   let error = null;
   for (;;) {

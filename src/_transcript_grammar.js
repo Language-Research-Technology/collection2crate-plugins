@@ -469,8 +469,12 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {} }) {
-  const { regions, ignore } = buildRegions(lines, roles, markers);
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null }) {
+  const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers);
+  // The cleanup step's rules, when there is one, replace the ignore patterns
+  // derived from lines marked Ignore (it starts from those, and may edit them).
+  const ignore = cleanup ? [...new Set(cleanup.drop.map((p) => p.trim()).filter(Boolean))] : markedIgnore;
+  const strip = cleanup ? cleanup.strip.map((p) => p.trim()).filter(Boolean).map((pattern) => ({ pattern, flags: "u" })) : [];
   const speakerRow = buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow });
   const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow });
   return {
@@ -478,6 +482,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
     name: name || "default",
     regions,
     ignore,
+    strip,
     headerField: { pattern: HEADER_FIELD_PATTERN, flags: "u" },
     speakerRow: withoutSampleText(speakerRow),
     turnRow: withoutSampleText(turnRow),
@@ -507,6 +512,7 @@ export function validateGrammar(grammar) {
   tryCompile("regions.main.start", grammar.regions?.main?.start);
   tryCompile("regions.main.sectionPattern", grammar.regions?.main?.sectionPattern);
   (grammar.ignore || []).forEach((p, i) => tryCompile(`ignore[${i}]`, p));
+  (grammar.strip || []).forEach((s, i) => tryCompile(`strip[${i}]`, s?.pattern, s?.flags));
   return problems;
 }
 
@@ -522,6 +528,7 @@ function compile(grammar) {
     mainStart: plain(grammar.regions?.main?.start),
     section: plain(grammar.regions?.main?.sectionPattern),
     ignore: (grammar.ignore || []).map(plain),
+    strip: compileStrip(grammar.strip),
   };
 }
 
@@ -564,11 +571,14 @@ export function parseWithGrammar(input, grammar) {
       result.ignored.push({ line: lineNumber, text: line });
       return note(index, IGNORE);
     }
+    // Row shapes were marked up on cleaned lines, so rows are read from the
+    // line with the cleanup step's removals applied. Markers are read as is.
+    const rowLine = applyStrip(line, re.strip);
 
     // Region boundaries: a declared start marker when there is one, otherwise
     // the first line of the next region's row shape.
     if (region === "header") {
-      const starts = re.speakersStart ? re.speakersStart.test(line) : !!re.speakerRow?.test(line);
+      const starts = re.speakersStart ? re.speakersStart.test(line) : !!re.speakerRow?.test(rowLine);
       if (starts) {
         region = "speakers";
         if (re.speakersStart) return note(index, "speakers:marker");
@@ -578,11 +588,11 @@ export function parseWithGrammar(input, grammar) {
       const starts = re.mainStart
         ? re.mainStart.test(line)
         : region === "speakers"
-          ? !!re.turnRow?.test(line) && !re.speakerRow?.test(line)
+          ? !!re.turnRow?.test(rowLine) && !re.speakerRow?.test(rowLine)
           // No speaker block in this grammar: the header ends at the first
           // row. A turn row is the more specific shape, so it wins over the
           // generic "Key: value" a header line is read with.
-          : !re.speakerRow && !re.speakersStart && !!re.turnRow?.test(line);
+          : !re.speakerRow && !re.speakersStart && !!re.turnRow?.test(rowLine);
       if (starts) {
         region = "main";
         if (re.mainStart) {
@@ -612,8 +622,13 @@ export function parseWithGrammar(input, grammar) {
       return note(index, "header:unmatched");
     }
 
+    if ((region === "speakers" || region === "main") && !rowLine.trim()) {
+      result.ignored.push({ line: lineNumber, text: line });
+      return note(index, IGNORE);
+    }
+
     if (region === "speakers") {
-      const m = re.speakerRow && line.match(re.speakerRow);
+      const m = re.speakerRow && rowLine.match(re.speakerRow);
       if (m) {
         result.speakers.push({ line: lineNumber, ...cleanGroups(m.groups) });
         return note(index, "speakers");
@@ -622,7 +637,7 @@ export function parseWithGrammar(input, grammar) {
       return note(index, "speakers:unmatched");
     }
 
-    const m = re.turnRow && line.match(re.turnRow);
+    const m = re.turnRow && rowLine.match(re.turnRow);
     if (m) {
       openTurn = { line: lineNumber, section, ...cleanGroups(m.groups) };
       result.turns.push(openTurn);
@@ -631,9 +646,9 @@ export function parseWithGrammar(input, grammar) {
     // A line that is not a row is the wrapped tail of the one above — as long
     // as there is one above, and it doesn't open like a row itself. It is
     // recorded, never folded silently.
-    const looksLikeRow = !!re.turnRowStart?.test(line);
+    const looksLikeRow = !!re.turnRowStart?.test(rowLine);
     if (openTurn && "text" in openTurn && !looksLikeRow) {
-      openTurn.text = `${openTurn.text} ${line.trim()}`.trim();
+      openTurn.text = `${openTurn.text} ${rowLine.trim()}`.trim();
       result.continuations.push({ line: lineNumber, into: openTurn.line, text: line });
       return note(index, "main:continuation");
     }
@@ -642,10 +657,10 @@ export function parseWithGrammar(input, grammar) {
       // the built-in reader treats one — kept with no speaker, so the gap
       // shows in the CSV, and flagged. Lines after it fold into it, not into
       // the turn before it.
-      const start = line.match(re.turnRowStart)[0];
+      const start = rowLine.match(re.turnRowStart)[0];
       openTurn = {
         line: lineNumber, section, turn: (start.match(/\d+/) || [""])[0], speaker: "",
-        text: line.slice(start.length).replace(/\s+/g, " ").trim(), malformed: true,
+        text: rowLine.slice(start.length).replace(/\s+/g, " ").trim(), malformed: true,
       };
       result.turns.push(openTurn);
       return note(index, "main:malformed");
@@ -705,6 +720,101 @@ function fillBlanks(lines, roles, markers) {
     roles[i] = last;
   });
   return { roles, markers };
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup: lines to skip, and text to remove from rows before they are read
+// ---------------------------------------------------------------------------
+
+function compileStrip(strip) {
+  return (strip || [])
+    .map((s) => (typeof s === "string" ? { pattern: s } : s))
+    .filter((s) => s?.pattern)
+    .map((s) => new RegExp(s.pattern, `${(s.flags || "u").replace("g", "")}g`));
+}
+
+// A removal leaves the spaces either side of it; they close up to one. Tabs
+// are left alone — a tab can be structure.
+const removeAll = (line, re) => {
+  const marked = line.replace(re, "\u0000");
+  if (marked === line) return line;
+  return marked
+    .replace(/^ *\u0000[ \u0000]*/, "")
+    .replace(/[ \u0000]*\u0000 *$/, "")
+    .replace(/ *\u0000[ \u0000]*/g, (m) => (/^ | $/.test(m) ? " " : ""));
+};
+
+function applyStrip(line, regexes) {
+  let out = line;
+  for (const re of regexes) out = removeAll(out, re);
+  return out;
+}
+
+/** Text to remove exactly as selected (whitespace inside it may vary). */
+export function exactPattern(text) {
+  return String(text).trim().split(/\s+/).map(escapeRegex).join("\\s+");
+}
+
+/**
+ * Text to remove wherever something shaped like it appears: digits stand for
+ * any digits and letters for any letters, punctuation is kept. "[05:36]"
+ * becomes \[\d+:\d+\], "(laughs)" becomes \(\p{L}+\).
+ */
+export function shapePattern(text) {
+  return String(text).trim().split(/(\d+|\p{L}+|\s+)/u).filter(Boolean).map((part) => {
+    if (/^\d+$/.test(part)) return "\\d+";
+    if (/^\p{L}+$/u.test(part)) return "\\p{L}+";
+    if (/^\s+$/.test(part)) return "\\s+";
+    return escapeRegex(part);
+  }).join("");
+}
+
+/** Compile one pattern the person typed; returns an error message or null. */
+export function patternError(pattern, { global = false } = {}) {
+  if (!String(pattern || "").trim()) return "empty pattern";
+  try {
+    const re = new RegExp(pattern, global ? "gu" : "u");
+    if (global && re.test("")) return "matches empty text, so it would remove nothing and loop";
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+}
+
+/**
+ * What a cleanup does to a document, for the editor's preview and for the
+ * rows step to work on. `cleanup` is `{ drop: [pattern], strip: [pattern] }`.
+ * Returns the cleaned lines (a dropped line becomes ""), which lines each
+ * rule touched, and the before/after of every changed line. Removals apply
+ * only to speaker-info and main lines, and never to marker lines.
+ */
+export function applyCleanup(lines, roles, markers, cleanup) {
+  const drop = (cleanup?.drop || []).map((p) => (patternError(p) ? null : new RegExp(p.trim(), "u")));
+  const strip = (cleanup?.strip || []).map((p) => (patternError(p, { global: true }) ? null : new RegExp(p.trim(), "gu")));
+  const dropHits = drop.map(() => []);
+  const stripHits = strip.map(() => []);
+  const changes = [];
+  const cleaned = lines.map((raw, index) => {
+    const line = String(raw ?? "");
+    if (!line.trim()) return line;
+    const hit = drop.findIndex((re) => re?.test(line));
+    if (hit >= 0) {
+      dropHits[hit].push(index);
+      changes.push({ index, before: line, after: null });
+      return "";
+    }
+    if (markers[index] || (roles[index] !== "speakers" && roles[index] !== "main")) return line;
+    let out = line;
+    strip.forEach((re, i) => {
+      if (!re) return;
+      const next = removeAll(out, re);
+      if (next !== out) stripHits[i].push(index);
+      out = next;
+    });
+    if (out !== line) changes.push({ index, before: line, after: out });
+    return out;
+  });
+  return { lines: cleaned, dropHits, stripHits, changes };
 }
 
 // ---------------------------------------------------------------------------

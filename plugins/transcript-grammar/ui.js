@@ -45,6 +45,11 @@ function ensureStyle() {
   style.id = "transcript-grammar-style";
   style.textContent = `
 .modal-panel.${MODAL_CLASS} { width: min(1100px, 96vw); }
+/* A fixed height: the host centres modals vertically, so a panel that grew and
+   shrank with the live results moved the row being marked out from under the
+   pointer between one selection and the next. */
+.modal-panel.${MODAL_CLASS}:has(.tg-sample) { height: 86vh; }
+.modal-panel.${MODAL_CLASS} .modal-body { flex: 1; }
 .tg-toolbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
 .tg-toolbar .field-hint { margin: 0 6px 0 0; }
 .tg-lines { font-family: var(--mono); font-size: 12.5px; border: 1px solid var(--border);
@@ -377,13 +382,27 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
   const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
 
-  const selectedRange = () => {
+  // The selection, read as character offsets into the line. A drag that runs
+  // past the end of the line (onto the padding, or down onto the buttons)
+  // ends outside the strip; it is clamped to the strip rather than rejected,
+  // which is what made "Text" — always the last field — so often do nothing.
+  const readSelection = () => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
     const range = sel.getRangeAt(0);
-    if (!strip.contains(range.startContainer) || !strip.contains(range.endContainer)) return null;
-    let start = offsetWithin(strip, range.startContainer, range.startOffset);
-    let end = offsetWithin(strip, range.endContainer, range.endOffset);
+    const whole = document.createRange();
+    whole.selectNodeContents(strip);
+    // -1 before the strip, 0 inside it, 1 after it.
+    const where = (node, offset) => {
+      try { return whole.comparePoint(node, offset); } catch { return null; }
+    };
+    const startAt = where(range.startContainer, range.startOffset);
+    const endAt = where(range.endContainer, range.endOffset);
+    if (startAt === null || endAt === null || startAt > 0 || endAt < 0) return null; // no overlap
+    const startsBefore = startAt < 0;
+    const endsAfter = endAt > 0;
+    let start = startsBefore ? 0 : offsetWithin(strip, range.startContainer, range.startOffset);
+    let end = endsAfter ? sample.line.length : offsetWithin(strip, range.endContainer, range.endOffset);
     // Snap to the text: a selection dragged over the tab either side of a
     // field is a selection of the field.
     while (start < end && /\s/.test(sample.line[start])) start++;
@@ -391,8 +410,32 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     return end > start ? { start, end } : null;
   };
 
+  // Remembered as the person selects, so a click that disturbs the live
+  // selection (a browser that clears it on mousedown, a click that lands a
+  // pixel off the button) still marks what they selected.
+  let pending = null;
+  let wasConnected = false;
+  const remember = () => {
+    // The card is rebuilt when rows are added or removed and gone when the
+    // dialog closes; a detached strip stops listening.
+    if (!strip.isConnected) {
+      if (wasConnected) document.removeEventListener("selectionchange", remember);
+      return;
+    }
+    wasConnected = true;
+    const now = readSelection();
+    if (now) pending = now;
+    else if (window.getSelection()?.isCollapsed === false) pending = null; // selected elsewhere
+  };
+  strip.addEventListener("mouseup", () => setTimeout(remember, 0));
+  strip.addEventListener("keyup", remember);
+  document.addEventListener("selectionchange", remember);
+
+  const selectedRange = () => readSelection() || pending;
+
   const mark = (field) => {
     const range = selectedRange();
+    pending = null;
     if (!range) {
       hint.textContent = `Select part of line ${sample.index + 1} first, then choose "${fields.find((f) => f.key === field).label}".`;
       return;
@@ -432,6 +475,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const optionalBox = element("div", { className: "tg-optional" });
   const patternBox = element("textarea", { className: "tg-pattern", attrs: { readonly: "", rows: 3, "aria-label": `${title} pattern` } });
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
+  const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
 
   const candidates = () => state.lines
     .map((line, index) => ({ line, index }))
@@ -465,6 +509,10 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
       errorBox.textContent = e.message;
     }
     patternBox.value = spec ? spec.pattern : "";
+    const loose = spec?.unmarked || [];
+    unmarkedBox.textContent = loose.length
+      ? `Not marked as any field: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there; mark it if it is a field.`
+      : "";
     optionalBox.replaceChildren();
     if (spec) {
       for (const f of spec.fields) {
@@ -504,6 +552,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     errorBox,
     element("h3", { className: "tg-section-title", text: "Generated pattern" }),
     patternBox,
+    unmarkedBox,
     optionalBox,
   );
   drawCards();
@@ -547,8 +596,16 @@ function testPanel(state, region) {
       }
       const parsed = parseWithGrammar(state.lines, grammar);
       const unmatched = parsed.unmatched.filter((u) => u.region === region);
+      // Rows that open with a turn number but don't match: kept, with no
+      // speaker — list them alongside the lines that matched nothing.
+      if (region === "main") {
+        for (const t of parsed.turns.filter((turn) => turn.malformed)) {
+          unmatched.push({ line: t.line, region, text: state.lines[t.line - 1], malformed: true });
+        }
+        unmatched.sort((a, b) => a.line - b.line);
+      }
       const total = state.lines.filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
-      const items = region === "speakers" ? parsed.speakers : parsed.turns;
+      const items = region === "speakers" ? parsed.speakers : parsed.turns.filter((t) => !t.malformed);
       const columns = region === "speakers"
         ? ["line", ...SPEAKER_FIELDS.map((f) => f.key)]
         : ["line", "section", ...TURN_FIELDS.map((f) => f.key)];
@@ -569,7 +626,7 @@ function testPanel(state, region) {
       box.replaceChildren(...[
         element("h3", { className: "tg-section-title", text: "What this parses in the sample" }),
         summary,
-        ...unmatched.slice(0, 50).map((u) => element("div", { className: "tg-unmatched", text: `${u.line}: ${shown(u.text)}` })),
+        ...unmatched.slice(0, 50).map((u) => element("div", { className: "tg-unmatched", text: `${u.line}: ${shown(u.text)}${u.malformed ? "   (kept as a row with no speaker)" : ""}` })),
         region === "main" && parsed.continuations.length
           ? element("details", {}, [
             element("summary", { className: "field-hint", text: "Continuation lines" }),
@@ -707,7 +764,7 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
       const source = file && !textarea.value.trim() ? file.name : "pasted text";
       const parsed = parseWithGrammar(lines, grammar);
       output.replaceChildren(...renderParse(parsed));
-      log?.(`transcript-grammar: ${grammarSelect.value} on ${source} — ${Object.keys(parsed.metadata).length} header field(s), ${parsed.speakers.length} speaker(s), ${parsed.turns.length} turn(s), ${parsed.unmatched.length} unmatched line(s).`, parsed.unmatched.length ? "warn" : "ok");
+      log?.(`transcript-grammar: ${grammarSelect.value} on ${source} — ${Object.keys(parsed.metadata).length} header field(s), ${parsed.speakers.length} speaker(s), ${parsed.turns.filter((t) => !t.malformed).length} turn(s), ${parsed.unmatched.length + parsed.turns.filter((t) => t.malformed).length} line(s) not matched.`, parsed.unmatched.length || parsed.turns.some((t) => t.malformed) ? "warn" : "ok");
     } catch (e) {
       output.replaceChildren(element("p", { className: "tg-error", text: e.message }));
     }
@@ -732,10 +789,13 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
 
 function renderParse(parsed) {
   const nodes = [];
-  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched`;
-  nodes.push(element("p", { className: "tg-summary" }, [element("span", { className: parsed.unmatched.length ? "warn" : "ok", text: summary })]));
-  for (const u of parsed.unmatched.slice(0, 100)) {
-    nodes.push(element("div", { className: "tg-unmatched", text: `${u.line} (${ROLE_LABELS[u.region]}): ${shown(u.text)}` }));
+  const malformed = parsed.turns.filter((t) => t.malformed);
+  const problems = [...parsed.unmatched, ...malformed.map((t) => ({ ...t, region: "main", malformed: true }))].sort((a, b) => a.line - b.line);
+  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length - malformed.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched · ${malformed.length} malformed row(s)`;
+  nodes.push(element("p", { className: "tg-summary" }, [element("span", { className: problems.length ? "warn" : "ok", text: summary })]));
+  for (const u of problems.slice(0, 100)) {
+    const text = u.malformed ? `${u.turn}… ${u.text}   (row with no speaker)` : shown(u.text);
+    nodes.push(element("div", { className: "tg-unmatched", text: `${u.line} (${ROLE_LABELS[u.region]}): ${text}` }));
   }
   const meta = dataTable(["Key", "Value"]);
   for (const [k, v] of Object.entries(parsed.metadata)) meta.body.append(element("tr", {}, [element("td", { text: k }), element("td", { text: truncate(v, 120) })]));

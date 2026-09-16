@@ -149,6 +149,26 @@ check("text left unmarked is never written into the pattern", () => {
   assert.ok(!JSON.stringify(grammar).includes("test text"), "unmarked sample text must not be saved");
 });
 
+check("ignored text is matched as written, digits aside, and never captured", () => {
+  const line = "[05:36] <u who=A> hello";
+  const spec = buildRowPattern([markup(line, [["ignore", "[05:36] <u who="], ["speaker", "A"], ["ignore", ">"], ["text", "hello"]])], TURN_FIELDS);
+  const re = new RegExp(spec.pattern, spec.flags);
+  assert.deepEqual({ ..."[12:01] <u who=Bo>hi there".match(re).groups }, { speaker: "Bo", text: "hi there" });
+  assert.equal(re.test("[12:01] <x who=Bo> hi"), false, "the fixed text is required");
+  assert.deepEqual(spec.unmarked, []);
+  assert.deepEqual(spec.fields.map((f) => f.key), ["speaker", "text"], "ignore is not a field");
+});
+
+check("a sample with only ignored text yields no pattern", () => {
+  assert.equal(buildRowPattern([markup("<u>", [["ignore", "<u>"]])], TURN_FIELDS), null);
+});
+
+check("an ignored line's digits match any digits", () => {
+  const { ignore } = buildRegions(["05:36-05:37"], ["ignore"], [false]);
+  assert.ok(new RegExp(ignore[0], "u").test("11:02-11:15"));
+  assert.equal(new RegExp(ignore[0], "u").test("11:02 - later"), false);
+});
+
 check("unicode codes and names parse", () => {
   const sample = markup("Ŋa:\tŊarri (Élder) #x1", [["code", "Ŋa"], ["name", "Ŋarri"], ["affiliation", "Élder"], ["id", "x1"]]);
   const spec = buildRowPattern([sample], SPEAKER_FIELDS);
@@ -191,7 +211,8 @@ check("regions out of order are reported once, and missing regions named", () =>
   const problems = checkRegionOrder(["header", "main", "speakers", "speakers"]);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /Line 3 is marked Speaker info but comes after Main/);
-  assert.deepEqual(checkRegionOrder(["header"]), ["No lines are marked Speaker info.", "No lines are marked Main."]);
+  assert.deepEqual(checkRegionOrder(["header"]), ["No lines are marked Main."]);
+  assert.deepEqual(checkRegionOrder(["header", "main"]), [], "speaker info is optional");
 });
 
 console.log("Parsing another document");

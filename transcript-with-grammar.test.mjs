@@ -171,6 +171,49 @@ await check("headerRows / footerRows still trim rows", async () => {
   assert.equal(rows.length, 2);
 });
 
+console.log("\nSpeakers named on every row, with fixed text ignored");
+
+// No speaker list: each turn carries its speaker inside a tag.
+const TAGGED = [
+  "Title: tagged-01",                              // 1
+  "00:01-00:02",                                   // 2  a timestamp, marked Ignore
+  "<u speaker=Kai> first line",                    // 3
+  "00:03-00:09",                                   // 4  a different timestamp, same shape
+  "<u speaker=Rin>second, no space",               // 5
+  "<u speaker=Kai> ここも",                        // 6
+];
+const taggedLines = documentLines(asDocx(TAGGED));
+const TAG = buildGrammar({
+  name: "tagged",
+  lines: taggedLines,
+  roles: ["header", "ignore", "main", "main", "main", "main"],
+  markers: taggedLines.map(() => false),
+  speakerSamples: [],
+  turnSamples: [markup(TAGGED[2], [["ignore", "<u speaker="], ["speaker", "Kai"], ["ignore", ">"], ["text", "first line"]])],
+});
+
+await check("the tag is matched as written and not captured; the space after it is optional", async () => {
+  assert.equal(TAG.speakerRow, null);
+  assert.match(TAG.turnRow.pattern, /^\^\[\\t \]\*<u\[\\t \]\+speaker=/);
+  const { rows } = await processTranscriptText(asDocx([...TAGGED, "<x speaker=Kai> wrong tag"]), { grammar: TAG });
+  assert.deepEqual(rows.slice(0, 2), [
+    { speakerID: "#Kai", text: "first line", section: "MAIN" },
+    { speakerID: "#Rin", text: "second, no space", section: "MAIN" },
+  ]);
+  assert.equal(rows.length, 3, "a different tag is not a row");
+  assert.equal(rows[2].text, "ここも <x speaker=Kai> wrong tag", "…so it folds into the turn above, and is reported");
+});
+
+await check("with no speaker list, the turns' speakers become the Person entities and none is 'undeclared'", async () => {
+  const result = await processTranscriptText(asDocx(TAGGED), { grammar: TAG, grammarName: "tagged" });
+  assert.deepEqual(buildSpeakerPersonEntities(result.speakerMap).map((p) => [p["@id"], p.name]), [["#Kai", "Kai"], ["#Rin", "Rin"]]);
+  assert.equal(result.bodyDiagnostics.filter((d) => d.issues.some((i) => i.kind === "speaker-code-undeclared")).length, 0);
+  assert.deepEqual(result.warnings, []);
+  assert.ok(result.log.includes('has no speaker rows; the speakers are the names the turns give (2 found)'));
+  assert.deepEqual(result.metadata, { Title: "tagged-01" });
+  assert.ok(result.log.includes("Ignored lines: 2, 4"), "an ignored timestamp line matches other timestamps too");
+});
+
 console.log("\nchat-export");
 
 await check("a CHAT file is generated from the grammar's reading", async () => {

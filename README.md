@@ -343,7 +343,12 @@ the transcript processing option:
   **main** (plus marker lines such as `Speakers:` or `PRELIMINARIES`, and lines
   to ignore); then, in individual rows, select characters and mark them as a
   speaker's code / name / alternate name / affiliation / id, or a turn's
-  number / speaker / text. The patterns are generated from that markup
+  number / speaker / text. Fixed text every row has but nobody wants kept —
+  a tag like `<u speaker=`, the `>` after a name, a `[05:36]` timestamp — is
+  marked **Ignore**: it is matched as written (digits match any digits) and
+  never captured. Letters left unmarked match anything, and the editor names
+  them so they can be marked. Speaker info is optional: in a format that names
+  the speaker on every row, the speakers are whoever the turns name. The patterns are generated from that markup
   (`grammar.js`'s `buildGrammar`) and re-run over the whole sample as you go,
   so you see what they parse and what they miss before saving.
 - **Test a transcript grammar…** — parse another document with a saved one.

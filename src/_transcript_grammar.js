@@ -76,6 +76,19 @@ export function literalLinePattern(line) {
 }
 
 /**
+ * A pattern for a line to step over. Like literalLinePattern, except that
+ * every run of digits matches any digits: a timestamp line marked Ignore
+ * ("05:36-05:37") then covers every timestamp, not just that one.
+ */
+export function ignoreLinePattern(line) {
+  const trimmed = String(line || "").trim();
+  const body = trimmed.split(/\s+/)
+    .map((word) => word.split(/(\d+)/).map((part) => (/^\d+$/.test(part) ? "\\d+" : escapeRegex(part))).join(""))
+    .join("\\s+");
+  return `^\\s*${body}\\s*$`;
+}
+
+/**
  * Split a document into the lines the editor shows and the parser reads.
  *
  * A .docx arrives as mammoth's raw text, where "\n\n" ends a paragraph and a
@@ -118,7 +131,7 @@ export function buildRegions(lines, roles, markers = []) {
     const trimmed = String(line || "").trim();
     if (!trimmed || !role) return;
     if (role === IGNORE) {
-      const pattern = literalLinePattern(trimmed);
+      const pattern = ignoreLinePattern(trimmed);
       if (!seen.has(pattern)) { seen.add(pattern); ignore.push(pattern); }
       return;
     }
@@ -159,9 +172,9 @@ export function checkRegionOrder(roles) {
     }
     furthest = Math.max(furthest, rank);
   });
-  for (const key of ["speakers", "main"]) {
-    if (!present.has(key)) problems.push(`No lines are marked ${regionLabel(key)}.`);
-  }
+  // Speaker info is optional: some formats name the speaker on every row
+  // ("<u speaker=X>") and declare nobody up front.
+  if (!present.has("main")) problems.push(`No lines are marked ${regionLabel("main")}.`);
   return problems;
 }
 
@@ -176,25 +189,48 @@ export const HEADER_FIELD_PATTERN = "^[\\t ]*(?<key>[^:\\t]{1,60}?)[\\t ]*:[\\t 
 // Rows
 // ---------------------------------------------------------------------------
 
+// A span marked "ignore" is fixed text between fields — an XML-ish tag, a
+// label, a timestamp — that every row has but nobody wants kept. It is matched
+// as written (except that digits match any digits) and never captured. Inside a gap it is carried between these two private-use
+// sentinels, which none of the punctuation rules below recognise, so a marked
+// ">" stays literal instead of being read as a bracket.
+export const IGNORE_FIELD = "ignore";
+const LIT_OPEN = "\uE000";
+const LIT_CLOSE = "\uE001";
+const LIT_RUN = /(\uE000[^\uE001]*\uE001)/u;
+
 /**
- * Read one marked-up sample into its fields and the literal gaps between them.
+ * Read one marked-up sample into its fields and the gaps between them.
  *
  * A sample is `{ line, spans: [{ field, start, end }] }`, with `start`/`end`
- * character offsets into `line`.
+ * character offsets into `line`. Spans whose field is `ignore` are not fields;
+ * they are folded into the gap they sit in, as literal text.
  */
 export function decomposeSample(sample) {
   const line = String(sample.line || "");
-  const spans = [...(sample.spans || [])]
+  const all = [...(sample.spans || [])]
     .filter((s) => s && s.end > s.start)
     .sort((a, b) => a.start - b.start);
-  for (let i = 1; i < spans.length; i++) {
-    if (spans[i].start < spans[i - 1].end) throw new Error(`"${spans[i - 1].field}" and "${spans[i].field}" overlap.`);
+  for (let i = 1; i < all.length; i++) {
+    if (all[i].start < all[i - 1].end) throw new Error(`"${all[i - 1].field}" and "${all[i].field}" overlap.`);
   }
-  const fields = spans.map((span, i) => {
-    const before = line.slice(i === 0 ? 0 : spans[i - 1].end, span.start);
-    return { key: span.field, value: line.slice(span.start, span.end), before };
-  });
-  const tail = spans.length ? line.slice(spans[spans.length - 1].end) : line;
+  const ignored = all.filter((s) => s.field === IGNORE_FIELD);
+  const spans = all.filter((s) => s.field !== IGNORE_FIELD);
+  const gap = (from, to) => {
+    let out = "";
+    for (const s of ignored) {
+      if (s.end <= from || s.start >= to) continue;
+      out += line.slice(from, s.start) + LIT_OPEN + line.slice(s.start, s.end) + LIT_CLOSE;
+      from = s.end;
+    }
+    return out + line.slice(from, to);
+  };
+  const fields = spans.map((span, i) => ({
+    key: span.field,
+    value: line.slice(span.start, span.end),
+    before: gap(i === 0 ? 0 : spans[i - 1].end, span.start),
+  }));
+  const tail = spans.length ? gap(spans[spans.length - 1].end, line.length) : gap(0, line.length);
   return { fields, tail };
 }
 
@@ -212,15 +248,38 @@ function splitGap(gap, { leading = false, trailing = false } = {}) {
 // match only rows with those very words — so they generalise to "anything".
 const WORDY = /[\p{L}\p{N}]/u;
 
-function generaliseSeparator(middle) {
+function literalPattern(text) {
+  const lead = /^[\t ]/.test(text) ? `${WS}*` : "";
+  const trail = /[\t ]$/.test(text) ? `${WS}*` : "";
+  const core = text.trim();
+  // Digits stand for any digits, so an ignored "[05:36]" covers every time.
+  const word = (w) => w.split(/(\d+)/).map((part) => (/^\d+$/.test(part) ? "\\d+" : escapeRegex(part))).join("");
+  return core ? `${lead}${core.split(/[\t ]+/).map(word).join(`${WS}+`)}${trail}` : `${WS}*`;
+}
+
+function generalisePlain(middle, { wild = ".+?" } = {}) {
   if (middle === "") return "";
-  if (WORDY.test(middle)) return ".+?";
+  if (WORDY.test(middle)) return wild;
   // A tab is kept as a tab: it is what tells a turn-number column from prose
   // that happens to open with a numeral (see ca-data-prep's grammar notes).
   if (/^[\t ]+$/.test(middle)) return middle.includes("\t") ? "[ ]*\\t[\\t ]*" : `${WS}+`;
   const core = middle.trim();
   return `${WS}*${core.split(/[\t ]+/).map(escapeRegex).join(`${WS}*`)}${WS}*`;
 }
+
+// A gap may mix ignored (literal) runs with plain delimiters.
+function generaliseGap(text, options) {
+  const parts = text.split(LIT_RUN).filter(Boolean);
+  return parts.map((part, i) => {
+    if (part.startsWith(LIT_OPEN)) return literalPattern(part.slice(1, -1));
+    // Space beside fixed text is a matter of taste, not structure: "<u a=B>hi"
+    // and "<u a=B> hi" are the same row.
+    const besideLiteral = parts.length > 1 && /^[\t ]+$/.test(part);
+    return besideLiteral ? `${WS}*` : generalisePlain(part, options);
+  }).join("");
+}
+
+const generaliseSeparator = (middle) => generaliseGap(middle);
 
 // One pattern for a set of observed variants, optional when "" is one of them.
 function alternatives(values, render) {
@@ -266,7 +325,7 @@ function mergeFieldOrder(decomposed) {
  */
 export function buildRowPattern(samples, fieldDefs, options = {}) {
   const forcedOptional = new Set(options.optional || []);
-  const usable = (samples || []).filter((s) => s && (s.spans || []).some((span) => span.end > span.start));
+  const usable = (samples || []).filter((s) => s && (s.spans || []).some((span) => span.end > span.start && span.field !== IGNORE_FIELD));
   if (!usable.length) return null;
 
   const decomposed = usable.map(decomposeSample);
@@ -284,14 +343,17 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
   const stats = new Map(order.map((key) => [key, { present: 0, prefix: [], suffix: [], sepBefore: [], sepAfter: [] }]));
   const tails = [];
   const unmarked = new Set();
-  let wildLead = false;
+  const leads = [];
   for (const sample of decomposed) {
     // Reported from the first letter or digit: the delimiters before it are
     // not what the person needs to go and mark.
-    const words = (gap) => gap.slice(gap.search(WORDY)).trim();
-    for (const f of sample.fields) if (WORDY.test(f.before)) unmarked.add(words(f.before));
-    if (WORDY.test(sample.tail)) unmarked.add(words(sample.tail));
-    if (sample.fields.length && WORDY.test(sample.fields[0].before)) wildLead = true;
+    const words = (gap) => {
+      const plain = gap.split(LIT_RUN).filter((p) => !p.startsWith(LIT_OPEN) && WORDY.test(p));
+      return plain.map((p) => p.slice(p.search(WORDY)).trim()).filter(Boolean);
+    };
+    for (const f of sample.fields) words(f.before).forEach((w) => unmarked.add(w));
+    words(sample.tail).forEach((w) => unmarked.add(w));
+    if (sample.fields.length) leads.push(splitGap(sample.fields[0].before, { leading: true }).middle);
     const n = sample.fields.length;
     const gaps = sample.fields.map((f, i) => splitGap(f.before, { leading: i === 0 }));
     const tailGap = splitGap(sample.tail, { trailing: true });
@@ -303,7 +365,7 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
       if (i > 0) s.sepBefore.push(gaps[i].middle);
       if (i + 1 < n) s.sepAfter.push(gaps[i + 1].middle);
     });
-    tails.push(tailGap.middle.trim());
+    tails.push(tailGap.middle);
   }
 
   const fieldInfo = order.map((key) => {
@@ -327,6 +389,14 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
     };
   });
 
+  // After a closing bracket the boundary is already plain, so the space before
+  // the next field need not be there: "[x] (y)" and "[x](y)" read the same.
+  fieldInfo.forEach((info, index) => {
+    const before = fieldInfo[index - 1];
+    const closed = before && before.suffix && !before.suffix.startsWith("\\.");
+    if (closed && info.sepBefore === `${WS}+`) info.sepBefore = `${WS}*`;
+  });
+
   const valuePattern = (info, index) => {
     if (VALUE_PATTERNS[info.kind]) return VALUE_PATTERNS[info.kind];
     const last = index === fieldInfo.length - 1;
@@ -342,7 +412,11 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
     return cls ? `[^${cls}]+?` : ".+?";
   };
 
-  let pattern = `^${WS}*${wildLead ? ".*?" : ""}`;
+  // Before the first field: ignored text is required as written, unmarked words
+  // match anything, and plain whitespace or punctuation is left to the
+  // leading-space allowance (as it always was).
+  const renderLead = (lead) => (lead.includes(LIT_OPEN) || WORDY.test(lead) ? generaliseGap(lead, { wild: ".*?" }) : "");
+  let pattern = `^${WS}*${alternatives(leads, renderLead)}`;
   let requiredSeen = false;
   fieldInfo.forEach((info, index) => {
     const core = `${info.prefix}(?<${info.key}>${valuePattern(info, index)})${info.suffix}`;
@@ -359,7 +433,13 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
   });
   // Whatever trails the last field is never required: stray punctuation after
   // an #id is a slip in one row, not part of the shape of every row.
-  const tail = tails.some((t) => WORDY.test(t)) ? ".*" : alternatives([...tails, ""], escapeRegex);
+  // After the last field: ignored text is required as written; otherwise the
+  // tail is tolerated, never required (stray punctuation after an #id is a slip
+  // in one row), and unmarked words match anything.
+  const renderTail = (t) => (t.includes(LIT_OPEN) ? generaliseGap(t, { wild: ".*" }) : WORDY.test(t) ? ".*" : escapeRegex(t.trim()));
+  const tail = tails.some((t) => t.includes(LIT_OPEN))
+    ? alternatives(tails, renderTail)
+    : tails.some((t) => WORDY.test(t)) ? ".*" : alternatives([...tails.map((t) => t.trim()), ""], escapeRegex);
   pattern += `${WS}*${tail}${tail ? `${WS}*` : ""}$`;
 
   // A row that opens with a turn number is recognisable by that alone, even
@@ -419,7 +499,6 @@ export function validateGrammar(grammar) {
     if (pattern == null) return;
     try { new RegExp(pattern, flags); } catch (e) { problems.push(`${label}: ${e.message}`); }
   };
-  if (!grammar.speakerRow?.pattern) problems.push("no speaker row pattern");
   if (!grammar.turnRow?.pattern) problems.push("no turn row pattern");
   tryCompile("speakerRow", grammar.speakerRow?.pattern, grammar.speakerRow?.flags);
   tryCompile("turnRow", grammar.turnRow?.pattern, grammar.turnRow?.flags);
@@ -498,7 +577,12 @@ export function parseWithGrammar(input, grammar) {
     if (region === "header" || region === "speakers") {
       const starts = re.mainStart
         ? re.mainStart.test(line)
-        : region === "speakers" && !!re.turnRow?.test(line) && !re.speakerRow?.test(line);
+        : region === "speakers"
+          ? !!re.turnRow?.test(line) && !re.speakerRow?.test(line)
+          // No speaker block in this grammar: the header ends at the first
+          // row. A turn row is the more specific shape, so it wins over the
+          // generic "Key: value" a header line is read with.
+          : !re.speakerRow && !re.speakersStart && !!re.turnRow?.test(line);
       if (starts) {
         region = "main";
         if (re.mainStart) {

@@ -32,6 +32,9 @@ export const GRAMMAR_ISSUE_LABELS = {
 
 const idWithHash = (id) => (id ? (id.startsWith("#") ? id : `#${id}`) : null);
 const orNull = (value) => (value ? value : null);
+// An id for a speaker named only on their turns: stable, and usable as an
+// RO-Crate "#fragment" whatever script the name is in.
+const slug = (name) => String(name).trim().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_.-]/gu, "") || "speaker";
 
 /** A readable statement of a row's fields, for the report's "Expected" line. */
 export function describeRow(spec, fieldDefs) {
@@ -104,6 +107,23 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   }
   speakerDiagnostics.sort((a, b) => a.line - b.line);
 
+  // A grammar with no speaker rows names the speaker on every turn instead
+  // ("<u speaker=Daiki>"). The speakers are then whoever the turns name, in
+  // order of first appearance, and there is no declaration to check against.
+  const declaresSpeakers = !!grammar.speakerRow?.pattern;
+  if (!declaresSpeakers) {
+    for (const turn of parsed.turns) {
+      const name = turn.speaker;
+      if (!name || speakerMap.has(name)) continue;
+      const id = `#${slug(name)}`;
+      speakerMap.set(name, {
+        label: name, name, alternateName: null, demographic: null, affiliation: null,
+        optionalCode: id, resolvedSpeakerID: id, line: turn.line,
+      });
+      byId.set(id, name);
+    }
+  }
+
   // Turns.
   const declared = new Set();
   for (const [code, details] of speakerMap) {
@@ -121,7 +141,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     const issues = [];
     if (turn.malformed) issues.push({ field: "row", kind: "turn-row-malformed", detail: `turn number "${turn.turn}" — added to the CSV with no speaker` });
     else if (!turn.speaker) issues.push({ field: "speakerCode", kind: "speaker-code-missing", detail: turn.turn ? `turn number "${turn.turn}"` : "" });
-    else if (!declared.has(turn.speaker)) issues.push({ field: "speakerCode", kind: "speaker-code-undeclared", detail: `speaker code "${turn.speaker}"` });
+    else if (declaresSpeakers && !declared.has(turn.speaker)) issues.push({ field: "speakerCode", kind: "speaker-code-undeclared", detail: `speaker code "${turn.speaker}"` });
     if (!turn.text) issues.push({ field: "text", kind: "text-missing", detail: turn.speaker ? `speaker code "${turn.speaker}"` : "" });
     if (issues.length) {
       bodyDiagnostics.push({ line: turn.line, content: lines[turn.line - 1].trim(), section: turn.section || "(no section)", code: turn.speaker || null, issues });
@@ -165,7 +185,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   if (firstSeen.join("|") !== expectedOrder.join("|")) {
     warnings.push(`Section order: found ${firstSeen.join(", ")}; the grammar expects ${declaredSections.join(", ")}.`);
   }
-  if (!parsed.speakers.length) warnings.push(`No speaker declarations matched the grammar "${grammarName}".`);
+  if (declaresSpeakers && !parsed.speakers.length) warnings.push(`No speaker declarations matched the grammar "${grammarName}".`);
   if (!parsed.turns.length) warnings.push(`No transcript rows matched the grammar "${grammarName}".`);
 
   const headerUnmatched = unmatchedIn("header");
@@ -189,10 +209,12 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     ignored: parsed.ignored,
     report: {
       grammarLine: `Parsed with the transcript grammar "${grammarName}" (${grammarPath(grammarName)}).`,
-      speakerExpected: [
-        `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,
-        `Pattern: ${grammar.speakerRow?.pattern ?? "(none)"}`,
-      ],
+      speakerExpected: declaresSpeakers
+        ? [
+          `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,
+          `Pattern: ${grammar.speakerRow.pattern}`,
+        ]
+        : [`The grammar "${grammarName}" has no speaker rows; the speakers are the names the turns give (${speakerMap.size} found).`],
       bodyExpected: [
         `Expected format (grammar "${grammarName}"): ${describeRow(grammar.turnRow, TURN_FIELDS)} — bracketed fields are optional.`,
         `Pattern: ${grammar.turnRow?.pattern ?? "(none)"}`,

@@ -1097,7 +1097,7 @@ export async function extractDocumentText(docxSource) {
 // whichever profile the user actually selected, so a crate built here still
 // reflects that choice instead of silently overwriting it. The default only
 // matters when nothing was selected (e.g. calling this directly, as tests do).
-export function buildRoCrateMetadata(collectionName, documents, conformsTo = "https://w3id.org/ldac/profile#Collection") {
+export function buildRoCrateMetadata(collectionName, documents, conformsTo = "https://w3id.org/ldac/profile#Collection", { includeOutputs = true } = {}) {
   const crate = new ROCrate({ array: true, link: true });
   crate.addContext({ ldac: "https://w3id.org/ldac/terms#" });
   crate.addContext({ pcdm: "http://pcdm.org/models#" });
@@ -1119,14 +1119,16 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
   crate.rootDataset.hasMember = documents.map((document) => ({ "@id": document.objectId }));
 
   for (const document of documents) {
+    // Without its outputs, a document is its .docx and its speakers: no CSV
+    // file, so no main text or annotation pointing at one.
     const objectEntity = {
       "@id": document.objectId,
       "@type": "RepositoryObject",
       name: document.baseName,
-      "ldac:mainText": { "@id": document.csvId },
+      ...(includeOutputs ? { "ldac:mainText": { "@id": document.csvId } } : {}),
       hasPart: [
         { "@id": document.docxId },
-        { "@id": document.csvId },
+        ...(includeOutputs ? [{ "@id": document.csvId }] : []),
       ],
       speaker: document.speakerRefs,
     };
@@ -1148,14 +1150,14 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
     };
 
     crate.addEntity(objectEntity);
-    crate.addEntity(annotationEntity);
+    if (includeOutputs) crate.addEntity(annotationEntity);
     crate.addEntity({
       "@id": document.docxId,
       "@type": "File",
       name: document.docxName,
       encodingFormat: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     });
-    crate.addEntity(csvFileEntity);
+    if (includeOutputs) crate.addEntity(csvFileEntity);
 
     for (const person of document.persons) crate.addEntity(person);
   }

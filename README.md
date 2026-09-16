@@ -522,6 +522,35 @@ Rules of thumb:
   its assets — which belong at the folder root where a reader of the crate
   expects them, not filed under output directories at all.
 
+### Generated files in the crate
+
+A plugin that writes files it also describes in the crate should let the
+person building it leave those files out. `src/_crate_outputs.js` has the
+shared pieces:
+
+- `outputsInCrateOption(key, what)` returns a select child option. Its
+  placeholder (value `""`) is **Include in the RO-Crate**; the one choice is
+  **Leave out of the RO-Crate** (`"ignore"`). Because the empty value means
+  include, a profile that doesn't offer the option — which forces it to `""` —
+  keeps the files in the crate.
+  It is marked `stage: "build"`, so changing it on the Process page doesn't
+  make the person run Process again.
+- `includeOutputs(ctx.options, key)` is false only for `"ignore"`.
+- `removeOutputEntities(ctx.crate, [dir])`: when leaving files out, also call
+  this at `crate:build`, because the run's crate carries on from the folder's
+  existing one and may already describe them. It removes every entity under
+  the directories, every reference to them, and any `Annotation` left with no
+  body.
+
+| Plugin | Option key | Files | Leaving them out also drops |
+|---|---|---|---|
+| `ca-data-prep` | `transcriptOutputsInCrate` | `_outputs/csv/` | each document's `ldac:mainText` and its `Annotation` |
+| `chat-export` | `chatOutputsInCrate` | `_outputs/chat/` | — |
+
+`ca-data-prep`'s `_outputs/logs/` are never described in the crate. Either way
+the files are still written to the folder. A profile shows the option by
+naming its key in `enabledOptionKeys`.
+
 Then register it in this repo's `index.js` (`REGISTRY` — one registry, for
 builders and annotating plugins alike), and in collection2crate's
 `src/plugins/index.js`, wire up the `deps` object it's called with.

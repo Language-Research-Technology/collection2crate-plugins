@@ -1,5 +1,6 @@
 import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
 import { countedProgress } from "../../src/_progress.js";
+import { outputsInCrateOption, includeOutputs, removeOutputEntities } from "../../src/_crate_outputs.js";
 
 // Generated files go under _outputs/, named for what they are rather than for
 // this plugin, the same as ca-data-prep's csv/ and logs/. The directory is
@@ -7,6 +8,7 @@ import { countedProgress } from "../../src/_progress.js";
 // nothing claims it whole. No _config/ counterpart — nothing here is
 // configurable.
 const OUTPUT_DIR = "_outputs/chat";
+export const OUTPUTS_OPTION_KEY = "chatOutputsInCrate";
 
 let writeFileAtPath, fileExists, readFileTextFromDirectory;
 
@@ -109,6 +111,7 @@ const plugin = {
     label: "Generate CHAT (.cha) outputs",
     default: false,
     hint: "Creates one CHAT transcript per .docx file, using the transcript speaker metadata and any parenthetical group name from the source.",
+    children: [outputsInCrateOption(OUTPUTS_OPTION_KEY, "CHAT files")],
   },
   hooks: {
     "files:prepare": {
@@ -206,6 +209,13 @@ const plugin = {
         if (!ctx.options.generateChatFiles || !ctx.chatExport) return;
         const { documentRecords } = ctx.chatExport;
         if (!documentRecords.length || !ctx.crate) return;
+        if (!includeOutputs(ctx.options, OUTPUTS_OPTION_KEY)) {
+          // Taken out as well as not added: the crate may carry entities an
+          // earlier build added for these files.
+          const removed = removeOutputEntities(ctx.crate, [OUTPUT_DIR]);
+          ctx.log(`Left the CHAT files out of the crate${removed ? ` (removed ${removed} entit(ies) from an earlier build)` : ""}.`, "muted");
+          return;
+        }
         addChatFilesToCrate(ctx.crate, documentRecords);
         ctx.log(`Described ${documentRecords.length} CHAT file(s) in the crate.`, "muted");
       },

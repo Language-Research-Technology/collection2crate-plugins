@@ -111,7 +111,7 @@ const plugin = {
     label: "Generate CHAT (.cha) outputs",
     default: false,
     hint: "Creates one CHAT transcript per .docx file, using the transcript speaker metadata and any parenthetical group name from the source.",
-    children: [outputsInCrateOption(OUTPUTS_OPTION_KEY, "CHAT files")],
+    children: [outputsInCrateOption(OUTPUTS_OPTION_KEY, "the CHAT files")],
   },
   hooks: {
     "files:prepare": {

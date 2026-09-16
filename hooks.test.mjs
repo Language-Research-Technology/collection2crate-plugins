@@ -183,7 +183,7 @@ const quietCtx = (extra) => ({ log: noop, options: {}, config: {}, ...extra });
     speakerRefs: [], persons: [],
   };
   const caCtx = (extra) => quietCtx({
-    options: { processTranscriptDocuments: true },
+    options: { processTranscriptDocuments: true, transcriptOutputsInCrate: true },
     caDataPrep: { files: [{}], documentRecords: [record] },
     ...extra,
   });

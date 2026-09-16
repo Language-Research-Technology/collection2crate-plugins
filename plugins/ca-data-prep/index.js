@@ -114,7 +114,7 @@ const plugin = {
         // Offered choices depend on the folder, so the host asks for them.
         choices: async ({ dirHandle }) => listSavedGrammars(dirHandle),
       },
-      outputsInCrateOption(OUTPUTS_OPTION_KEY, "Transcript CSV files"),
+      outputsInCrateOption(OUTPUTS_OPTION_KEY, "the transcript CSV files"),
     ],
   },
   hooks: {

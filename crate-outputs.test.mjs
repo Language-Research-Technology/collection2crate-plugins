@@ -1,4 +1,4 @@
-// The "include / leave out of the RO-Crate" choice for the files ca-data-prep
+// The "include in the RO-Crate" checkbox for the files ca-data-prep
 // and chat-export generate (src/_crate_outputs.js). Real ro-crate; the plugins'
 // crate:build handlers are driven with a hand-built ctx.
 //
@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
 import {
-  OUTPUTS_IGNORE, outputsInCrateOption, includeOutputs, removeOutputEntities,
+  outputsInCrateOption, includeOutputs, removeOutputEntities,
 } from "./src/_crate_outputs.js";
 import { buildRoCrateMetadata } from "./plugins/ca-data-prep/process.js";
 import { OUTPUTS_OPTION_KEY as CSV_KEY } from "./plugins/ca-data-prep/index.js";
@@ -52,19 +52,17 @@ await check("both plugins offer it as a child of their own option", () => {
     find("ca-data-prep", "processTranscriptDocuments", CSV_KEY),
     find("chat-export", "generateChatFiles", CHAT_KEY),
   ]) {
-    assert.equal(node.type, "select");
+    assert.equal(node.type, undefined, "no type: collection2crate renders a checkbox");
+    assert.match(node.label, /^Include .* in the RO-Crate$/);
     assert.equal(node.stage, "build", "changing it doesn't discard a Process run");
-    assert.equal(node.placeholder, "Include in the RO-Crate", "the empty value is the include choice");
-    assert.deepEqual(node.choices().map((c) => c.value), [OUTPUTS_IGNORE]);
   }
 });
 
-await check("only an explicit ignore leaves the files out", () => {
-  assert.equal(includeOutputs({}, "k"), true, "absent (a profile that doesn't offer it) includes, as before");
-  assert.equal(includeOutputs({ k: "" }, "k"), true);
-  assert.equal(includeOutputs({ k: "include" }, "k"), true);
-  assert.equal(includeOutputs({ k: OUTPUTS_IGNORE }, "k"), false);
-  assert.equal(outputsInCrateOption("k", "X").label, "X in the RO-Crate");
+await check("only a ticked box includes the files", () => {
+  assert.equal(includeOutputs({ k: true }, "k"), true);
+  assert.equal(includeOutputs({ k: false }, "k"), false, "unticked, or forced off because the profile doesn't offer it");
+  assert.equal(includeOutputs({}, "k"), false);
+  assert.equal(outputsInCrateOption("k", "the X files").label, "Include the X files in the RO-Crate");
 });
 
 console.log("\nRemoving output entities");
@@ -115,16 +113,16 @@ const caCtx = ({ options = {}, ...extra }) => ({
   options: { processTranscriptDocuments: true, ...options },
 });
 
-await check("include (the default): the CSV is in the crate", async () => {
-  const ctx = caCtx({ crate: null });
+await check("ticked: the CSV is in the crate", async () => {
+  const ctx = caCtx({ crate: null, options: { [CSV_KEY]: true } });
   await REGISTRY["ca-data-prep"](deps).hooks["crate:build"].handler(ctx);
   assert.ok(ctx.crate.getEntity("_outputs/csv/interview.csv"));
 });
 
-await check("leave out, on an existing crate: an earlier build's CSV entities are taken out", async () => {
+await check("unticked, on an existing crate: an earlier build's CSV entities are taken out", async () => {
   if (!mergeCrateInto) return console.log("       (skipped: collection2crate checkout not beside this repo)");
   const existing = buildRoCrateMetadata("C", [record]);
-  const ctx = caCtx({ crate: existing, existingCrate: { "@graph": [] }, options: { [CSV_KEY]: OUTPUTS_IGNORE } });
+  const ctx = caCtx({ crate: existing, existingCrate: { "@graph": [] }, options: { [CSV_KEY]: false } });
   await REGISTRY["ca-data-prep"](deps).hooks["crate:build"].handler(ctx);
   assert.equal(ctx.crate, existing, "the run's crate is kept");
   assert.equal(existing.getEntity("_outputs/csv/interview.csv"), undefined);
@@ -140,18 +138,18 @@ const chatCtx = (crate, options = {}) => ({
   chatExport: { files: [{}], documentRecords: [{ baseName: "interview", chatDirName: "_outputs/chat", chatName: "interview.cha" }] },
 });
 
-await check("include (the default): the .cha is added", async () => {
+await check("ticked: the .cha is added", async () => {
   const crate = new ROCrate({ array: true, link: true });
-  await REGISTRY["chat-export"](deps).hooks["crate:build"].handler(chatCtx(crate));
+  await REGISTRY["chat-export"](deps).hooks["crate:build"].handler(chatCtx(crate, { [CHAT_KEY]: true }));
   assert.ok(crate.getEntity("./_outputs/chat/interview.cha"));
 });
 
-await check("leave out: nothing is added, and an earlier build's .cha entity is removed", async () => {
+await check("unticked: nothing is added, and an earlier build's .cha entity is removed", async () => {
   const crate = new ROCrate({ array: true, link: true });
   const handler = REGISTRY["chat-export"](deps).hooks["crate:build"].handler;
-  await handler(chatCtx(crate));
+  await handler(chatCtx(crate, { [CHAT_KEY]: true }));
   crate.rootDataset.hasPart = [{ "@id": "./_outputs/chat/interview.cha" }];
-  await handler(chatCtx(crate, { [CHAT_KEY]: OUTPUTS_IGNORE }));
+  await handler(chatCtx(crate, { [CHAT_KEY]: false }));
   assert.equal(crate.getEntity("./_outputs/chat/interview.cha"), undefined);
   assert.equal(crate.rootDataset.hasPart, undefined);
 });

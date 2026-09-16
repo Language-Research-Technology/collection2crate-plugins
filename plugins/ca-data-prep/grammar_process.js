@@ -14,7 +14,7 @@
 // into the turn above is recorded against its own line, and a turn whose
 // speaker nobody declared is flagged — never dropped.
 
-import { documentLines, parseWithGrammar, grammarPath, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
+import { documentLines, parseWithGrammar, grammarPath, describeColumnRule, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
 
 // The three section names the built-in convention abbreviates in the CSV.
 // A grammar's other section names go into the CSV as written.
@@ -214,7 +214,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     ignored: parsed.ignored,
     report: {
       grammarLine: `Parsed with the transcript grammar "${grammarName}" (${grammarPath(grammarName)}).`,
-      cleanupLine: `Cleanup: ${(grammar.ignore || []).length} line-skip rule(s) (${parsed.ignored.length} line(s) skipped), ${(grammar.strip || []).length} removal rule(s): ${(grammar.strip || []).map((r) => r.pattern).join("  ") || "none"}`,
+      cleanupLine: `Cleanup: ${(grammar.ignore || []).length} line-skip rule(s) (${parsed.ignored.length} line(s) skipped), ${(grammar.strip || []).length} removal rule(s): ${(grammar.strip || []).map((r) => r.pattern).join("  ") || "none"}` +
+        `, ${(grammar.dropColumns || []).length} dropped column(s) in main rows: ${(grammar.dropColumns || []).map(describeColumnRule).join("; ") || "none"}`,
       speakerExpected: declaresSpeakers
         ? [
           `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,

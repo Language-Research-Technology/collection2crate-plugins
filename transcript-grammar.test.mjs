@@ -12,7 +12,8 @@ import {
   buildRowPattern, buildRegions, buildGrammar, checkRegionOrder, decomposeSample,
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
-  applyLayout, grammarLayout,
+  applyLayout, grammarLayout, dropColumns, columnRulesFor, columnRuleError, droppedColumnRanges,
+  describeColumnRule, grammarFingerprint,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -215,6 +216,89 @@ check("a saved grammar applies its cleanup when parsing", () => {
   assert.deepEqual(parsed.turns.map((t) => [t.speaker, t.text]), [["A", "hello there"], ["B", "bye"]]);
   assert.deepEqual(parsed.ignored.map((i) => i.line), [3]);
   assert.deepEqual(validateGrammar({ ...grammar, strip: [{ pattern: "(" }] }).length, 1);
+});
+
+console.log("Dropped columns");
+
+check("a tab-separated column is a field, and goes with its tab", () => {
+  const line = "7\tA:\tx1\thello there\t/";
+  assert.deepEqual(columnRulesFor(line, { start: 5, end: 7 }), [{ tab: 2 }]);
+  assert.deepEqual(columnRulesFor(line, { start: 0, end: 4 }), [{ tab: 0 }, { tab: 1 }], "a selection over two fields drops both");
+  assert.equal(dropColumns(line, [{ tab: 2 }]), "7\tA:\thello there\t/");
+  assert.equal(dropColumns(line, [{ tab: 0 }, { tab: 4 }]), "A:\tx1\thello there");
+  assert.equal(dropColumns(line, [{ tab: 9 }]), line, "a column the line doesn't have changes nothing");
+  assert.equal(dropColumns("no tabs here", [{ tab: 0 }]), "no tabs here", "a tab rule leaves a line without tabs alone");
+  assert.deepEqual(droppedColumnRanges(line, [{ tab: 2 }]), [{ start: 5, end: 7 }]);
+});
+
+check("a space-aligned column is a span, widened to its neighbours", () => {
+  const rows = [
+    "1   A:  x1     hello",
+    "12  B:  y123   bye now",
+    "3   A:         (no code)",
+  ];
+  const rule = columnRulesFor(rows[0], { start: 8, end: 10 });
+  assert.deepEqual(rule, [{ from: 6, to: 15 }]);
+  assert.equal(describeColumnRule(rule[0]), "Characters 7–15");
+  assert.deepEqual(rows.map((r) => dropColumns(r, rule)), ["1   A: hello", "12  B: bye now", "3   A: (no code)"],
+    "a longer value in the same column goes too, and the columns either side close up to one space");
+  assert.equal(dropColumns(rows[0], columnRulesFor(rows[0], { start: 0, end: 1 })), "A:  x1     hello", "a first column leaves no space behind");
+  assert.equal(dropColumns(rows[0], columnRulesFor(rows[0], { start: 15, end: 20 })), "1   A:  x1", "nor does a last one");
+  assert.equal(dropColumns("short", [{ from: 10, to: 20 }]), "short", "a line that ends before the column is left as it is");
+  assert.equal(dropColumns("a\tb", [{ from: 0, to: 1 }]), "a\tb", "a span rule leaves a line with tabs alone");
+});
+
+check("a column rule is checked before use", () => {
+  assert.equal(columnRuleError({ tab: 0 }), null);
+  assert.equal(columnRuleError({ from: 2, to: 5 }), null);
+  assert.ok(columnRuleError({ tab: -1 }));
+  assert.ok(columnRuleError({ from: 5, to: 5 }));
+  assert.ok(columnRuleError({ from: 1.5, to: 5 }));
+  assert.ok(columnRuleError({}));
+});
+
+check("cleanup drops columns from main rows only, before its removals", () => {
+  const lines = ["Title:\tt", "Speakers:", "A:\tAl\t#a", "MAIN", "1\tA:\t[x]\thi [x] there", "2\tA:\tzz\tbye"];
+  const roles = ["header", "speakers", "speakers", "main", "main", "main"];
+  const markers = [false, true, false, true, false, false];
+  const r = applyCleanup(lines, roles, markers, { drop: [], strip: ["\\[x\\]"], columns: [{ tab: 2 }, { tab: 7 }] });
+  assert.deepEqual(r.lines, ["Title:\tt", "Speakers:", "A:\tAl\t#a", "MAIN", "1\tA:\thi there", "2\tA:\tbye"]);
+  assert.deepEqual(r.columnHits, [[4, 5], []]);
+  assert.deepEqual(r.stripHits, [[4]], "the removal still counts the row it changed");
+});
+
+check("a saved grammar drops the columns when parsing, and says so in its fingerprint", () => {
+  const lines = ["Title: t", "1  A:  x1   hello there", "2  B:  y22  bye", "            and more"];
+  const roles = ["header", "main", "main", "main"];
+  const markers = lines.map(() => false);
+  const columns = columnRulesFor(lines[1], { start: 7, end: 9 });
+  const clean = applyCleanup(lines, roles, markers, { drop: [], strip: [], columns });
+  assert.equal(clean.lines[1], "1  A: hello there");
+  const make = (cleanup) => buildGrammar({
+    name: "cols", lines, roles, markers, speakerSamples: [], cleanup,
+    turnSamples: [markup(clean.lines[1], [["turn", "1"], ["speaker", "A"], ["text", "hello there"]])],
+  });
+  const grammar = make({ drop: [], strip: [], columns: [...columns, ...columns, { tab: -1 }] });
+  assert.deepEqual(grammar.dropColumns, columns, "saved once each, and never an invalid one");
+  assert.deepEqual(validateGrammar(grammar), []);
+  const parsed = parseWithGrammar(lines, grammar);
+  assert.deepEqual(parsed.turns.map((t) => [t.turn, t.speaker, t.text]), [["1", "A", "hello there"], ["2", "B", "bye and more"]]);
+  assert.equal(parsed.metadata.Title, "t", "the header is read as it is");
+
+  const without = make({ drop: [], strip: [], columns: [] });
+  assert.deepEqual(without.dropColumns, []);
+  assert.notEqual(grammarFingerprint(grammar), grammarFingerprint(without));
+  const { dropColumns: _, ...older } = without;
+  assert.equal(grammarFingerprint(older), grammarFingerprint(without), "a grammar saved before dropped columns keeps its fingerprint");
+  assert.equal(validateGrammar({ ...grammar, dropColumns: [{ from: 3 }] }).length, 1);
+  assert.equal(validateGrammar(older).length, 0);
+});
+
+check("dropped columns don't touch the speaker info", () => {
+  const grammar = { ...GRAMMAR, dropColumns: [{ tab: 1 }] };
+  const parsed = parseWithGrammar(["Participants", "AA:\tAlex (R) #p1", "OPENING", "1\tx\tAA:\thi"], grammar);
+  assert.equal(parsed.speakers[0].code, "AA");
+  assert.deepEqual(parsed.turns.map((t) => [t.speaker, t.text]), [["AA", "hi"]]);
 });
 
 check("a line the cleanup empties is skipped, not folded into the turn above", () => {

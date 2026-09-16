@@ -361,7 +361,10 @@ the transcript processing option:
   to ignore); in a **cleanup** step, build rules for lines to skip (a
   timestamp line "and every line like it") and text to remove from rows
   wherever it appears (inline timecodes, markup — "exactly this" or "anything
-  shaped like this"), with a before/after preview; then, in individual cleaned
+  shaped like this"), and columns of data to drop from main rows (select any
+  part of a column in a row: a tab-separated field, or — in a line without
+  tabs — the characters out to the neighbouring columns), with a
+  before/after preview; then, in individual cleaned
   rows, select characters and mark them as a
   speaker's code / name / alternate name / affiliation / id, or a turn's
   number / speaker / text. Fixed text every row has but nobody wants kept —
@@ -376,7 +379,7 @@ the transcript processing option:
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group
 regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
-markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read). Only the shape of the sample is
+markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read) and dropped columns (`dropColumns`: `{ "tab": n }` for the n-th tab-separated field of a line with tabs, `{ "from": a, "to": b }` for characters a up to b of a line without; 0-based, applied to main rows only, before `strip`). Only the shape of the sample is
 kept — delimiters, brackets, which fields are optional — never its text,
 since the rows marked up are real speaker declarations. `parseWithGrammar(text,
 grammar)` is pure; it and the folder helpers live in

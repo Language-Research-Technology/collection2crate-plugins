@@ -5,8 +5,9 @@
 //   2. Regions  — mark line ranges as header metadata, speaker info or main,
 //                 flag the marker lines ("Speakers:", "PRELIMINARIES"), and
 //                 flag lines to ignore ("END OF TRANSCRIPT").
-//   3. Cleanup  — rules for lines to skip and text to remove from rows,
-//                 with a before/after preview of the whole document.
+//   3. Cleanup  — rules for lines to skip, columns to drop from main rows
+//                 and text to remove from rows, with a before/after preview
+//                 of the whole document.
 //   4. Rows     — select characters inside the cleaned sample rows and say
 //                 what they are:
 //                 a speaker's code / name / alternate name / affiliation / id,
@@ -23,6 +24,7 @@ import { element, button, field, checkbox, dataTable } from "../../src/_panel.js
 import {
   REGIONS, IGNORE, SPEAKER_FIELDS, TURN_FIELDS, HEADER_FIELD_PATTERN,
   DEFAULT_GRAMMAR, IGNORE_FIELD, LAYOUT_PARTS, applyCleanup, applyLayout, grammarLayout, buildGrammar, buildRegions, exactPattern,
+  columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines,
 } from "../../src/_transcript_grammar.js";
@@ -243,6 +245,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.cleanup = {
       drop: [...(base?.ignore || [])],
       strip: (base?.strip || []).map((r) => r.pattern),
+      columns: (base?.dropColumns || []).map((rule) => ({ ...rule })),
       seen: new Set(base?.ignore || []),
     };
     state.clean = null;
@@ -453,9 +456,10 @@ async function regionStep(state, { openModal, error }) {
 // Step 3 — cleanup
 // ---------------------------------------------------------------------------
 //
-// Two kinds of rule, both saved with the grammar and applied before rows are
+// Three kinds of rule, all saved with the grammar and applied before rows are
 // read: lines to skip altogether (timestamps between turns, "END OF
-// TRANSCRIPT"), and text to remove from speaker and main lines (inline
+// TRANSCRIPT"), columns to drop from main rows (counters, codes, tiers of
+// annotation), and text to remove from speaker and main lines (inline
 // timecodes, markup). The rows step then works on the cleaned lines, so the
 // fields are marked on text that looks the way the parser will see it.
 
@@ -482,7 +486,8 @@ function cleanupRuleList({ rules, hits, describeHit, onChange, global, emptyText
 
 async function cleanupStep(state, { openModal, error }) {
   const { lines, roles, markers } = state;
-  const cleanup = state.cleanup || (state.cleanup = { drop: [], strip: [], seen: new Set() });
+  const cleanup = state.cleanup || (state.cleanup = { drop: [], strip: [], columns: [], seen: new Set() });
+  cleanup.columns ||= [];
   // Lines marked Ignore in the regions step become skip rules — once each, so
   // a rule removed here is not brought back by returning to this step.
   for (const pattern of buildRegions(lines, roles, markers).ignore) {
@@ -511,6 +516,53 @@ async function cleanupStep(state, { openModal, error }) {
     global: true,
     emptyText: "Nothing is removed from rows.",
   });
+
+  // Dropping a column, selected in a main row as the document has it.
+  const columnList = element("div");
+  const drawColumns = () => {
+    columnList.replaceChildren();
+    if (!cleanup.columns.length) columnList.append(element("p", { className: "empty-note", text: "No columns are dropped." }));
+    cleanup.columns.forEach((rule, i) => {
+      const hit = result.columnHits[i] || [];
+      columnList.append(element("div", { className: "tg-rule" }, [
+        element("span", { text: describeColumnRule(rule) }),
+        element("span", { className: "field-hint", text: hit.length ? `changes ${hit.length} main row(s)` : "changes no main row" }),
+        button("Remove", { onClick: () => { cleanup.columns.splice(i, 1); refresh(); } }),
+      ]));
+    });
+  };
+  const mainRows = () => lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line, index }) => line.trim() && !markers[index] && roles[index] === "main"
+      && !result.changes.some((c) => c.index === index && c.after === null));
+  const columnPicker = element("select", { attrs: { "aria-label": "Main row to select a column in" } });
+  const columnStrip = element("div", { className: "tg-strip", attrs: { tabindex: "0" } });
+  const columnHint = element("span", { className: "field-hint", text: "Select any part of a column in the line." });
+  let columnText = "";
+  const showColumnSample = () => {
+    columnText = columnPicker.value === "" ? "" : lines[Number(columnPicker.value)];
+    const spans = droppedColumnRanges(columnText, cleanup.columns).map((r) => ({ field: IGNORE_FIELD, ...r }));
+    renderStrip(columnStrip, { line: columnText, spans });
+  };
+  const fillColumnPicker = () => {
+    const keep = columnPicker.value;
+    columnPicker.replaceChildren(...mainRows().map(({ line, index }) => element("option", { text: `${index + 1}: ${truncate(shown(line))}`, attrs: { value: index } })));
+    if ([...columnPicker.options].some((o) => o.value === keep)) columnPicker.value = keep;
+    showColumnSample();
+  };
+  columnPicker.addEventListener("change", showColumnSample);
+  const columnSelection = selectionTracker(columnStrip, () => columnText);
+  const addColumn = () => {
+    const range = columnSelection.take();
+    if (!range) { columnHint.textContent = "Select part of a column in the line first."; return; }
+    const added = columnRulesFor(columnText, range)
+      .filter((rule) => !cleanup.columns.some((r) => r.tab === rule.tab && r.from === rule.from && r.to === rule.to));
+    cleanup.columns.push(...added);
+    columnHint.textContent = added.length
+      ? `Dropping ${added.map(describeColumnRule).join(", ").toLowerCase()} from main rows.`
+      : "That column is already dropped.";
+    refresh();
+  };
 
   // Adding a skip rule from a line.
   const skipPicker = element("select", { attrs: { "aria-label": "Line to skip" } });
@@ -576,6 +628,8 @@ async function cleanupStep(state, { openModal, error }) {
     result = applyCleanup(lines, roles, markers, cleanup);
     dropList.draw();
     stripList.draw();
+    drawColumns();
+    fillColumnPicker();
     fillSkipPicker();
     fillSamplePicker();
     const dropped = result.changes.filter((c) => c.after === null).length;
@@ -607,6 +661,16 @@ async function cleanupStep(state, { openModal, error }) {
           button("Skip exactly this line", { onClick: () => addSkip(literalLinePattern) }),
         ]),
         element("div", { className: "tg-toolbar" }, customInput(cleanup.drop, false, "Skip-line pattern")),
+
+        element("h3", { className: "tg-section-title", text: "Columns to drop" }),
+        element("p", { className: "field-hint", text: "Data in main rows that nobody wants kept — counters, codes, annotation tiers. In a line with tabs a column is a tab-separated field; in a line without, it is the stretch of characters the selection covers, out to the neighbouring columns. Dropped columns are shown struck through." }),
+        columnList,
+        element("div", { className: "tg-toolbar" }, [columnPicker]),
+        columnStrip,
+        element("div", { className: "tg-toolbar" }, [
+          columnHint,
+          keepsSelection(button("Drop this column", { onClick: addColumn, title: "Removed from every main row before the rows step, and whenever the grammar parses a document" })),
+        ]),
 
         element("h3", { className: "tg-section-title", text: "Text to remove from rows" }),
         element("p", { className: "field-hint", text: "Removed from speaker-info and main lines wherever it appears — inline timecodes, markup, notes — before the rows step. Select it in a line below." }),

@@ -6,7 +6,8 @@ import { progressFor } from "../../src/_progress.js";
 //
 // An ordinary plugin, gated by an ordinary option. What makes it a *builder*
 // is that it taps crate:build inside the builder band (priority <= 10) and
-// sets ctx.crate. It sits at 5, below generic-input's 10, so when its option
+// produces ctx.crate — adding to the one the pipeline seeded from an existing
+// crate, when there is one. It sits at 5, below generic-input's 10, so when its option
 // is on it wins the band: generic-input stands down for the whole build, its
 // folder scan included, and the annotating taps at 20+ run against the crate
 // this one produced. Nothing here knows generic-input exists; the priority is
@@ -72,7 +73,15 @@ export function createPlugin(deps) {
               "corpus-tools-person-centred-collections-docx's README for the folder layout."
             );
           }
-          ctx.crate = result.crate;
+          // With an existing crate the pipeline has already seeded ctx.crate;
+          // the parse lands in it (existing values win) rather than replacing
+          // it (collection2crate SPEC.md §4.4a).
+          if (ctx.crate) {
+            const { added, enriched } = deps.mergeCrateInto(ctx.crate, result.crate);
+            ctx.log(`Added ${added} entit(ies) to the existing crate; filled in ${enriched} it already had.`, "muted");
+          } else {
+            ctx.crate = result.crate;
+          }
           ctx.sourceCount = result.documentPartCount;
           // The media the documents embed or reference is extracted here,
           // because the crate has to name it, but it isn't on disk until

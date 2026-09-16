@@ -13,10 +13,10 @@ import {
   GRAMMAR_CONFIG_DIR, grammarPath, grammarFingerprint, listSavedGrammars, loadSavedGrammar,
 } from "../../src/_transcript_grammar.js";
 
-let writeFileAtPath, fileExists, readFileTextFromDirectory;
+let writeFileAtPath, fileExists, readFileTextFromDirectory, mergeCrateInto;
 
 export function createPlugin(deps) {
-  ({ writeFileAtPath, fileExists, readFileTextFromDirectory } = deps);
+  ({ writeFileAtPath, fileExists, readFileTextFromDirectory, mergeCrateInto } = deps);
   return plugin;
 }
 
@@ -265,14 +265,25 @@ const plugin = {
         if (!documentRecords.length) return;
         await warnIfGrammarChanged(ctx);
 
-        // ctx.crate is about to be replaced wholesale below — read the selected
-        // profile's own conformsTo (already assembled by processFolder into
-        // ctx.config.rootDataset) before that happens, so the crate this
-        // builds still reflects whichever profile the user actually picked
-        // instead of silently reverting to buildRoCrateMetadata's own default.
+        // Pass the selected profile's own conformsTo (already assembled into
+        // ctx.config.rootDataset) so the transcript crate reflects whichever
+        // profile the user picked, not buildRoCrateMetadata's own default.
         const selectedConformsTo = ctx.config?.rootDataset?.conformsTo?.["@id"];
-        ctx.crate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
-        addCsvFilesToCrate(ctx.crate, documentRecords);
+        const transcriptCrate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
+        addCsvFilesToCrate(transcriptCrate, documentRecords);
+        if (ctx.existingCrate) {
+          // The folder already had a crate: ctx.crate is that crate, seeded by
+          // the pipeline and extended by the builder with the files the user
+          // chose to add. Replacing it would throw the existing metadata
+          // away (and fail the build — collection2crate SPEC.md §4.4), so the
+          // transcript crate lands in it, existing values winning.
+          const { added, enriched } = mergeCrateInto(ctx.crate, transcriptCrate);
+          ctx.log(`Added ${added} transcript entit(ies) to the existing crate; filled in ${enriched} it already had.`, "muted");
+        } else {
+          // A first build: the transcript crate is the crate, as before — the
+          // generic scan's entities for the folder's other files are dropped.
+          ctx.crate = transcriptCrate;
+        }
         ctx.sourceCount = files.length;
         ctx.log(`Built transcript crate from ${files.length} .docx file(s).`, "ok");
       },

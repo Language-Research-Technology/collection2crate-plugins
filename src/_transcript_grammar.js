@@ -561,6 +561,11 @@ export function parseWithGrammar(input, grammar) {
   // neither the turn before the marker nor the turn before the broken row.
   let openTurn = null;
   const note = (index, role) => { result.roles[index] = role; };
+  const headerKeys = new Set(grammar.regions?.header?.keys || []);
+  const isKnownHeaderLine = (line) => {
+    const m = line.match(re.headerField);
+    return !!m && headerKeys.has(m.groups.key.trim());
+  };
 
   lines.forEach((raw, index) => {
     const line = String(raw ?? "");
@@ -585,17 +590,20 @@ export function parseWithGrammar(input, grammar) {
       }
     }
     if (region === "header" || region === "speakers") {
-      const starts = re.mainStart
-        ? re.mainStart.test(line)
-        : region === "speakers"
-          ? !!re.turnRow?.test(rowLine) && !re.speakerRow?.test(rowLine)
-          // No speaker block in this grammar: the header ends at the first
-          // row. A turn row is the more specific shape, so it wins over the
-          // generic "Key: value" a header line is read with.
-          : !re.speakerRow && !re.speakersStart && !!re.turnRow?.test(rowLine);
+      const markerHere = !!re.mainStart?.test(line);
+      // Without a marker, the main region starts at the first turn row. That
+      // is also how a document with no speaker block (and, from the header,
+      // no main marker either) gets there: both are optional per document,
+      // like the header itself. A turn row is the more specific shape, so it
+      // wins over the generic "Key: value" — unless the key is one the sample
+      // header had. The speaker block, when a grammar's marker opened it,
+      // still waits for the main marker, so a malformed declaration there is
+      // reported rather than read as a turn.
+      const looksLikeTurn = () => !!re.turnRow?.test(rowLine) && !re.speakerRow?.test(rowLine) && !isKnownHeaderLine(line);
+      const starts = markerHere || (region === "header" ? looksLikeTurn() : !re.mainStart && looksLikeTurn());
       if (starts) {
         region = "main";
-        if (re.mainStart) {
+        if (markerHere) {
           if (re.section?.test(line)) {
             section = line.trim();
             result.sections.push({ line: lineNumber, name: section });

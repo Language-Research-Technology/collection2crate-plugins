@@ -505,7 +505,30 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
   const declaredCodes = declaredCodeSet(speakers);
   const sectionOrder = [];
   let currentSection = "MAIN";
+  // The speaker block is optional, like the header. A document with neither a
+  // speaker block nor section markers is all body from its first line (header
+  // lines are still recognised and skipped), which is what the "Defaulting all
+  // rows to MAIN" warning below has always promised. With a speaker block,
+  // the body still starts at the first marker: nothing else ends the block.
+  const hasSpeakerBlock = lines.some((l) => /^Speakers:$/i.test(l.trim()));
+  const hasMarkers = lines.some((l) => SECTION_MARKERS.includes(l.trim()));
+  const bodyFromFirstTurn = !hasSpeakerBlock && !hasMarkers;
   let transcriptStarted = false;
+  // In that case the body starts at the first turn whose code the document
+  // uses more than once. A header line in an unlisted "Key: value" form looks
+  // exactly like a turn, but its key appears once; speakers take turns. When
+  // no code repeats (a very short exchange) there is nothing to tell them
+  // apart, so the body starts at the first turn, provided there are at least
+  // two speakers: one lone "Key: value" line is not an exchange.
+  const codeUses = new Map();
+  if (bodyFromFirstTurn) {
+    for (const l of lines) {
+      const c = classifyBodyLine(l.trim(), declaredCodes);
+      if (c.kind === "turn" && c.code) codeUses.set(c.code, (codeUses.get(c.code) || 0) + 1);
+    }
+  }
+  const anyCodeRepeats = [...codeUses.values()].some((n) => n > 1);
+  const startsBody = (code) => (anyCodeRepeats ? (codeUses.get(code) || 0) > 1 : codeUses.size > 1);
   let lastRow = null;
   const sections = {
     PRELIMINARIES: { markerLine: null, rowCount: 0 },
@@ -548,9 +571,12 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
       continue;
     }
 
+    const classified = classifyBodyLine(line, declaredCodes);
+    if (!transcriptStarted && bodyFromFirstTurn && classified.kind === "turn" && startsBody(classified.code)) {
+      transcriptStarted = true;
+    }
     if (!transcriptStarted) continue;
 
-    const classified = classifyBodyLine(line, declaredCodes);
     if (classified.kind === "header") continue;
 
     const record = (issues, code = null) => {
@@ -857,6 +883,23 @@ export async function processTranscriptText(text, config = {}) {
     bodyDiagnostics,
   });
 
+  // No speaker block: the speakers are the codes the turns use. Each becomes a
+  // Person with a #code id, as a declared speaker without an #id would.
+  const speakersFromTurns = !speakerDiagnostics.length && !mergedLines.some((l) => /^Speakers:$/i.test(l.trim()));
+  if (speakersFromTurns) {
+    for (const row of rows) {
+      const code = row.speakerID;
+      if (!code) continue;
+      if (!speakerMap.has(code)) {
+        speakerMap.set(code, {
+          label: code, name: code, alternateName: null, demographic: null, affiliation: null,
+          optionalCode: `#${code}`, resolvedSpeakerID: `#${code}`, line: null,
+        });
+      }
+      row.speakerID = `#${code}`;
+    }
+  }
+
   if (config.headerRows > 0) rows = rows.slice(config.headerRows);
   if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
 
@@ -879,7 +922,9 @@ export async function processTranscriptText(text, config = {}) {
     "",
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
     "",
-    formatSpeakerBlockReport(speakerDiagnostics),
+    speakersFromTurns
+      ? `Speaker block:\nThis document has no Speakers block (it is optional); the speakers are the codes the turns use (${speakerMap.size} found: ${[...speakerMap.keys()].join(", ") || "none"}).`
+      : formatSpeakerBlockReport(speakerDiagnostics),
     "",
     formatBodyReport(bodyDiagnostics),
     "",

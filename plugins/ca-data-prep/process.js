@@ -1185,8 +1185,9 @@ export async function extractTranscriptText(source, fileName) {
 // matters when nothing was selected (e.g. calling this directly, as tests do).
 export function buildRoCrateMetadata(collectionName, documents, conformsTo = "https://w3id.org/ldac/profile#Collection", { includeOutputs = true } = {}) {
   const crate = new ROCrate({ array: true, link: true });
-  crate.addContext({ ldac: "https://w3id.org/ldac/terms#" });
-  crate.addContext({ pcdm: "http://pcdm.org/models#" });
+  // One entry for both prefixes: merged into a seeded crate, each entry
+  // would otherwise sit in its @context as one more object.
+  crate.addContext({ ldac: "https://w3id.org/ldac/terms#", pcdm: "http://pcdm.org/models#" });
 
   crate.rootDataset["@id"] = "./";
   crate.rootDataset["@type"] = ["Dataset", "RepositoryCollection"];

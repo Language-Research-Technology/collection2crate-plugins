@@ -113,6 +113,12 @@ const caCtx = ({ options = {}, ...extra }) => ({
   options: { processTranscriptDocuments: true, ...options },
 });
 
+await check("the transcript crate declares its prefixes in one context entry", () => {
+  const context = buildRoCrateMetadata("c", [{ ...record, persons: [] }]).toJSON()["@context"];
+  const objects = context.filter((entry) => entry && typeof entry === "object");
+  assert.equal(objects.filter((entry) => "ldac" in entry || "pcdm" in entry).length, 1, JSON.stringify(context));
+});
+
 await check("ticked: the CSV is in the crate", async () => {
   const ctx = caCtx({ crate: null, options: { [CSV_KEY]: true } });
   await REGISTRY["ca-data-prep"](deps).hooks["crate:build"].handler(ctx);

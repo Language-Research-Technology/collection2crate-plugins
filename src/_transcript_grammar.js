@@ -120,8 +120,10 @@ export function textToLines(text, { paragraphs = false } = {}) {
  * started. A region with no marker starts at its first row — the parser then
  * falls back to the row patterns to find the boundary.
  */
-export function buildRegions(lines, roles, markers = []) {
-  const regions = { header: {}, speakers: { start: null }, main: { start: null, sections: [] } };
+export function buildRegions(lines, rawRoles, rawMarkers = [], layout = grammarLayout(null)) {
+  // Markup for a part the format doesn't have counts as Main (see applyLayout).
+  const { roles, markers } = applyLayout([...rawRoles], [...rawMarkers], layout);
+  const regions = { layout: { ...layout }, header: {}, speakers: { start: null }, main: { start: null, sections: [] } };
   const ignore = [];
   const headerKeys = [];
   const seen = new Set();
@@ -176,6 +178,38 @@ export function checkRegionOrder(roles) {
   // ("<u speaker=X>") and declare nobody up front.
   if (!present.has("main")) problems.push(`No lines are marked ${regionLabel("main")}.`);
   return problems;
+}
+
+// ---------------------------------------------------------------------------
+// Layout: which optional parts a format has at all
+// ---------------------------------------------------------------------------
+
+// Some formats are nothing but rows. A grammar records which of the optional
+// parts its format has, so that a format without them is not read as having
+// them: with no header, the first lines are rows rather than metadata; with no
+// marker lines, a heading-like row is a row. Grammars saved before this was
+// recorded have all three.
+export const LAYOUT_PARTS = [
+  { key: "header", label: "Header metadata" },
+  { key: "speakers", label: "Speaker info" },
+  { key: "markers", label: "Marker lines" },
+];
+
+export function grammarLayout(grammar) {
+  const saved = grammar?.regions?.layout || {};
+  return Object.fromEntries(LAYOUT_PARTS.map(({ key }) => [key, saved[key] !== false]));
+}
+
+/**
+ * Bring region markup in line with a layout, in place: lines in a part the
+ * format doesn't have become Main, and without marker lines no line is one.
+ */
+export function applyLayout(roles, markers, layout) {
+  roles.forEach((role, i) => {
+    if ((role === "header" && !layout.header) || (role === "speakers" && !layout.speakers)) roles[i] = "main";
+  });
+  if (!layout.markers) markers.fill(false);
+  return { roles, markers };
 }
 
 const regionLabel = (key) => REGIONS.find((r) => r.key === key)?.label || key;
@@ -469,13 +503,13 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null }) {
-  const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers);
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null) }) {
+  const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers, layout);
   // The cleanup step's rules, when there is one, replace the ignore patterns
   // derived from lines marked Ignore (it starts from those, and may edit them).
   const ignore = cleanup ? [...new Set(cleanup.drop.map((p) => p.trim()).filter(Boolean))] : markedIgnore;
   const strip = cleanup ? cleanup.strip.map((p) => p.trim()).filter(Boolean).map((pattern) => ({ pattern, flags: "u" })) : [];
-  const speakerRow = buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow });
+  const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
   const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow });
   return {
     version: GRAMMAR_VERSION,
@@ -519,14 +553,17 @@ export function validateGrammar(grammar) {
 function compile(grammar) {
   const re = (spec) => (spec?.pattern ? new RegExp(spec.pattern, spec.flags || "u") : null);
   const plain = (pattern) => (pattern ? new RegExp(pattern, "u") : null);
+  const layout = grammarLayout(grammar);
+  const marker = (pattern) => (layout.markers ? plain(pattern) : null);
   return {
-    speakerRow: re(grammar.speakerRow),
+    layout,
+    speakerRow: layout.speakers ? re(grammar.speakerRow) : null,
     turnRow: re(grammar.turnRow),
     turnRowStart: grammar.turnRow?.rowStart ? new RegExp(grammar.turnRow.rowStart, "u") : null,
     headerField: re(grammar.headerField) || new RegExp(HEADER_FIELD_PATTERN, "u"),
-    speakersStart: plain(grammar.regions?.speakers?.start),
-    mainStart: plain(grammar.regions?.main?.start),
-    section: plain(grammar.regions?.main?.sectionPattern),
+    speakersStart: layout.speakers ? marker(grammar.regions?.speakers?.start) : null,
+    mainStart: marker(grammar.regions?.main?.start),
+    section: marker(grammar.regions?.main?.sectionPattern),
     ignore: (grammar.ignore || []).map(plain),
     strip: compileStrip(grammar.strip),
   };
@@ -554,7 +591,8 @@ export function parseWithGrammar(input, grammar) {
     roles: new Array(lines.length).fill(null),
   };
 
-  let region = "header";
+  // A format with neither a header nor speaker info is rows from the start.
+  let region = re.layout.header || re.layout.speakers ? "header" : "main";
   let section = "";
   // The row a wrapped line would continue. Cleared by a section marker and by
   // a row-shaped line that failed to parse: a line after either belongs to
@@ -600,7 +638,11 @@ export function parseWithGrammar(input, grammar) {
       // still waits for the main marker, so a malformed declaration there is
       // reported rather than read as a turn.
       const looksLikeTurn = () => !!re.turnRow?.test(rowLine) && !re.speakerRow?.test(rowLine) && !isKnownHeaderLine(line);
-      const starts = markerHere || (region === "header" ? looksLikeTurn() : !re.mainStart && looksLikeTurn());
+      // A format with no header has nothing to hold before the rows, so
+      // whatever didn't open the speaker info starts the main region.
+      const starts = markerHere || (region === "header"
+        ? !re.layout.header || looksLikeTurn()
+        : !re.mainStart && looksLikeTurn());
       if (starts) {
         region = "main";
         if (markerHere) {
@@ -693,6 +735,8 @@ export function suggestRegions(lines, grammar = null) {
   const markers = new Array(lines.length).fill(false);
 
   if (grammar) {
+    // Suggestions are the saved grammar's reading of the document, before its
+    // cleanup removals: those are applied again in the cleanup step.
     const parsed = parseWithGrammar(lines, grammar);
     parsed.roles.forEach((role, i) => {
       if (!role) return;

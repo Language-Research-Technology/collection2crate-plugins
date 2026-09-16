@@ -12,6 +12,7 @@ import {
   buildRowPattern, buildRegions, buildGrammar, checkRegionOrder, decomposeSample,
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
+  applyLayout, grammarLayout,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -413,6 +414,83 @@ check("suggested samples regenerate a grammar that parses the sample itself", ()
   // "4\t(0.5)" and the period-numbered row: both kept as malformed rows, neither folded.
   assert.deepEqual(result.turns.filter((t) => t.malformed).map((t) => t.line), [14, 15]);
   assert.deepEqual(result.unmatched, []);
+});
+
+console.log("Layout: parts a format doesn't have");
+
+// A chat-style export: every line a row, the first ones included. One of the
+// rows looks like a header line ("Topic: …") and one like a section marker.
+const ROWS_ONLY = [
+  "Topic: first thing said",
+  "BB: a reply",
+  "INTERVAL",
+  "AA: and another",
+];
+const rowsOnlySamples = (lines) => [markup(lines[1], [["speaker", "BB"], ["text", "a reply"]])];
+
+check("saved grammars without a layout have every part", () => {
+  assert.deepEqual(grammarLayout({ regions: {} }), { header: true, speakers: true, markers: true });
+  assert.deepEqual(grammarLayout(null), { header: true, speakers: true, markers: true });
+});
+
+check("unticking a part turns its lines into Main and clears the markers", () => {
+  const roles = ["header", "speakers", "main", "ignore"];
+  const markers = [false, true, true, false];
+  applyLayout(roles, markers, { header: false, speakers: false, markers: false });
+  assert.deepEqual(roles, ["main", "main", "main", "ignore"]);
+  assert.deepEqual(markers, [false, false, false, false]);
+});
+
+check("a main-only grammar reads every line as a row, from the first", () => {
+  const layout = { header: false, speakers: false, markers: false };
+  const roles = ROWS_ONLY.map(() => "main");
+  const markers = ROWS_ONLY.map(() => false);
+  const grammar = buildGrammar({ name: "rows", lines: ROWS_ONLY, roles, markers, turnSamples: rowsOnlySamples(ROWS_ONLY), speakerSamples: [], layout });
+  assert.deepEqual(grammar.regions.layout, layout);
+  assert.equal(grammar.speakerRow, null);
+  const result = parseWithGrammar([...ROWS_ONLY, "Title: still a row"], grammar);
+  assert.deepEqual(result.turns.map((t) => t.speaker), ["Topic", "BB", "AA", "Title"]);
+  assert.deepEqual(result.metadata, {});
+  assert.deepEqual(result.sections, []);
+  // "INTERVAL" is not a row, so it folds into the row above instead of being a marker.
+  assert.deepEqual(result.continuations.map((c) => c.line), [3]);
+});
+
+check("with the parts ticked, the same markup reads the first line as a header", () => {
+  const roles = ["header", "main", "main", "main"];
+  const markers = [false, false, true, false];
+  const grammar = buildGrammar({ name: "rows", lines: ROWS_ONLY, roles, markers, turnSamples: rowsOnlySamples(ROWS_ONLY), speakerSamples: [] });
+  const result = parseWithGrammar(ROWS_ONLY, grammar);
+  assert.deepEqual(result.metadata, { Topic: "first thing said" });
+  assert.deepEqual(result.sections.map((x) => x.name), ["INTERVAL"]);
+});
+
+check("no header but speaker info: the speaker rows come first, then the turns", () => {
+  const lines = ["AA:\tAlex #p001", "BB:\tSam #p002", "1\tAA\thello", "2\tBB\thi"];
+  const layout = { header: false, speakers: true, markers: false };
+  const grammar = buildGrammar({
+    name: "x", lines, layout,
+    roles: ["speakers", "speakers", "main", "main"], markers: [false, false, false, false],
+    speakerSamples: [markup(lines[0], [["code", "AA"], ["name", "Alex"], ["id", "p001"]])],
+    turnSamples: [markup(lines[2], [["turn", "1"], ["speaker", "AA"], ["text", "hello"]])],
+  });
+  const result = parseWithGrammar(lines, grammar);
+  assert.deepEqual(result.speakers.map((x) => x.code), ["AA", "BB"]);
+  assert.deepEqual(result.turns.map((t) => t.text), ["hello", "hi"]);
+  // …and a document without the speaker rows is still all turns.
+  assert.deepEqual(parseWithGrammar(lines.slice(2), grammar).turns.length, 2);
+  assert.deepEqual(result.unmatched, []);
+});
+
+check("a speaker pattern is not saved when the format has no speaker info", () => {
+  const grammar = buildGrammar({
+    name: "x", lines: LINES, roles: ROLES, markers: MARKERS,
+    speakerSamples: suggestSamples(LINES, ROLES, MARKERS, "speakers", DEFAULT_GRAMMAR.speakerRow),
+    turnSamples: suggestSamples(LINES, ROLES, MARKERS, "main", DEFAULT_GRAMMAR.turnRow),
+    layout: { header: true, speakers: false, markers: true },
+  });
+  assert.equal(grammar.speakerRow, null);
+  assert.equal(grammar.regions.speakers.start, null);
 });
 
 if (failures) {

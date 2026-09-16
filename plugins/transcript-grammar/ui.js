@@ -19,10 +19,10 @@
 // host's own classes; the few rules specific to this editor are prefixed
 // `tg-` and injected once, the way roctable's tree editor does it.
 
-import { element, button, field, dataTable } from "../../src/_panel.js";
+import { element, button, field, checkbox, dataTable } from "../../src/_panel.js";
 import {
   REGIONS, IGNORE, SPEAKER_FIELDS, TURN_FIELDS, HEADER_FIELD_PATTERN,
-  DEFAULT_GRAMMAR, IGNORE_FIELD, applyCleanup, buildGrammar, buildRegions, exactPattern,
+  DEFAULT_GRAMMAR, IGNORE_FIELD, LAYOUT_PARTS, applyCleanup, applyLayout, grammarLayout, buildGrammar, buildRegions, exactPattern,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines,
 } from "../../src/_transcript_grammar.js";
@@ -230,6 +230,10 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.base = base;
     state.lines = lines;
     const { roles, markers } = suggestRegions(lines, base);
+    // Which parts the format has comes with a saved grammar; a new one starts
+    // with all of them, as the built-in convention has.
+    state.layout = grammarLayout(base);
+    applyLayout(roles, markers, state.layout);
     state.roles = roles;
     state.markers = markers;
     state.speakerSamples = null;
@@ -252,6 +256,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
 
 async function regionStep(state, { openModal, error }) {
   const { lines, roles, markers } = state;
+  const layout = state.layout || (state.layout = grammarLayout(null));
   let anchor = null;
   let cursor = null;
   let dragging = false;
@@ -294,9 +299,9 @@ async function regionStep(state, { openModal, error }) {
     const tally = {};
     roles.forEach((role, i) => { if (role && lines[i].trim()) tally[role] = (tally[role] || 0) + 1; });
     counts.textContent = [
-      ...REGIONS.map((r) => `${r.label}: ${tally[r.key] || 0}`),
+      ...REGIONS.filter((r) => r.key === "main" || layout[r.key]).map((r) => `${r.label}: ${tally[r.key] || 0}`),
       `ignored: ${tally[IGNORE] || 0}`,
-      `markers: ${markers.filter((m, i) => m && lines[i].trim()).length}`,
+      ...(layout.markers ? [`markers: ${markers.filter((m, i) => m && lines[i].trim()).length}`] : []),
       selected.size ? `${selected.size} line(s) selected` : "no selection",
     ].join(" · ");
     problems.replaceChildren(...checkRegionOrder(roles).map((p) => element("li", { text: p })));
@@ -310,6 +315,7 @@ async function regionStep(state, { openModal, error }) {
   }
 
   const assign = (role) => {
+    if (role && role !== IGNORE && role !== "main" && !layout[role]) return;
     for (const i of selection()) {
       roles[i] = role;
       if (role === IGNORE || role === null) markers[i] = false;
@@ -317,6 +323,7 @@ async function regionStep(state, { openModal, error }) {
     refresh();
   };
   const toggleMarker = () => {
+    if (!layout.markers) return;
     const picked = selection().filter((i) => lines[i].trim());
     const on = !picked.every((i) => markers[i]);
     for (const i of picked) if (roles[i] !== IGNORE) markers[i] = on;
@@ -345,6 +352,7 @@ async function regionStep(state, { openModal, error }) {
       event.preventDefault();
       setCursor((cursor ?? -1) + (event.key === "ArrowDown" ? 1 : -1), event.shiftKey);
     } else if (keys[event.key]) {
+      // assign() refuses a part the format doesn't have.
       assign(keys[event.key]);
     } else if (event.key.toLowerCase() === "m") {
       toggleMarker();
@@ -358,6 +366,38 @@ async function regionStep(state, { openModal, error }) {
     node.prepend(element("span", { className: `tg-key tg-r-${key}` }));
     return node;
   };
+  const partButtons = {
+    header: regionButton("header", "Header metadata", "1"),
+    speakers: regionButton("speakers", "Speaker info", "2"),
+    markers: button("◆ Marker line", { onClick: toggleMarker, title: "Toggle: the selected lines are headings / section markers (M)" }),
+  };
+
+  // Which optional parts this format has. Unticking one turns its lines into
+  // Main (or, for markers, plain lines) and takes its button away; ticking it
+  // again gives the button back, and the lines are marked again by hand.
+  const partBoxes = LAYOUT_PARTS.map(({ key, label }) => {
+    const box = checkbox(label, { checked: layout[key] });
+    box.input.addEventListener("change", () => {
+      layout[key] = box.input.checked;
+      applyLayout(roles, markers, layout);
+      syncParts();
+      refresh();
+    });
+    return box;
+  });
+  const mainOnly = button("Main only", {
+    title: "This format has no header, speaker info or marker lines: every line is a row",
+    onClick: () => {
+      for (const [i, { key }] of LAYOUT_PARTS.entries()) { layout[key] = false; partBoxes[i].input.checked = false; }
+      applyLayout(roles, markers, layout);
+      syncParts();
+      refresh();
+    },
+  });
+  function syncParts() {
+    for (const { key } of LAYOUT_PARTS) partButtons[key].disabled = !layout[key];
+    mainOnly.disabled = LAYOUT_PARTS.every(({ key }) => !layout[key]);
+  }
 
   const result = await openModal({
     title: "Transcript grammar — 2 of 4: regions",
@@ -366,19 +406,25 @@ async function regionStep(state, { openModal, error }) {
       ensureStyle();
       if (error) body.append(element("p", { className: "tg-error", text: error }));
       body.append(
-        element("p", { className: "field-hint", text: "Only Main is required — header metadata and speaker info are optional, and documents parsed later may leave either out. Click a line, then shift-click or drag to select a range, and mark it. A marker line (◆) is structure, not content: the heading that opens the speaker info, or a section name such as PRELIMINARIES inside the main body. Keys: ↑/↓ move (shift extends), 1–4 mark, M toggles marker, Delete clears." }),
+        element("div", { className: "tg-toolbar", attrs: { role: "group", "aria-label": "Parts this format has", style: "align-items:center;gap:16px" } }, [
+          element("span", { className: "field-label", text: "This format has:" }),
+          ...partBoxes.map((b) => b.node),
+          mainOnly,
+        ]),
+        element("p", { className: "field-hint", text: "Only Main is required. Untick the parts this format never has — some files are nothing but rows. A part that is ticked is still optional in the documents parsed later. Click a line, then shift-click or drag to select a range, and mark it. A marker line (◆) is structure, not content: the heading that opens the speaker info, or a section name such as PRELIMINARIES inside the main body. Keys: ↑/↓ move (shift extends), 1–4 mark, M toggles marker, Delete clears." }),
         element("div", { className: "tg-toolbar" }, [
-          regionButton("header", "Header metadata", "1"),
-          regionButton("speakers", "Speaker info", "2"),
+          partButtons.header,
+          partButtons.speakers,
           regionButton("main", "Main", "3"),
           regionButton(IGNORE, "Ignore", "4"),
-          button("◆ Marker line", { onClick: toggleMarker, title: "Toggle: the selected lines are headings / section markers (M)" }),
+          partButtons.markers,
           button("Clear", { onClick: () => assign(null), title: "Unmark the selected lines (Delete)" }),
         ]),
         list,
         element("div", { className: "tg-toolbar", attrs: { style: "margin-top:8px" } }, [counts]),
         problems,
       );
+      syncParts();
       refresh();
       list.focus();
     },
@@ -394,6 +440,7 @@ async function regionStep(state, { openModal, error }) {
     const found = checkRegionOrder(roles);
     if (found.length) return { nav: "stay", error: found.join(" ") };
   }
+  if (!layout.speakers) state.speakerSamples = [];
   // Region changes may have removed the lines a sample was taken from.
   for (const key of ["speakerSamples", "turnSamples"]) {
     const region = key === "speakerSamples" ? "speakers" : "main";
@@ -927,6 +974,7 @@ function currentGrammar(state) {
     turnSamples: state.turnSamples,
     optional: state.optional,
     cleanup: state.cleanup,
+    layout: state.layout || grammarLayout(null),
   });
 }
 
@@ -939,11 +987,12 @@ async function rowStep(state, { openModal, existing, error }) {
     state.turnSamples = suggestSamples(rowLines(state), state.roles, state.markers, "main", seed.turnRow);
   }
 
+  const layout = state.layout || grammarLayout(null);
   const tabs = [
     { key: "header", label: "Header metadata" },
     { key: "speakers", label: "Speaker info (optional)" },
     { key: "main", label: "Main" },
-  ];
+  ].filter((tab) => tab.key === "main" || layout[tab.key]);
   const bar = element("div", { className: "tab-bar", attrs: { role: "tablist" } });
   const panes = {};
   const speakerTest = testPanel(state, "speakers");
@@ -980,11 +1029,12 @@ async function rowStep(state, { openModal, existing, error }) {
     onMount(body) {
       ensureStyle();
       if (error) body.append(element("p", { className: "tg-error", text: error }));
-      body.append(bar, panes.header, panes.speakers, panes.main,
+      body.append(bar, ...tabs.map((tab) => panes[tab.key]),
         element("p", { className: "field-hint", attrs: { style: "margin-top:12px" }, text: existing.includes(state.name) ? `Saving replaces ${target}.` : `Saving writes ${target}.` }));
       speakerTest.update();
       turnTest.update();
-      select(state.rowTab || "speakers");
+      const tabKeys = tabs.map((tab) => tab.key);
+      select(tabKeys.includes(state.rowTab) ? state.rowTab : tabKeys.includes("speakers") ? "speakers" : "main");
     },
     actions: [
       { label: "Cancel", value: null },

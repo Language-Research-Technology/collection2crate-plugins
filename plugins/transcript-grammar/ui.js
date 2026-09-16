@@ -19,7 +19,7 @@
 import { element, button, field, dataTable } from "../../src/_panel.js";
 import {
   REGIONS, IGNORE, SPEAKER_FIELDS, TURN_FIELDS, HEADER_FIELD_PATTERN,
-  DEFAULT_GRAMMAR, buildGrammar, buildRowPattern, checkRegionOrder,
+  DEFAULT_GRAMMAR, IGNORE_FIELD, buildGrammar, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines,
 } from "../../src/_transcript_grammar.js";
 
@@ -29,6 +29,15 @@ const RENDER_CAP = 300;
 const FIELD_COLOURS = {
   code: "#d97706", name: "#2563eb", alternateName: "#7c3aed", affiliation: "#0891b2", id: "#db2777",
   turn: "#d97706", speaker: "#2563eb", text: "#16a34a",
+  [IGNORE_FIELD]: "#8a929c",
+};
+
+// Offered on every row, after the row's own fields: fixed text to match but
+// not keep ("<u speaker=", the ">" after a name).
+const IGNORE_BUTTON = {
+  key: IGNORE_FIELD,
+  label: "Ignore",
+  title: "Fixed text every row has but nobody wants kept — matched as written, not saved as a field",
 };
 
 const ROLE_LABELS = {
@@ -80,6 +89,7 @@ function ensureStyle() {
 .tg-sample-head .field-hint { flex: 1; margin: 0; }
 .tg-strip { font-family: var(--mono); font-size: 14px; white-space: pre; tab-size: 4; overflow-x: auto;
   padding: 6px 8px; background: var(--panel-2); border-radius: var(--radius-sm); user-select: text; cursor: text; line-height: 1.9; }
+.tg-f-${IGNORE_FIELD} { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); }
 .tg-tab { background: color-mix(in srgb, var(--muted) 18%, transparent); }
 .tg-fields { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
 .tg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
@@ -379,6 +389,7 @@ function renderStrip(strip, sample) {
 
 // One marked-up row: the line as selectable text, and a button per field.
 function sampleCard(sample, fields, { onChange, onRemove }) {
+  const labelOf = (key) => [...fields, IGNORE_BUTTON].find((f) => f.key === key).label;
   const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
   const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
 
@@ -437,19 +448,20 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     const range = selectedRange();
     pending = null;
     if (!range) {
-      hint.textContent = `Select part of line ${sample.index + 1} first, then choose "${fields.find((f) => f.key === field).label}".`;
+      hint.textContent = `Select part of line ${sample.index + 1} first, then choose "${labelOf(field)}".`;
       return;
     }
-    sample.spans = sample.spans.filter((s) => s.field !== field && (s.end <= range.start || s.start >= range.end));
+    // A row has one of each field but may have several ignored runs.
+    sample.spans = sample.spans.filter((s) => (field === IGNORE_FIELD || s.field !== field) && (s.end <= range.start || s.start >= range.end));
     sample.spans.push({ field, ...range });
     window.getSelection().removeAllRanges();
-    hint.textContent = `Line ${sample.index + 1} — marked "${sample.line.slice(range.start, range.end)}" as ${fields.find((f) => f.key === field).label.toLowerCase()}.`;
+    hint.textContent = `Line ${sample.index + 1} — marked "${sample.line.slice(range.start, range.end)}" as ${labelOf(field).toLowerCase()}.`;
     renderStrip(strip, sample);
     onChange();
   };
 
-  const fieldButtons = fields.map((f) => {
-    const node = button(f.label, { onClick: () => mark(f.key), title: `Mark the selected characters as ${f.label.toLowerCase()}` });
+  const fieldButtons = [...fields, IGNORE_BUTTON].map((f) => {
+    const node = button(f.label, { onClick: () => mark(f.key), title: f.title || `Mark the selected characters as ${f.label.toLowerCase()}` });
     node.prepend(element("span", { className: `tg-swatch tg-swatch-${f.key}` }));
     // Keep the text selection alive through the click.
     node.addEventListener("mousedown", (e) => e.preventDefault());
@@ -511,7 +523,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     patternBox.value = spec ? spec.pattern : "";
     const loose = spec?.unmarked || [];
     unmarkedBox.textContent = loose.length
-      ? `Not marked as any field: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there; mark it if it is a field.`
+      ? `Not marked: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there. Mark it as a field, or as Ignore if it is fixed text every row has.`
       : "";
     optionalBox.replaceChildren();
     if (spec) {
@@ -546,7 +558,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   });
 
   wrap.append(
-    element("p", { className: "field-hint", text: `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked.` }),
+    element("p", { className: "field-hint", text: `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked. Mark fixed text you don't want kept (a tag like "<u speaker=") as Ignore.` }),
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),
     errorBox,
@@ -716,12 +728,15 @@ async function rowStep(state, { openModal, existing, error }) {
   let grammar;
   try { grammar = currentGrammar(state); }
   catch (e) { return { nav: "stay", error: e.message }; }
-  if (!grammar.speakerRow) return { nav: "stay", error: "Mark up at least one speaker row (Speaker info tab)." };
   if (!grammar.turnRow) return { nav: "stay", error: "Mark up at least one content row (Main tab)." };
-  const missing = [];
-  if (!grammar.speakerRow.fields.some((f) => f.key === "code")) missing.push("a speaker code");
-  if (!grammar.turnRow.fields.some((f) => f.key === "text")) missing.push("a turn's text");
-  if (missing.length) return { nav: "stay", error: `The markup has no ${missing.join(" or ")} — mark one before saving.` };
+  if (!grammar.turnRow.fields.some((f) => f.key === "text")) {
+    return { nav: "stay", error: "No content row has its text marked (Main tab) — mark the text before saving." };
+  }
+  // Speaker rows are optional (a format may name the speaker on every row),
+  // but a speaker row that is marked up has to say who the speaker is.
+  if (grammar.speakerRow && !grammar.speakerRow.fields.some((f) => f.key === "code" || f.key === "id")) {
+    return { nav: "stay", error: "The speaker rows have no code or ID marked (Speaker info tab) — mark one, or remove those rows if this format has no speaker list." };
+  }
   return { nav: "save", grammar };
 }
 

@@ -212,6 +212,7 @@ await check("with no speaker list, the turns' speakers become the Person entitie
   assert.ok(result.log.includes('has no speaker rows; the speakers are the names the turns give (2 found)'));
   assert.deepEqual(result.metadata, { Title: "tagged-01" });
   assert.ok(result.log.includes("Ignored lines: 2, 4"), "an ignored timestamp line matches other timestamps too");
+  assert.ok(result.log.includes("Cleanup: 1 line-skip rule(s) (2 line(s) skipped), 0 removal rule(s): none"), result.log.slice(0, 600));
 });
 
 console.log("\nchat-export");

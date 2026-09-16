@@ -933,6 +933,7 @@ async function processTranscriptTextWithGrammar(text, config) {
     "Line numbers count the lines of the document as Word shows them, blank lines included.",
     "",
     "Transformations applied: timecode removal, grammar parsing, continuation repair, character cleanup.",
+    report.cleanupLine,
     "",
     formatMetadata(result.metadata, nonConforming.header),
     "",

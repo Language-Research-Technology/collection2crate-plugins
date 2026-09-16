@@ -11,7 +11,7 @@ import {
   SPEAKER_FIELDS, TURN_FIELDS, DEFAULT_GRAMMAR,
   buildRowPattern, buildRegions, buildGrammar, checkRegionOrder, decomposeSample,
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
-  textToLines, validateGrammar,
+  textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -167,6 +167,60 @@ check("an ignored line's digits match any digits", () => {
   const { ignore } = buildRegions(["05:36-05:37"], ["ignore"], [false]);
   assert.ok(new RegExp(ignore[0], "u").test("11:02-11:15"));
   assert.equal(new RegExp(ignore[0], "u").test("11:02 - later"), false);
+});
+
+console.log("Cleanup");
+
+check("shape and exact removal patterns", () => {
+  assert.equal(shapePattern("[05:36]"), "\\[\\d+:\\d+\\]");
+  assert.equal(shapePattern("(laughs)"), "\\(\\p{L}+\\)");
+  assert.ok(new RegExp(shapePattern("(~0:12)"), "u").test("so (~11:02) then"));
+  assert.ok(new RegExp(exactPattern("<u  speaker="), "u").test("<u speaker=A>"));
+  assert.equal(new RegExp(exactPattern("<u speaker="), "u").test("<x speaker=A>"), false);
+});
+
+check("patterns are checked before use, including ones that match nothing at all", () => {
+  assert.equal(patternError("\\d+"), null);
+  assert.match(patternError("(unclosed"), /Invalid|Unterminated/i);
+  assert.match(patternError("x*", { global: true }), /empty/);
+  assert.equal(patternError("   "), "empty pattern");
+});
+
+check("cleanup skips lines anywhere and removes text only from speaker and main lines", () => {
+  const lines = ["Recorded: (~0:00)", "Speakers:", "A:\tAl (~0:01) #a", "MAIN", "00:01-00:02", "A:\thi (~0:02) there", "A:\t(~0:03)"];
+  const roles = ["header", "speakers", "speakers", "main", "main", "main", "main"];
+  const markers = [false, true, false, true, false, false, false];
+  const r = applyCleanup(lines, roles, markers, { drop: ["^\\s*\\d+:\\d+-\\d+:\\d+\\s*$"], strip: ["\\(~\\d+:\\d+\\)"] });
+  assert.deepEqual(r.lines, ["Recorded: (~0:00)", "Speakers:", "A:\tAl #a", "MAIN", "", "A:\thi there", "A:\t"]);
+  assert.deepEqual(r.dropHits, [[4]]);
+  assert.deepEqual(r.stripHits, [[2, 5, 6]]);
+  assert.equal(r.changes.length, 4);
+});
+
+check("a saved grammar applies its cleanup when parsing", () => {
+  const lines = ["Title: t", "[00:01] <u who=A> hello (laughs) there", "00:05-00:06", "[00:09] <u who=B> bye"];
+  const roles = ["header", "main", "main", "main"];
+  const cleanup = { drop: ["^\\s*\\d+:\\d+-\\d+:\\d+\\s*$"], strip: [shapePattern("[00:01]"), shapePattern("(laughs)"), exactPattern("<u who=")] };
+  const clean = applyCleanup(lines, roles, lines.map(() => false), cleanup);
+  assert.equal(clean.lines[1], "A> hello there");
+  const grammar = buildGrammar({
+    name: "c", lines, roles, markers: lines.map(() => false), speakerSamples: [], cleanup,
+    turnSamples: [markup(clean.lines[1], [["speaker", "A"], ["text", "hello there"]])],
+  });
+  assert.deepEqual(grammar.strip.map((s) => s.pattern), cleanup.strip);
+  assert.deepEqual(grammar.ignore, cleanup.drop);
+  assert.deepEqual(validateGrammar(grammar), []);
+  const parsed = parseWithGrammar(lines, grammar);
+  assert.deepEqual(parsed.turns.map((t) => [t.speaker, t.text]), [["A", "hello there"], ["B", "bye"]]);
+  assert.deepEqual(parsed.ignored.map((i) => i.line), [3]);
+  assert.deepEqual(validateGrammar({ ...grammar, strip: [{ pattern: "(" }] }).length, 1);
+});
+
+check("a line the cleanup empties is skipped, not folded into the turn above", () => {
+  const grammar = { ...GRAMMAR, strip: [{ pattern: "\\[noise\\]", flags: "u" }] };
+  const parsed = parseWithGrammar(["Participants", "AA:\tAlex (R) #p1", "OPENING", "1\tAA:\thi", "[noise]"], grammar);
+  assert.equal(parsed.turns[0].text, "hi");
+  assert.deepEqual(parsed.ignored.map((i) => i.line), [5]);
 });
 
 check("unicode codes and names parse", () => {

@@ -9,6 +9,7 @@ import {
 // Hook names are literal strings and writeFileAtPath (fs_helpers.js) arrives
 // via createPlugin(deps) — see this repo's README.
 import { countedProgress } from "../../src/_progress.js";
+import { outputsInCrateOption, includeOutputs, removeOutputEntities } from "../../src/_crate_outputs.js";
 import {
   GRAMMAR_CONFIG_DIR, grammarPath, grammarFingerprint, listSavedGrammars, loadSavedGrammar,
 } from "../../src/_transcript_grammar.js";
@@ -75,6 +76,9 @@ export function addCsvFilesToCrate(crate, documentRecords) {
 // _config/ counterpart of its own: the grammar it can parse with lives in
 // _config/transcript-grammar/, which the transcript-grammar plugin owns.
 const CSV_DIR = "_outputs/csv";
+// The option that says whether the CSVs are described in the crate. The logs
+// in LOG_DIR never are; they record how a document was read.
+export const OUTPUTS_OPTION_KEY = "transcriptOutputsInCrate";
 const LOG_DIR = "_outputs/logs";
 
 export async function readDocxFileBytesFromDirHandle(dirHandle, relativePath) {
@@ -110,6 +114,7 @@ const plugin = {
         // Offered choices depend on the folder, so the host asks for them.
         choices: async ({ dirHandle }) => listSavedGrammars(dirHandle),
       },
+      outputsInCrateOption(OUTPUTS_OPTION_KEY, "the transcript CSV files"),
     ],
   },
   hooks: {
@@ -269,8 +274,18 @@ const plugin = {
         // ctx.config.rootDataset) so the transcript crate reflects whichever
         // profile the user picked, not buildRoCrateMetadata's own default.
         const selectedConformsTo = ctx.config?.rootDataset?.conformsTo?.["@id"];
-        const transcriptCrate = buildRoCrateMetadata((ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo);
-        addCsvFilesToCrate(transcriptCrate, documentRecords);
+        const withOutputs = includeOutputs(ctx.options, OUTPUTS_OPTION_KEY);
+        const transcriptCrate = buildRoCrateMetadata(
+          (ctx.dirHandle && ctx.dirHandle.name) || "Transcript Collection", documentRecords, selectedConformsTo,
+          { includeOutputs: withOutputs },
+        );
+        if (withOutputs) addCsvFilesToCrate(transcriptCrate, documentRecords);
+        else if (ctx.crate) {
+          // An earlier build may have described them; the crate carries on
+          // from that one, so take them out rather than just not adding them.
+          const removed = removeOutputEntities(ctx.crate, [CSV_DIR]);
+          if (removed) ctx.log(`Left the transcript CSVs out of the crate (removed ${removed} entit(ies) from an earlier build).`, "muted");
+        }
         if (!ctx.crate) {
           // A host that doesn't seed a crate (older collection2crate).
           ctx.crate = transcriptCrate;

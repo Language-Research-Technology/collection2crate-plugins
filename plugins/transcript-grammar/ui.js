@@ -131,7 +131,9 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
   // follows the choice only while it is still the default or the name of the
   // previously chosen grammar; a name the user typed is left alone.
   const nameFor = (base) => base || "default";
-  const baseHint = element("span", { className: "field-hint" });
+  // A block of its own, so the hint wraps on the line below the select rather
+  // than running on beside it.
+  const baseHint = element("span", { className: "field-hint", attrs: { style: "display:block;margin-top:4px" } });
   const describeBase = () => {
     const base = baseSelect.value;
     const typed = nameInput.value.trim();
@@ -155,7 +157,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
   nameInput.addEventListener("input", describeBase);
   describeBase();
 
-  const textarea = element("textarea", { className: "mono", attrs: { rows: 14, spellcheck: "false", placeholder: "Paste a transcript here, or choose a file below." } });
+  const textarea = element("textarea", { className: "mono", attrs: { rows: 6, spellcheck: "false", placeholder: "Paste a transcript here, or choose a file below." } });
   const draft = state.draftLines || state.lines;
   textarea.value = draft ? draft.join("\n") : "";
   textarea.style.whiteSpace = "pre";

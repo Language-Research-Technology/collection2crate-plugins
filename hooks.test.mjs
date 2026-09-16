@@ -139,6 +139,72 @@ check("exactly one builder is unconditional, and it sorts last in the band", () 
   }
 });
 
+// A folder with an existing crate: collection2crate seeds ctx.crate before
+// crate:build, and a builder — or any tap that used to replace the crate —
+// has to add to that object. collection2crate fails a build whose seeded
+// crate was swapped out (its SPEC.md §4.4), so these check the plugins keep it.
+console.log("\nSeeded crates are added to, not replaced");
+
+const seededDeps = (overrides) => new Proxy({}, {
+  get: (_t, key) => (key in overrides ? overrides[key] : noop),
+  has: () => true,
+});
+const quietCtx = (extra) => ({ log: noop, options: {}, config: {}, ...extra });
+
+{
+  let passedCrate;
+  const plugin = REGISTRY["generic-input"](seededDeps({
+    buildCrate: (_files, _config, _log, opts) => { passedCrate = opts.crate; return opts.crate || { fresh: true }; },
+  }));
+  const seed = { seeded: true };
+  const ctx = quietCtx({ crate: seed, filesWithMeta: [] });
+  await plugin.hooks["crate:build"].handler(ctx);
+  check("generic-input: hands the seeded crate to buildCrate and keeps it", () => {
+    assert.equal(passedCrate, seed);
+    assert.equal(ctx.crate, seed);
+  });
+  const fresh = quietCtx({ crate: null, filesWithMeta: [] });
+  await plugin.hooks["crate:build"].handler(fresh);
+  check("generic-input: creates a crate when nothing was seeded", () => {
+    assert.deepEqual(fresh.crate, { fresh: true });
+  });
+}
+
+{
+  const merges = [];
+  const plugin = REGISTRY["ca-data-prep"](seededDeps({
+    mergeCrateInto: (target, source) => { merges.push({ target, source }); return { added: 1, enriched: 0 }; },
+  }));
+  const record = {
+    baseName: "interview", objectId: "#interview", annotationId: "#interview-annotation",
+    docxId: "transcripts/interview.docx", docxName: "interview.docx",
+    csvDirName: "_outputs/csv", csvName: "interview.csv", csvId: "_outputs/csv/interview.csv",
+    speakerRefs: [], persons: [],
+  };
+  const caCtx = (extra) => quietCtx({
+    options: { processTranscriptDocuments: true },
+    caDataPrep: { files: [{}], documentRecords: [record] },
+    ...extra,
+  });
+
+  const seed = { seeded: true };
+  const seeded = caCtx({ crate: seed, existingCrate: { "@graph": [] } });
+  await plugin.hooks["crate:build"].handler(seeded);
+  check("ca-data-prep: with an existing crate, merges the transcript crate into it", () => {
+    assert.equal(seeded.crate, seed, "ctx.crate was replaced");
+    assert.equal(merges.length, 1);
+    assert.equal(merges[0].target, seed);
+    assert.ok(merges[0].source.getEntity("#interview"), "the transcript crate carries the document");
+  });
+
+  const first = caCtx({ crate: { scanned: true } });
+  await plugin.hooks["crate:build"].handler(first);
+  check("ca-data-prep: on a first build, the transcript crate is the crate, as before", () => {
+    assert.ok(first.crate.getEntity?.("#interview"));
+    assert.equal(merges.length, 1, "nothing merged without an existing crate");
+  });
+}
+
 console.log("\nProgress helper");
 check("progressFor: no-ops when the host has no ctx.progress", () => {
   const p = progressFor({});

@@ -139,7 +139,7 @@ Current assignments, per stage:
 
 | Stage | Order |
 |---|---|
-| `folder:picked` | `xlsx-crate-input` 10 |
+| `folder:picked` | — (the existing crate is loaded by collection2crate itself) |
 | `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
 | `files:write` | `ca-data-prep` 10 · `chat-export` 20 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
@@ -171,7 +171,7 @@ here, since this change was a rename, not a reordering.
 
 There is no separate kind of plugin for reading a folder, and no input-mode
 setting the host dispatches on. A **builder** is just a plugin whose
-`"crate:build"` tap sits in the band `priority <= 10` and assigns
+`"crate:build"` tap sits in the band `priority <= 10` and produces
 `ctx.crate`; everything at 20 and above annotates the crate a builder
 produced, which is why those taps can assume it already exists.
 
@@ -194,8 +194,22 @@ profile to enable — nothing in the host changes. Exactly one builder in the
 registry may go ungated; `hooks.test.mjs` enforces that, since a second
 unconditional one could never run.
 
-If a build ends with no `ctx.crate`, collection2crate fails it with an error
-naming the stage rather than carrying on into validation with nothing.
+**A builder adds to an existing crate; it never replaces it.** When the
+picked folder already has a crate, collection2crate loads it, asks the user
+what to do about new and missing files, and seeds `ctx.crate` with it just
+before `crate:build` (collection2crate SPEC.md §4.4a). A builder that finds
+`ctx.crate` set adds to that object — `buildCrate(files, config, log, { crate:
+ctx.crate })` for a folder scan, `mergeCrateInto(ctx.crate, ownCrate)` for a
+builder that assembles its own graph. Either way the existing crate wins:
+properties an entity already has keep their values. When `ctx.crate` is
+`null` there was no existing crate, and the builder creates one.
+
+collection2crate checks this itself. A build fails with an error naming the
+builder if the builder never ran, if it ends with no `ctx.crate`, or if it
+replaced a seeded crate with a different object. The same rule holds for any
+tap at 20 and above: `ca-data-prep` still replaces the scan's crate on a first
+build, but lands its transcript crate in the seeded one when there is an
+existing crate.
 
 ### Progress
 
@@ -270,10 +284,10 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 
 | Plugin | `deps` keys it needs |
 |---|---|
-| `xlsx-crate-input` | `readFileBytes`, `readJsonFromFolder`, `loadMasp`, `statFile` (handed to `xlsx_crate.js`'s own `configure(deps)` on each dynamic import) |
+| `xlsx-crate-input` | `readFileBytes`, `loadMasp` |
 | `austlang` | `addLanguageEntities` |
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
-| `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar) |
+| `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar), `mergeCrateInto` (lands the transcript crate in an existing one) |
 | `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
@@ -283,8 +297,8 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
 | `ro-crate-html-output` | `crateToPreviewHtml`, `crateToMultiPageHtml`, `writeFile`, `writeFileAtPath`, `readJsonFromFolder`, `readFileTextFromDirectory`, `verifyPermission`, `fileExists`, `bustCacheUrl`, `buildGitHubTreeUrl`, `fetchGitHubTextFile`, `listGitHubFolder` |
-| `generic-input` (builder) | `buildFileMetadata`, `buildCrate`, `readJsonFromFolder` (reads the folder's existing crate, if any, to reconcile against rather than replace — collection2crate SPEC.md §6.1a), `openModal` (confirms which newly-found files to add, via `new-files-confirm.js`) |
-| `docx-input` (builder) | `writeFileAtPath`, `fileExists` (both handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves) |
+| `generic-input` (builder) | `buildFileMetadata`, `buildCrate` (adds the scan to the crate collection2crate seeded from the folder's existing one, if any — collection2crate SPEC.md §4.4a) |
+| `docx-input` (builder) | `writeFileAtPath`, `fileExists` (both handed to `docx_crate.js`'s own `configure(deps)` once its dynamic import resolves), `mergeCrateInto` (lands the parsed crate in an existing one) |
 
 `openModal` has one shape, documented in collection2crate SPEC.md §6.2 — a
 plugin builds its content in `onMount(body, { close })` and declares its

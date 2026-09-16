@@ -14,25 +14,19 @@ import { progressFor } from "../../src/_progress.js";
 // via createPlugin(deps) — including loadMasp, a thunk
 // (`() => import("../masp.js")`) that keeps the heavy validator dynamically
 // imported from collection2crate's own tree. See this repo's README.
-let readFileBytes, readJsonFromFolder, loadMasp, coreDeps;
+let readFileBytes, loadMasp;
 
 export function createPlugin(deps) {
-  ({ readFileBytes, readJsonFromFolder, loadMasp } = deps);
-  coreDeps = deps;
+  ({ readFileBytes, loadMasp } = deps);
   return plugin;
 }
 
-// xlsx_crate.js needs one core function too (statFile) — configure() hands
-// it coreDeps every time it's freshly imported, since a dynamic import()
-// only re-runs module init once per module (cached after that), not once
-// per call site.
+// The folder's existing crate (ro-crate-metadata.json/.xlsx) is the core's
+// to load now — collection2crate SPEC.md §4.4a. This plugin only ever reads
+// additional-ro-crate-metadata.xlsx, or an uploaded workbook, at crate:prepare.
 async function loadXlsxCrate() {
-  const mod = await import("./xlsx_crate.js");
-  mod.configure(coreDeps);
-  return mod;
+  return import("./xlsx_crate.js");
 }
-
-const DESCRIPTOR_FILENAME = "ro-crate-metadata.json";
 
 const plugin = {
   name: "xlsx-crate-input",
@@ -46,33 +40,6 @@ const plugin = {
     ],
   },
   hooks: {
-    // Offer prefill data for the Describe step from whichever crate-metadata
-    // source in the folder was touched most recently — the spreadsheet the
-    // collection is authored in, or the JSON a previous build (or rocxl)
-    // wrote. Moved here (from being hardcoded in main.js's folder-pick flow)
-    // so which sources count as "existing crate metadata" stays this
-    // plugin's call, not the app's.
-    "folder:picked": {
-      priority: 10,
-      handler: async (ctx) => {
-        const { pickNewestCrateSource, readCrateJsonFromSource } = await loadXlsxCrate();
-        const source = await pickNewestCrateSource(ctx.dirHandle);
-        if (!source) return;
-        try {
-          ctx.crateJson = await readCrateJsonFromSource(source);
-          ctx.crateSourceLabel = `${source.name} (modified ${new Date(source.lastModified).toLocaleString()})`;
-        } catch (e) {
-          // A spreadsheet that won't parse shouldn't cost the user the JSON
-          // sitting next to it — but if the JSON itself was the one that
-          // failed, re-reading it again would just fail the same way.
-          ctx.log(`Could not read ${source.name} for prefill: ${e.message}`, "warn");
-          const fallback = source.kind !== "json" ? await readJsonFromFolder(ctx.dirHandle, DESCRIPTOR_FILENAME) : null;
-          ctx.crateJson = fallback;
-          ctx.crateSourceLabel = fallback ? DESCRIPTOR_FILENAME : "";
-        }
-      },
-    },
-
     // Seed the root dataset before the crate is built, so the values are in
     // ctx.config by the time generic-input calls buildCrate().
     "crate:prepare": {

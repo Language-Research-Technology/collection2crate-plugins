@@ -2,7 +2,7 @@
 // discovered @type (tick to select it as a table), each unrolling to a list
 // of its properties (include/expand/load_text/join), an expanded property
 // further unrolling to its own one-hop sub-properties. Built the same
-// "no host markup, no HTML string" way as new-files-confirm.js: openModal's
+// "no host markup, no HTML string" way as the rest of the plugin UI: openModal's
 // own `onMount`/`actions` (collection2crate SPEC.md §6.2) plus the host's
 // own `.checkbox`/`.button`/`.field-hint` CSS, so this ships no markup and
 // no stylesheet of its own — bar the one width override below.

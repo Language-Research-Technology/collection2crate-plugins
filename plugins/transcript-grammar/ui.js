@@ -126,6 +126,34 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
   baseSelect.append(element("option", { text: "— the ca-data-prep convention —", attrs: { value: "" } }));
   for (const name of grammars) baseSelect.append(element("option", { text: name, attrs: { value: name } }));
   baseSelect.value = state.baseName || "";
+  // Starting from a saved grammar is how one is edited, so picking it also
+  // names the result after it — saving then updates that grammar. The name
+  // follows the choice only while it is still the default or the name of the
+  // previously chosen grammar; a name the user typed is left alone.
+  const nameFor = (base) => base || "default";
+  const baseHint = element("span", { className: "field-hint" });
+  const describeBase = () => {
+    const base = baseSelect.value;
+    const typed = nameInput.value.trim();
+    baseHint.textContent = !base
+      ? grammars.includes(typed)
+        ? `Starting from the built-in convention — saving replaces the saved grammar "${typed}".`
+        : "Start a new grammar from the built-in convention, or pick a saved grammar to edit it."
+      : typed === base
+        ? `Editing "${base}": saving replaces _config/transcript-grammar/${base}.json. Change the name above to save a copy instead.`
+        : grammars.includes(typed)
+          ? `Starting from "${base}" — saving replaces the other saved grammar "${typed}".`
+          : `Starting from "${base}" and saving as "${typed || "…"}" — "${base}" itself is left unchanged.`;
+  };
+  let lastBase = baseSelect.value;
+  baseSelect.addEventListener("change", () => {
+    const typed = nameInput.value.trim();
+    if (!typed || typed === nameFor(lastBase)) nameInput.value = nameFor(baseSelect.value);
+    lastBase = baseSelect.value;
+    describeBase();
+  });
+  nameInput.addEventListener("input", describeBase);
+  describeBase();
 
   const textarea = element("textarea", { className: "mono", attrs: { rows: 14, spellcheck: "false", placeholder: "Paste a transcript here, or choose a file below." } });
   const draft = state.draftLines || state.lines;
@@ -163,7 +191,10 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
       body.append(
         element("p", { className: "field-hint", text: "Mark up one representative transcript. The patterns generated from it are saved to the folder's _config/transcript-grammar/ and can then parse other documents in the same format. Only the patterns are saved — never the sample's text." }),
         field("Grammar name (saved as _config/transcript-grammar/<name>.json)", nameInput),
-        grammars.length ? field("Suggest the markup from", baseSelect) : null,
+        grammars.length ? element("label", { className: "field" }, [
+          element("span", { className: "field-label", text: "Start from (pick a saved grammar to edit it)" }),
+          baseSelect, baseHint,
+        ]) : null,
         field("Transcript text", textarea),
         element("label", { className: "field" }, [
           element("span", { className: "field-label", text: "…or choose a file (.txt, .docx)" }),

@@ -207,8 +207,14 @@ function splitGap(gap, { leading = false, trailing = false } = {}) {
   return { closers: gap.slice(0, i), middle: gap.slice(i, j), openers: gap.slice(j) };
 }
 
+// Letters or digits in a gap are content nobody marked, not delimiters. They
+// must not become literal text in the pattern — that would make the pattern
+// match only rows with those very words — so they generalise to "anything".
+const WORDY = /[\p{L}\p{N}]/u;
+
 function generaliseSeparator(middle) {
   if (middle === "") return "";
+  if (WORDY.test(middle)) return ".+?";
   // A tab is kept as a tab: it is what tells a turn-number column from prose
   // that happens to open with a numeral (see ca-data-prep's grammar notes).
   if (/^[\t ]+$/.test(middle)) return middle.includes("\t") ? "[ ]*\\t[\\t ]*" : `${WS}+`;
@@ -277,7 +283,15 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
   // Per field, per sample: the punctuation hugging it and the gaps either side.
   const stats = new Map(order.map((key) => [key, { present: 0, prefix: [], suffix: [], sepBefore: [], sepAfter: [] }]));
   const tails = [];
+  const unmarked = new Set();
+  let wildLead = false;
   for (const sample of decomposed) {
+    // Reported from the first letter or digit: the delimiters before it are
+    // not what the person needs to go and mark.
+    const words = (gap) => gap.slice(gap.search(WORDY)).trim();
+    for (const f of sample.fields) if (WORDY.test(f.before)) unmarked.add(words(f.before));
+    if (WORDY.test(sample.tail)) unmarked.add(words(sample.tail));
+    if (sample.fields.length && WORDY.test(sample.fields[0].before)) wildLead = true;
     const n = sample.fields.length;
     const gaps = sample.fields.map((f, i) => splitGap(f.before, { leading: i === 0 }));
     const tailGap = splitGap(sample.tail, { trailing: true });
@@ -328,7 +342,7 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
     return cls ? `[^${cls}]+?` : ".+?";
   };
 
-  let pattern = `^${WS}*`;
+  let pattern = `^${WS}*${wildLead ? ".*?" : ""}`;
   let requiredSeen = false;
   fieldInfo.forEach((info, index) => {
     const core = `${info.prefix}(?<${info.key}>${valuePattern(info, index)})${info.suffix}`;
@@ -345,7 +359,7 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
   });
   // Whatever trails the last field is never required: stray punctuation after
   // an #id is a slip in one row, not part of the shape of every row.
-  const tail = alternatives([...tails, ""], escapeRegex);
+  const tail = tails.some((t) => WORDY.test(t)) ? ".*" : alternatives([...tails, ""], escapeRegex);
   pattern += `${WS}*${tail}${tail ? `${WS}*` : ""}$`;
 
   // A row that opens with a turn number is recognisable by that alone, even
@@ -361,6 +375,9 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
     pattern,
     flags: "u",
     rowStart,
+    // Sample text that fell outside every field. The editor shows it as a
+    // prompt to mark it; buildGrammar drops it, so it is never saved.
+    unmarked: [...unmarked].filter(Boolean),
     fields: fieldInfo.map(({ key, label, present, samples: count, optional, alwaysPresent }) => (
       { key, label, present, samples: count, optional, alwaysPresent }
     )),
@@ -382,9 +399,15 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
     regions,
     ignore,
     headerField: { pattern: HEADER_FIELD_PATTERN, flags: "u" },
-    speakerRow,
-    turnRow,
+    speakerRow: withoutSampleText(speakerRow),
+    turnRow: withoutSampleText(turnRow),
   };
+}
+
+function withoutSampleText(spec) {
+  if (!spec) return spec;
+  const { unmarked, ...kept } = spec;
+  return kept;
 }
 
 /** Check a loaded config before trusting it. Returns a list of problems. */

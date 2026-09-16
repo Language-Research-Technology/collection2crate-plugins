@@ -136,6 +136,19 @@ check("an empty text field still matches", () => {
   assert.equal("3\tAA:\t".match(new RegExp(spec.pattern, spec.flags)).groups.text, "");
 });
 
+check("text left unmarked is never written into the pattern", () => {
+  // Speaker marked, text not: the words after it must not become a literal.
+  const spec = buildRowPattern([markup("A:\ttest text?", [["speaker", "A"]])], TURN_FIELDS);
+  assert.ok(!spec.pattern.includes("test"), spec.pattern);
+  assert.deepEqual(spec.unmarked, ["test text?"]);
+  assert.ok(new RegExp(spec.pattern, spec.flags).test("B:\tsomething else entirely"));
+  const between = buildRowPattern([markup("7 said A: hi", [["turn", "7"], ["speaker", "A"], ["text", "hi"]])], TURN_FIELDS);
+  assert.ok(!between.pattern.includes("said"), between.pattern);
+  assert.equal("9 whispered B: yo".match(new RegExp(between.pattern, between.flags)).groups.speaker, "B");
+  const grammar = buildGrammar({ name: "x", lines: LINES, roles: ROLES, markers: MARKERS, speakerSamples: SPEAKER_SAMPLES, turnSamples: [markup("A:\ttest text?", [["speaker", "A"]])] });
+  assert.ok(!JSON.stringify(grammar).includes("test text"), "unmarked sample text must not be saved");
+});
+
 check("unicode codes and names parse", () => {
   const sample = markup("Ŋa:\tŊarri (Élder) #x1", [["code", "Ŋa"], ["name", "Ŋarri"], ["affiliation", "Élder"], ["id", "x1"]]);
   const spec = buildRowPattern([sample], SPEAKER_FIELDS);

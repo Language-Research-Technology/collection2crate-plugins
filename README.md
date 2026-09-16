@@ -291,7 +291,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `austlang` | `addLanguageEntities` |
 | `file-format-identify` | `graphEntityById` (handed to `matcher.js`'s own `configure(deps)` on each dynamic import, for `getFileHandleAtPath`) |
 | `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar), `mergeCrateInto` (lands the transcript crate in an existing one) |
-| `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx reading goes through `ca-data-prep`'s own exports rather than `deps`) |
+| `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx/.txt reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
@@ -341,6 +341,14 @@ PRELIMINARIES                                            ← section marker, alo
 MAIN
 D:→hi                                                    ← unnumbered is equally fine
 ```
+
+It reads `.docx` and `.txt` files (as does `chat-export`). A `.txt` is
+decoded as UTF-8, or UTF-16 when it starts with that byte-order mark, and
+each of its lines is given the shape of a `.docx` paragraph before parsing
+(`plainTextAsParagraphs` in `process.js`), so both go through the same parser
+and a line number in the log is the line's number in the file. A `.txt` with
+the same name as a `.docx` is skipped with a warning, since the two would
+write the same CSV and CHAT file. `txt-transcripts.test.mjs` covers this.
 
 A line that is not a turn is folded into the turn above it, which is what
 makes wrapped text work — and what makes an unrecognised turn shape fail

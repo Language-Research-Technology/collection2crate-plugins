@@ -918,7 +918,7 @@ export async function processTranscriptText(text, config = {}) {
 
   const logLines = [
     `Non-conforming lines: ${nonConforming.total} (${nonConformingSpeakers.length} in the speaker block, ${bodyDiagnostics.length} in the body).`,
-    "Line numbers count the lines of the document as Word shows them, blank lines included.",
+    "Line numbers count the lines of the document as Word or a text editor shows them, blank lines included.",
     "",
     "Transformations applied: text normalization, continuation repair, speaker block review, section classification, character cleanup.",
     "",
@@ -975,7 +975,7 @@ async function processTranscriptTextWithGrammar(text, config) {
   const logLines = [
     report.grammarLine,
     `Non-conforming lines: ${nonConforming.total} (${nonConforming.speakers.length} in the speaker block, ${nonConforming.body.length} in the body, ${nonConforming.header.length} in the header).`,
-    "Line numbers count the lines of the document as Word shows them, blank lines included.",
+    "Line numbers count the lines of the document as Word or a text editor shows them, blank lines included.",
     "",
     "Transformations applied: timecode removal, grammar parsing, continuation repair, character cleanup.",
     report.cleanupLine,
@@ -1091,6 +1091,92 @@ export async function extractDocumentText(docxSource) {
   return result.value || "";
 }
 
+// ---------------------------------------------------------------------------
+// Transcript source files: .docx and .txt
+// ---------------------------------------------------------------------------
+
+// The files ca-data-prep and chat-export read as transcripts.
+export const TRANSCRIPT_FILE_PATTERN = /\.(docx|txt)$/i;
+
+const SOURCE_MEDIA_TYPES = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  txt: "text/plain",
+};
+
+const extensionOf = (fileName) => (String(fileName || "").match(/\.([^./\\]+)$/) || [])[1]?.toLowerCase() || "";
+
+export const isTranscriptFile = (fileName) => TRANSCRIPT_FILE_PATTERN.test(String(fileName || ""));
+
+// "interview.docx" and "interview.txt" both become "interview": the name the
+// CSV, log, CHAT file and RepositoryObject are all given.
+export const transcriptBaseName = (fileName) => String(fileName || "").replace(TRANSCRIPT_FILE_PATTERN, "");
+
+export const transcriptMediaType = (fileName) => SOURCE_MEDIA_TYPES[extensionOf(fileName)] || "application/octet-stream";
+
+/**
+ * The transcript files among a folder's entries, one per base name.
+ *
+ * A folder holding both interview.docx and interview.txt (a plain-text export
+ * kept beside the original, say) would have them write the same CSV and CHAT
+ * file, each overwriting the other. The .docx is kept and the other skipped,
+ * with `warn` told which.
+ */
+export function selectTranscriptFiles(entries, warn = () => {}) {
+  const nameOf = (entry) => entry.fileName || entry.name || "";
+  const candidates = (entries || []).filter((entry) => isTranscriptFile(nameOf(entry)));
+  const rank = (entry) => (extensionOf(nameOf(entry)) === "docx" ? 0 : 1);
+  const chosen = new Map();
+  for (const entry of candidates) {
+    const key = transcriptBaseName(nameOf(entry));
+    const held = chosen.get(key);
+    if (!held) { chosen.set(key, entry); continue; }
+    const [keep, skip] = rank(entry) < rank(held) ? [entry, held] : [held, entry];
+    chosen.set(key, keep);
+    const pathOf = (e) => e.relativePath || nameOf(e);
+    warn(`Skipped ${pathOf(skip)}: ${pathOf(keep)} has the same name and would write the same output files.`);
+  }
+  // Keep the folder's own order.
+  const kept = new Set(chosen.values());
+  return candidates.filter((entry) => kept.has(entry));
+}
+
+/**
+ * Decode a plain-text file: UTF-8 unless a byte-order mark says UTF-16. The
+ * mark itself is dropped, so it can't end up in front of the first header.
+ */
+export function decodePlainText(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let encoding = "utf-8";
+  if (view[0] === 0xff && view[1] === 0xfe) encoding = "utf-16le";
+  else if (view[0] === 0xfe && view[1] === 0xff) encoding = "utf-16be";
+  return new TextDecoder(encoding).decode(view);
+}
+
+/**
+ * Give plain text the shape mammoth gives a .docx: each line a paragraph,
+ * ended by a blank line. Everything downstream — the line numbers in the log
+ * (paragraphNumbersByLine), a saved grammar's reader (documentLines) — then
+ * treats a .txt line exactly as it treats a .docx paragraph, so a line
+ * number in the log is that line's number in the file.
+ */
+export function plainTextAsParagraphs(text) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  // A file's final newline ends its last line; it doesn't start another.
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.map((line) => `${line}\n\n`).join("");
+}
+
+/**
+ * A transcript file's text, whichever kind it is: mammoth's extraction for a
+ * .docx, the decoded file for a .txt.
+ */
+export async function extractTranscriptText(source, fileName) {
+  if (extensionOf(fileName) !== "txt") return extractDocumentText(source);
+  const buffer = await resolveMammothArrayBuffer(source);
+  if (!buffer) return "";
+  return plainTextAsParagraphs(decodePlainText(buffer));
+}
+
 // conformsTo defaults to the LDAC Collection profile's own identity (this
 // function always builds a RepositoryCollection root) rather than hardcoding
 // it — the caller (ca-data-prep's "crate:build" hook) passes through
@@ -1119,7 +1205,7 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
   crate.rootDataset.hasMember = documents.map((document) => ({ "@id": document.objectId }));
 
   for (const document of documents) {
-    // Without its outputs, a document is its .docx and its speakers: no CSV
+    // Without its outputs, a document is its source file and its speakers: no CSV
     // file, so no main text or annotation pointing at one.
     const objectEntity = {
       "@id": document.objectId,
@@ -1155,7 +1241,7 @@ export function buildRoCrateMetadata(collectionName, documents, conformsTo = "ht
       "@id": document.docxId,
       "@type": "File",
       name: document.docxName,
-      encodingFormat: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      encodingFormat: document.sourceEncodingFormat || transcriptMediaType(document.docxName),
     });
     if (includeOutputs) crate.addEntity(csvFileEntity);
 

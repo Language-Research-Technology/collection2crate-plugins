@@ -1,4 +1,4 @@
-import { extractDocumentText, processTranscriptText } from "../ca-data-prep/process.js";
+import { extractTranscriptText, processTranscriptText, selectTranscriptFiles, transcriptBaseName } from "../ca-data-prep/process.js";
 import { countedProgress } from "../../src/_progress.js";
 import { outputsInCrateOption, includeOutputs, removeOutputEntities } from "../../src/_crate_outputs.js";
 
@@ -110,7 +110,7 @@ const plugin = {
     key: "generateChatFiles",
     label: "Generate CHAT (.cha) outputs",
     default: false,
-    hint: "Creates one CHAT transcript per .docx file, using the transcript speaker metadata and any parenthetical group name from the source.",
+    hint: "Creates one CHAT transcript per .docx or .txt transcript, using the transcript speaker metadata and any parenthetical group name from the source.",
     children: [outputsInCrateOption(OUTPUTS_OPTION_KEY, "the CHAT files")],
   },
   hooks: {
@@ -120,7 +120,10 @@ const plugin = {
       activeWhen: (ctx) => !!ctx.options.generateChatFiles,
       handler: async (ctx) => {
         if (!ctx.options.generateChatFiles) return;
-        const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
+        // ca-data-prep reports a skipped same-named file when it runs too;
+        // saying so twice would read as two problems.
+        const warn = ctx.options.processTranscriptDocuments ? undefined : (message) => ctx.log(message, "warn");
+        const files = selectTranscriptFiles(ctx.filesWithMeta || ctx.files || [], warn);
         if (!files.length) return;
 
         const { resolveTranscriptGrammar } = await import("../ca-data-prep/index.js");
@@ -138,8 +141,8 @@ const plugin = {
           }
           if (!buffer) { tick(index); continue; }
 
-          const text = await extractDocumentText(buffer);
-          const baseName = (file.fileName || file.name || "document").replace(/\.docx$/i, "");
+          const text = await extractTranscriptText(buffer, file.fileName || file.name);
+          const baseName = transcriptBaseName(file.fileName || file.name) || "document";
           const chatText = await generateChatText(text, {
             languageIso: ctx.options.languageIso || "",
             corpusId: ctx.dirHandle && ctx.dirHandle.name ? ctx.dirHandle.name : baseName,
@@ -162,11 +165,11 @@ const plugin = {
         tick.done();
 
         ctx.chatExport = { files, documentRecords };
-        ctx.log(`Prepared CHAT export for ${documentRecords.length} .docx file(s).`, "muted");
+        ctx.log(`Prepared CHAT export for ${documentRecords.length} transcript file(s).`, "muted");
       },
     },
 
-    // CHAT files are derived from the folder's own .docx files, so they are
+    // CHAT files are derived from the folder's own transcript files, so they are
     // written at files:write — during Process, where they were asked for —
     // rather than waiting for a build. The entities describing them are added
     // at crate:build below, the first point where a crate exists.
@@ -226,10 +229,10 @@ const plugin = {
 // Registers each .cha as a File entity so it's actually part of the RO-Crate,
 // not just a file sitting next to it. ca-data-prep runs before chat-export
 // (priority 50 vs 60 on crate:build — see this repo's README) and, when it
-// processes the same source .docx, will already have added a RepositoryObject
+// processes the same source file, will already have added a RepositoryObject
 // at "#<baseName>" with the docx/csv as hasPart — chat-export
 // computes that same id independently (both derive baseName from the source
-// .docx filename the same way) so it can add the .cha into that object's
+// source filename the same way) so it can add the .cha into that object's
 // hasPart alongside them. If ca-data-prep didn't run this build (chat export
 // used on its own), there's no such object to join, so the File entity is
 // just added standalone.

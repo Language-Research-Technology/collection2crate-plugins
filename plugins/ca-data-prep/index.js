@@ -1,7 +1,10 @@
 import {
   buildRoCrateMetadata,
   processTranscriptText,
-  extractDocumentText,
+  extractTranscriptText,
+  selectTranscriptFiles,
+  transcriptBaseName,
+  transcriptMediaType,
   buildSpeakerPersonEntities,
   toCsv,
 } from "./process.js";
@@ -101,9 +104,9 @@ const plugin = {
   ],
   optionSchema: {
     key: "processTranscriptDocuments",
-    label: "Process plain transcript documents (.docx)",
+    label: "Process plain transcript documents (.docx, .txt)",
     default: false,
-    hint: "Runs the CAAT/AmAus transcript parser over .docx files in the generic folder build, writing cleaned CSV/log outputs and transcript metadata.",
+    hint: "Runs the CAAT/AmAus transcript parser over .docx and .txt files in the generic folder build, writing cleaned CSV/log outputs and transcript metadata.",
     children: [
       {
         key: "transcriptGrammar",
@@ -124,7 +127,7 @@ const plugin = {
       activeWhen: (ctx) => !!ctx.options.processTranscriptDocuments,
       handler: async (ctx) => {
         if (!ctx.options.processTranscriptDocuments) return;
-        const files = (ctx.filesWithMeta || ctx.files || []).filter((entry) => /\.docx$/i.test(entry.fileName || entry.name || ""));
+        const files = selectTranscriptFiles(ctx.filesWithMeta || ctx.files || [], (message) => ctx.log(message, "warn"));
         if (!files.length) return;
 
         // Before the loop, so a missing or broken grammar fails the run once,
@@ -143,19 +146,19 @@ const plugin = {
             buffer = await readDocxFileBytesFromDirHandle(ctx.dirHandle, filePath);
           }
           if (!buffer) {
-            ctx.log(`Skipped transcript processing for ${filePath || file.fileName || file.name || "unknown .docx"}: file bytes were unavailable.`, "warn");
+            ctx.log(`Skipped transcript processing for ${filePath || file.fileName || file.name || "unknown transcript"}: file bytes were unavailable.`, "warn");
             // Skipped files still count towards the bar — otherwise a folder
-            // where half the .docx files are unreadable leaves it short.
+            // where half the transcripts are unreadable leaves it short.
             tick(index);
             continue;
           }
-          const text = await extractDocumentText(buffer);
+          const text = await extractTranscriptText(buffer, file.fileName || file.name);
           const result = await processTranscriptText(text, {
             ...(ctx.options || {}),
             grammar: chosen?.grammar || null,
             grammarName: chosen?.name || "",
           });
-          const baseName = (file.fileName || file.name || "").replace(/\.docx$/i, "");
+          const baseName = transcriptBaseName(file.fileName || file.name);
 
           // Document-level warnings (section order, and the like) are few and
           // worth reading here. Per-line non-conformance is not: a transcript
@@ -183,7 +186,9 @@ const plugin = {
 
           documentRecords.push({
             baseName,
+            // docxName/docxId name the source file, .txt or .docx alike.
             docxName: file.fileName || file.name,
+            sourceEncodingFormat: transcriptMediaType(file.fileName || file.name),
             csvName: `${baseName}.csv`,
             csvDirName,
             logDirName,
@@ -210,7 +215,7 @@ const plugin = {
           // against the folder before describing them.
           grammar: chosen ? { name: chosen.name, fingerprint: chosen.fingerprint } : null,
         };
-        ctx.log(`Prepared transcript processing for ${files.length} .docx file(s).`, "muted");
+        ctx.log(`Prepared transcript processing for ${files.length} transcript file(s).`, "muted");
         if (nonConformingTotal) {
           ctx.log(
             `${nonConformingTotal} non-conforming line(s) across ${files.length} transcript(s) — ` +
@@ -306,7 +311,7 @@ const plugin = {
           ctx.log(`Added ${added} transcript entit(ies) to the crate; filled in ${enriched} it already had.`, "muted");
         }
         ctx.sourceCount = files.length;
-        ctx.log(`Built transcript crate from ${files.length} .docx file(s).`, "ok");
+        ctx.log(`Built transcript crate from ${files.length} transcript file(s).`, "ok");
       },
     },
   },

@@ -1,6 +1,6 @@
 import { extractTranscriptText, processTranscriptText, selectTranscriptFiles, transcriptBaseName } from "../ca-data-prep/process.js";
 import { countedProgress } from "../../src/_progress.js";
-import { outputsInCrateOption, includeOutputs, removeOutputEntities } from "../../src/_crate_outputs.js";
+import { outputsInCrateOption, includeOutputs, removeOutputEntities, replaceDotSlashIds } from "../../src/_crate_outputs.js";
 
 // Generated files go under _outputs/, named for what they are rather than for
 // this plugin, the same as ca-data-prep's csv/ and logs/. The directory is
@@ -219,6 +219,8 @@ const plugin = {
           ctx.log(`Left the CHAT files out of the crate${removed ? ` (removed ${removed} entit(ies) from an earlier build)` : ""}.`, "muted");
           return;
         }
+        const fixed = replaceDotSlashIds(ctx.crate, documentRecords.map(chatFileId));
+        if (fixed) ctx.log(`Renamed ${fixed} CHAT file entit(ies) an earlier build gave a "./" id.`, "muted");
         addChatFilesToCrate(ctx.crate, documentRecords);
         ctx.log(`Described ${documentRecords.length} CHAT file(s) in the crate.`, "muted");
       },
@@ -236,9 +238,15 @@ const plugin = {
 // hasPart alongside them. If ca-data-prep didn't run this build (chat export
 // used on its own), there's no such object to join, so the File entity is
 // just added standalone.
+//
+// The @id is folder-relative with no "./" in front, like ca-data-prep's CSVs:
+// a crate loaded later resolves "_outputs/chat/x.cha" to the file, and
+// reported "./_outputs/chat/x.cha" as not existing.
+export const chatFileId = (doc) => `${doc.chatDirName}/${doc.chatName}`;
+
 export function addChatFilesToCrate(crate, documentRecords) {
   for (const doc of documentRecords) {
-    const chatId = `./${doc.chatDirName}/${doc.chatName}`;
+    const chatId = chatFileId(doc);
     const objectId = `#${doc.baseName}`;
     const hasObject = crate.hasEntity(objectId);
     crate.addEntity({

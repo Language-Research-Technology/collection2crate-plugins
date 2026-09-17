@@ -426,7 +426,7 @@ const plugin = {
         hint: "Optional. The hostname this site will be published under, used to build absolute preview-card (Open Graph) image and link URLs. Leave blank to skip those tags." },
       { key: "styledPreview", label: "Upload template files", default: false,
         hint: "Off = the library's plain preview.", children: [
-        { key: "configFile", type: "file", label: "Config (JSON)", accept: ".json,.css,.html,application/json,text/css,text/html",
+        { key: "configFile", type: "file", folder: true, label: "Config (JSON)", accept: ".json,.css,.html,application/json,text/css,text/html",
           hint: "Required. If config uses relative paths, use \"Choose folder\" (or drag the whole folder in) to keep subfolders intact — picking loose files individually flattens them and can break relative paths." },
       ] },
     ],

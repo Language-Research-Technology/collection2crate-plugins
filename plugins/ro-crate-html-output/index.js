@@ -98,7 +98,7 @@ function readPublishFlag(entity) {
 }
 
 function contentChildRefs(entity) {
-  const refs = [];
+  const refs = new Set();
   // pcdm:hasMember is how buildCrate() (collection2crate's src/crate.js)
   // actually links the root dataset to its top-level collections/objects,
   // and how a RepositoryCollection lists its nested objects — hasPart is
@@ -110,10 +110,26 @@ function contentChildRefs(entity) {
     const val = entity?.[prop];
     if (!val) continue;
     for (const ref of Array.isArray(val) ? val : [val]) {
-      if (ref && ref["@id"]) refs.push(ref["@id"]);
+      if (ref && ref["@id"]) refs.add(ref["@id"]);
     }
   }
-  return refs;
+  // Some crates (an ro-crate-excel spreadsheet is the common source) only
+  // declare the reverse direction — a File's own isPartOf, rather than a
+  // redundant hasPart entry on its parent — inconsistently even within the
+  // same crate, e.g. some top-level objects list hasPart while others rely
+  // solely on their files' isPartOf. Reading the live @reverse index (ro-crate
+  // maintains it automatically, including through deleteEntity's cleanup) is
+  // what makes such children still discoverable, regardless of which
+  // direction the relationship was actually recorded in.
+  const reverse = entity?.["@reverse"];
+  for (const prop of ["isPartOf", "memberOf", "pcdm:memberOf"]) {
+    const val = reverse?.[prop];
+    if (!val) continue;
+    for (const ref of Array.isArray(val) ? val : [val]) {
+      if (ref && ref["@id"]) refs.add(ref["@id"]);
+    }
+  }
+  return [...refs];
 }
 
 // Walks the rootDataset's hasPart/hasMember tree (collections → objects →

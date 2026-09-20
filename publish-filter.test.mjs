@@ -20,6 +20,13 @@
 // pcdm:hasMember — so a real crate's root (pcdm:hasMember only) always
 // resolved to "kept 0 of 0" while this test stayed green.
 //
+// Collection D covers a further real-world gap: an ro-crate-excel
+// spreadsheet can describe a RepositoryObject with no hasPart array at all,
+// relying solely on its files' own isPartOf back-references — inconsistently
+// even within the same spreadsheet (some objects declare hasPart, others
+// don't). The filter has to discover such children via the crate's live
+// @reverse index, not just forward hasPart/hasMember/pcdm:hasMember.
+//
 //   node publish-filter.test.mjs
 import assert from "node:assert/strict";
 import { ROCrate } from "ro-crate";
@@ -35,7 +42,7 @@ const refs = (v) => [].concat(v ?? []).map((x) => (x && typeof x === "object" ? 
 
 function buildTestCrate() {
   const crate = new ROCrate({ array: true, link: true });
-  crate.addValues(crate.rootDataset, "pcdm:hasMember", [{ "@id": "#collectionA" }, { "@id": "#collectionB" }, { "@id": "#collectionC" }]);
+  crate.addValues(crate.rootDataset, "pcdm:hasMember", [{ "@id": "#collectionA" }, { "@id": "#collectionB" }, { "@id": "#collectionC" }, { "@id": "#collectionD" }]);
 
   crate.addEntity({
     "@id": "#collectionA", "@type": "RepositoryCollection", name: "Collection A", "custom:publish": true,
@@ -68,6 +75,16 @@ function buildTestCrate() {
   crate.addEntity({ "@id": "fileC1.txt", "@type": "File", name: "fileC1.txt", "custom:publish": true });
   crate.addEntity({ "@id": "fileC2.txt", "@type": "File", name: "fileC2.txt" });
 
+  // Collection D → Object D1 has no hasPart at all; its files only declare
+  // isPartOf pointing up at it, the "1. Culture"-shaped case above.
+  crate.addEntity({
+    "@id": "#collectionD", "@type": "RepositoryCollection", name: "Collection D",
+    "pcdm:hasMember": [{ "@id": "#objectD1" }],
+  });
+  crate.addEntity({ "@id": "#objectD1", "@type": "RepositoryObject", name: "Object D1" });
+  crate.addEntity({ "@id": "fileD1.txt", "@type": "File", name: "fileD1.txt", "custom:publish": true, isPartOf: { "@id": "#objectD1" } });
+  crate.addEntity({ "@id": "fileD2.txt", "@type": "File", name: "fileD2.txt", isPartOf: { "@id": "#objectD1" } });
+
   return crate;
 }
 
@@ -91,9 +108,14 @@ await check("cascade, individual override, and shell survival at both object and
   assert.ok(graph.includes("fileC1.txt"), "a File's own custom:publish:true is honoured directly, the real-world grain");
   assert.ok(!graph.includes("fileC2.txt"), "its unflagged sibling file, under the same unpublished object, is excluded");
 
+  assert.ok(graph.includes("#collectionD") && graph.includes("#objectD1"), "collection D and its hasPart-less object survive as shells, discovered only via fileD1's reverse isPartOf");
+  assert.ok(graph.includes("fileD1.txt"), "a published file reachable only via reverse isPartOf (no forward hasPart on its object) is still found");
+  assert.ok(!graph.includes("fileD2.txt"), "its unflagged sibling, also reachable only via reverse isPartOf, is still correctly excluded");
+
   assert.deepEqual(refs(crate.getEntity("#collectionA")["pcdm:hasMember"]), ["#objectA1"], "the removed sibling's pcdm:hasMember ref is cleaned up, not left dangling");
   assert.deepEqual(refs(crate.getEntity("#collectionB")["pcdm:hasMember"]), ["#objectB1"], "same cleanup on the shell collection's pcdm:hasMember");
   assert.deepEqual(refs(crate.getEntity("#objectC1").hasPart), ["fileC1.txt"], "same cleanup at file level under the shell object's hasPart");
+  assert.deepEqual(refs(crate.getEntity("#objectD1")["@reverse"]?.isPartOf), ["fileD1.txt"], "the removed fileD2's reverse isPartOf link is cleaned up too, not left dangling");
 
   assert.ok(!seen.some(([level]) => level === "warn"), "no warning is logged when some entities do carry a custom:publish flag");
 });

@@ -99,7 +99,14 @@ function readPublishFlag(entity) {
 
 function contentChildRefs(entity) {
   const refs = [];
-  for (const prop of ["hasPart", "hasMember"]) {
+  // pcdm:hasMember is how buildCrate() (collection2crate's src/crate.js)
+  // actually links the root dataset to its top-level collections/objects,
+  // and how a RepositoryCollection lists its nested objects — hasPart is
+  // only what a RepositoryObject uses for its own files (see that file's
+  // own MEMBERSHIP_PROPS). Both must be checked at every level, or a real
+  // crate's root (which carries no bare hasPart at all) yields zero
+  // children and the whole subtree silently "kept 0 of 0".
+  for (const prop of ["hasPart", "hasMember", "pcdm:hasMember"]) {
     const val = entity?.[prop];
     if (!val) continue;
     for (const ref of Array.isArray(val) ? val : [val]) {

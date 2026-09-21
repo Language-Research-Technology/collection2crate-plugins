@@ -184,6 +184,28 @@ function splitMappingValues(value) {
     .map((v) => v.replace(/[\[\]?()']/g, "").trim()).filter(Boolean);
 }
 
+// The mapping config exists in two shapes in the wild. Canonical — what the
+// bundled merge_config.json and hand-written configs use, and what this
+// function returns:
+//   { "mapping": [ { "source": "<column>", "target": "<property>", "type": "Person" } ] }
+// And the shape main.js's "Build mapping from spreadsheet columns..." dialog
+// saves:
+//   { "map": { "<column>": { "property": "<property>", "type": "Person" } } }
+// Read both, so a config built in that dialog isn't silently a no-op. "Text"
+// is that dialog's default for "no special handling", and means untyped here,
+// where a truthy `type` is what turns cell values into linked entities.
+function normaliseMappings(mergeConfig) {
+  if (Array.isArray(mergeConfig?.mapping)) return mergeConfig.mapping;
+  const map = mergeConfig?.map;
+  if (!map || typeof map !== "object") return [];
+  return Object.entries(map).flatMap(([source, spec]) => {
+    const target = String(spec?.property ?? "").trim();
+    if (!source || !target) return [];
+    const type = String(spec?.type ?? "").trim();
+    return [{ source, target, ...(type && type !== "Text" ? { type } : {}) }];
+  });
+}
+
 function generatedGeometryId(placeEntity, placeName) {
   const explicit = String(placeEntity?.geo?.["@id"] || "").trim();
   if (explicit) return explicit;
@@ -226,7 +248,9 @@ export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () 
   const entityById = new Map();
   crate.graph.forEach((e) => { if (e["@id"]) entityById.set(e["@id"], e); });
 
-  const mappings = Array.isArray(mergeConfig.mapping) ? mergeConfig.mapping : [];
+  const mappings = normaliseMappings(mergeConfig);
+  if (!mappings.length)
+    log('Merge: the mapping config defines no usable column mappings, so nothing will be merged. Expected a "mapping" array of {source, target, type} entries.', "warn");
   const requiredPrefixes = new Set(
     mappings.map((m) => getTargetPrefix(m && m.target)).filter(Boolean)
   );

@@ -261,31 +261,97 @@ export async function copyPublishedFilesToPreviewFolder(crate, dirHandle, log) {
   return assetMap;
 }
 
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The spelling a reference has in the rendered HTML is not the crate's own
+// path. The renderer percent-encodes the URL-reserved characters and the
+// markup escapes the HTML-special ones, so "115D#J~Y.PDF" arrives as
+// "115D%23J~Y.PDF" and "B&W_photos" as "B&amp;W_photos". Matching assetMap's
+// raw paths against the HTML literally therefore missed exactly those files
+// and left their links pointing outside PREVIEW_FILES_DIR — a 404 in any
+// deployment of the published subset. Every reference is brought back to its
+// literal path before assetMap is consulted.
+function decodeReferenceFromHtml(value) {
+  const unescaped = String(value)
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:apos|#0*39);/gi, "'")
+    // Last, so "&amp;lt;" comes back as the text "&lt;" rather than "<".
+    .replace(/&amp;/gi, "&");
+  return unescaped
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        // A stray '%' that isn't an escape sequence: keep the segment as it is.
+        return segment;
+      }
+    })
+    .join("/");
 }
+
+// And the reverse, for the path written back. Getting this wrong is the other
+// half of the same bug: emitting a literal '#' would hand the browser
+// "…/115D" plus the fragment "J~Y.PDF". '%' goes first so the escapes added
+// after it are not themselves re-escaped. Spaces are left alone, as the
+// renderer leaves them in the references that already work.
+function encodePathForHtml(path) {
+  return String(path)
+    .replace(/%/g, "%25")
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F")
+    .replace(/&/g, "&amp;");
+}
+
+const EXTERNAL_REFERENCE = /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i;
 
 // Redirects every href="…"/src="…" and CSS url(…) reference to one of
 // assetMap's original paths over to its copy under ro-crate-preview-files/,
 // across the whole rendered page. Works at the regex level, like
 // fixEncodedSlashes (collection2crate's src/crate.js) — a DOM/cheerio
 // parse-and-reserialize risks subtly reformatting markup that isn't ours to
-// rewrite, on output real users will deploy as-is. Matching each path as one
-// literal (rather than splitting at '#'/'?' first) means a file whose own
-// name contains '#' or '?' still matches correctly instead of being mistaken
-// for a fragment/query — see src/preview_assets.js's resolveFileHandle for
-// the in-app-preview equivalent of this same hazard.
+// rewrite, on output real users will deploy as-is. Each reference is matched
+// generically and then looked up, rather than building one alternation of
+// every known path: that is what lets an escaped spelling be recognised, and
+// it keeps the work linear in the page rather than in paths × page.
+//
+// A path is looked up whole before any '#'/'?' suffix is considered, so a
+// file whose own name contains one of those characters is found instead of
+// being mistaken for a fragment/query — see src/preview_assets.js's
+// resolveFileHandle for the in-app-preview equivalent of this same hazard.
 export function rewriteToPreviewFilesFolder(html, assetMap) {
   if (!html || !assetMap || !assetMap.size) return html;
-  const alternation = [...assetMap.keys()]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp)
-    .join("|");
-  const attrPattern = new RegExp(`(src|href)="(${alternation})([?#][^"]*)?"`, "g");
-  const urlFnPattern = new RegExp(`url\\(\\s*(['"]?)(${alternation})([?#][^'")]*)?\\1\\s*\\)`, "g");
+
+  const redirect = (value) => {
+    if (!value || EXTERNAL_REFERENCE.test(value)) return null;
+    const decoded = decodeReferenceFromHtml(value);
+    if (assetMap.has(decoded)) return encodePathForHtml(assetMap.get(decoded));
+    // Longest base first, scanning back from the end: a filename may contain
+    // '#'/'?' of its own, so the delimiter that begins a real query or
+    // fragment is not necessarily the first one in the reference —
+    // "115D#J~Y.PDF#page=3" splits at the second '#', not the first. A
+    // genuine query or fragment keeps its own delimiter and spelling; only
+    // the path in front of it is swapped.
+    for (let i = decoded.length - 1; i > 0; i--) {
+      const char = decoded[i];
+      if (char !== "#" && char !== "?") continue;
+      const base = decoded.slice(0, i);
+      if (assetMap.has(base)) {
+        return encodePathForHtml(assetMap.get(base)) + decoded.slice(i).replace(/&/g, "&amp;");
+      }
+    }
+    return null;
+  };
+
   return html
-    .replace(attrPattern, (whole, attr, path, suffix) => `${attr}="${assetMap.get(path)}${suffix || ""}"`)
-    .replace(urlFnPattern, (whole, quote, path, suffix) => `url(${quote}${assetMap.get(path)}${suffix || ""}${quote})`);
+    .replace(/(src|href)="([^"]*)"/gi, (whole, attr, value) => {
+      const next = redirect(value);
+      return next === null ? whole : `${attr}="${next}"`;
+    })
+    .replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, (whole, quote, value) => {
+      const next = redirect(value);
+      return next === null ? whole : `url(${quote}${next}${quote})`;
+    });
 }
 
 function formatDurationMs(ms) {

@@ -81,6 +81,8 @@ await check("redirects href/src and CSS url() references to their copies, leavin
   const assetMap = new Map([
     ["files/pic.jpg", "ro-crate-preview-files/files/pic.jpg"],
     ["115D#J~Y.PDF", "ro-crate-preview-files/115D#J~Y.PDF"],
+    ["Images/B&W_photos/KEA1.jpg", "ro-crate-preview-files/Images/B&W_photos/KEA1.jpg"],
+    ["100%.pdf", "ro-crate-preview-files/100%.pdf"],
   ]);
 
   assert.equal(
@@ -96,8 +98,36 @@ await check("redirects href/src and CSS url() references to their copies, leavin
 
   assert.equal(
     rewriteToPreviewFilesFolder('<a href="115D#J~Y.PDF">open</a>', assetMap),
-    '<a href="ro-crate-preview-files/115D#J~Y.PDF">open</a>',
-    "a literal '#' in the crate's own filename is matched as part of the path, not treated as a fragment delimiter"
+    '<a href="ro-crate-preview-files/115D%23J~Y.PDF">open</a>',
+    "a literal '#' in the crate's own filename is matched as part of the path, not treated as a fragment delimiter — and is written back encoded, or the browser would read it as a fragment"
+  );
+
+  // What the renderer actually emits: the reserved characters percent-encoded
+  // and the HTML-special ones escaped. Matching assetMap's raw paths against
+  // the page literally missed every one of these, so their links kept pointing
+  // outside ro-crate-preview-files/ and 404'd once deployed.
+  assert.equal(
+    rewriteToPreviewFilesFolder('<a href="115D%23J~Y.PDF">open</a>', assetMap),
+    '<a href="ro-crate-preview-files/115D%23J~Y.PDF">open</a>',
+    "a percent-encoded '#' is recognised as the filename it stands for"
+  );
+
+  assert.equal(
+    rewriteToPreviewFilesFolder('<img src="Images/B&amp;W_photos/KEA1.jpg">', assetMap),
+    '<img src="ro-crate-preview-files/Images/B&amp;W_photos/KEA1.jpg">',
+    "an HTML-escaped '&' in a folder name is recognised, and stays escaped on the way out"
+  );
+
+  assert.equal(
+    rewriteToPreviewFilesFolder('<a href="100%25.pdf">pct</a>', assetMap),
+    '<a href="ro-crate-preview-files/100%25.pdf">pct</a>',
+    "a filename containing a literal '%' round-trips rather than being double-encoded"
+  );
+
+  assert.equal(
+    rewriteToPreviewFilesFolder('<a href="115D%23J~Y.PDF#page=3">open</a>', assetMap),
+    '<a href="ro-crate-preview-files/115D%23J~Y.PDF#page=3">open</a>',
+    "a real fragment after a filename that itself contains '#' survives the swap"
   );
 
   assert.equal(

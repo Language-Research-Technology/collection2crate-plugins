@@ -15,18 +15,23 @@ import { resolveProfileGroups } from "./layout.js";
 import { countedProgress, progressFor } from "../../src/_progress.js";
 
 let crateToPreviewHtml, crateToMultiPageHtml;
-let writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists;
+let writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists, getFileHandleAtPath;
 let bustCacheUrl, buildGitHubTreeUrl, fetchGitHubTextFile, listGitHubFolder;
 
 export function createPlugin(deps) {
   ({ crateToPreviewHtml, crateToMultiPageHtml } = deps);
-  ({ writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists } = deps);
+  ({ writeFile, writeFileAtPath, readJsonFromFolder, readFileTextFromDirectory, verifyPermission, fileExists, getFileHandleAtPath } = deps);
   ({ bustCacheUrl, buildGitHubTreeUrl, fetchGitHubTextFile, listGitHubFolder } = deps);
   return plugin;
 }
 
 const HTML_FILE = "ro-crate-preview.html";
 const MULTIPAGE_DIR = "ro-crate-preview_html";
+// Where "Publish subset only" copies the files that survived
+// filterCrateToPublished, so a deployment of the generated preview alone
+// (this folder + ro-crate-preview.html/ro-crate-preview_html/) never exposes
+// a file that was filtered out — see copyPublishedFilesToPreviewFolder.
+const PREVIEW_FILES_DIR = "ro-crate-preview-files";
 const TEMPLATE_REPO_OWNER = "Language-Research-Technology";
 const TEMPLATE_REPO_NAME = "rocss-templates";
 const TEMPLATE_REPO_REF = "main";
@@ -195,6 +200,92 @@ export function filterCrateToPublished(crate, log) {
   const toRemove = [...visited].filter((id) => !keep.has(id));
   for (const id of toRemove) crate.deleteEntity(id, { references: true });
   log(`Publish subset only: kept ${keep.size} of ${visited.size} collection/object/file entit${visited.size === 1 ? "y" : "ies"}.`, "muted");
+}
+
+// Every File entity still in `crate` (call after filterCrateToPublished, so
+// this is exactly the set that survived the publish filter) whose @id is a
+// folder-relative path rather than an external URL — mirrors the same
+// absolute-URL guard collection2crate's src/existing_crate.js (isLocalPath)
+// uses to tell a real on-disk file apart from a File entity that only records
+// a remote reference and has nothing to copy.
+export function collectFilePaths(crate) {
+  const paths = [];
+  const seen = new Set();
+  for (const entity of crate.graph) {
+    const id = entity?.["@id"];
+    if (!id || seen.has(id)) continue;
+    const types = Array.isArray(entity["@type"]) ? entity["@type"] : [entity["@type"]];
+    if (!types.includes("File")) continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(id)) continue;
+    seen.add(id);
+    paths.push(id);
+  }
+  return paths;
+}
+
+// Copies every published file (collectFilePaths) from the picked crate
+// folder into PREVIEW_FILES_DIR, so that folder plus the generated HTML is a
+// self-contained, safe-to-publish subset — the crate folder itself still
+// holds every file regardless of custom:publish, published or not. Returns
+// a Map of original crate-relative path -> its copy's path, for
+// rewriteToPreviewFilesFolder to redirect the generated HTML's links to.
+export async function copyPublishedFilesToPreviewFolder(crate, dirHandle, log) {
+  const filePaths = collectFilePaths(crate);
+  const assetMap = new Map();
+  if (!filePaths.length) return assetMap;
+
+  try {
+    await dirHandle.removeEntry(PREVIEW_FILES_DIR, { recursive: true });
+  } catch {
+    // no pre-existing ro-crate-preview-files/ to remove — fine.
+  }
+
+  let copied = 0;
+  let missing = 0;
+  for (const relPath of filePaths) {
+    const fileHandle = await getFileHandleAtPath(dirHandle, relPath);
+    if (!fileHandle) {
+      log(`Publish subset only: file referenced by the crate is missing from the folder — not copied into ${PREVIEW_FILES_DIR}/: ${relPath}`, "warn");
+      missing++;
+      continue;
+    }
+    const file = await fileHandle.getFile();
+    await writeFileAtPath(dirHandle, `${PREVIEW_FILES_DIR}/${relPath}`, file);
+    assetMap.set(relPath, `${PREVIEW_FILES_DIR}/${relPath}`);
+    copied++;
+  }
+  log(
+    `Publish subset only: copied ${copied} file(s) into ${PREVIEW_FILES_DIR}/${missing ? ` (${missing} missing from the folder)` : ""}.`,
+    copied ? "ok" : "warn"
+  );
+  return assetMap;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Redirects every href="…"/src="…" and CSS url(…) reference to one of
+// assetMap's original paths over to its copy under ro-crate-preview-files/,
+// across the whole rendered page. Works at the regex level, like
+// fixEncodedSlashes (collection2crate's src/crate.js) — a DOM/cheerio
+// parse-and-reserialize risks subtly reformatting markup that isn't ours to
+// rewrite, on output real users will deploy as-is. Matching each path as one
+// literal (rather than splitting at '#'/'?' first) means a file whose own
+// name contains '#' or '?' still matches correctly instead of being mistaken
+// for a fragment/query — see src/preview_assets.js's resolveFileHandle for
+// the in-app-preview equivalent of this same hazard.
+export function rewriteToPreviewFilesFolder(html, assetMap) {
+  if (!html || !assetMap || !assetMap.size) return html;
+  const alternation = [...assetMap.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp)
+    .join("|");
+  const attrPattern = new RegExp(`(src|href)="(${alternation})([?#][^"]*)?"`, "g");
+  const urlFnPattern = new RegExp(`url\\(\\s*(['"]?)(${alternation})([?#][^'")]*)?\\1\\s*\\)`, "g");
+  return html
+    .replace(attrPattern, (whole, attr, path, suffix) => `${attr}="${assetMap.get(path)}${suffix || ""}"`)
+    .replace(urlFnPattern, (whole, quote, path, suffix) => `url(${quote}${assetMap.get(path)}${suffix || ""}${quote})`);
 }
 
 function formatDurationMs(ms) {
@@ -532,6 +623,7 @@ const plugin = {
   outputPaths: [
     { path: HTML_FILE, kind: "file" },
     { path: MULTIPAGE_DIR, kind: "dir" },
+    { path: PREVIEW_FILES_DIR, kind: "dir" },
   ],
   optionSchema: {
     key: "makeHtml", label: "Generate ro-crate-preview.html", default: true,
@@ -547,7 +639,7 @@ const plugin = {
         placeholder: "https://example.org/my-site",
         hint: "Optional. The hostname this site will be published under, used to build absolute preview-card (Open Graph) image and link URLs. Leave blank to skip those tags." },
       { key: "publishOnly", label: "Publish subset only", default: false,
-        hint: "Off = every collection/object/file appears. On = an entity only appears if it has custom:publish:true set, or sits inside a collection/object that has custom:publish:true (an entity's own custom:publish:false always wins over an inherited true) — typically a File-level column in the source spreadsheet. Affects only this generated HTML, not ro-crate-metadata.json/.xlsx." },
+        hint: "Off = every collection/object/file appears. On = an entity only appears if it has custom:publish:true set, or sits inside a collection/object that has custom:publish:true (an entity's own custom:publish:false always wins over an inherited true) — typically a File-level column in the source spreadsheet. The files that remain are also copied into ro-crate-preview-files/, with this generated HTML's own links updated to point there, so publishing just the generated preview plus that folder never exposes a file that was filtered out. Affects only this generated HTML, not ro-crate-metadata.json/.xlsx." },
       { key: "styledPreview", label: "Upload template files", default: false,
         hint: "Off = the library's plain preview.", children: [
         { key: "configFile", type: "file", folder: true, label: "Config (JSON)", accept: ".json,.css,.html,application/json,text/css,text/html",
@@ -577,8 +669,12 @@ const plugin = {
         // build most likely to sit there for a while.
         const progress = progressFor(ctx);
         progress.start("Building the HTML preview…");
+        let publishFileAssetMap = null;
         try {
-          if (options.publishOnly) filterCrateToPublished(crate, log);
+          if (options.publishOnly) {
+            filterCrateToPublished(crate, log);
+            publishFileAssetMap = await copyPublishedFilesToPreviewFolder(crate, dirHandle, log);
+          }
           applyCollectionLabelOverrides(crate, options);
           // resolveTerm() (used below to place profile-declared property
           // names) needs the context resolved first — crateToPreviewHtml/
@@ -706,7 +802,10 @@ const plugin = {
               const tick = countedProgress(ctx, totalPages, `Writing ${totalPages} preview page(s)…`);
               for (let i = 0; i < multi.pages.length; i += 1) {
                 const page = multi.pages[i];
-                await writeFileAtPath(dirHandle, page.path, page.html);
+                const pageHtml = publishFileAssetMap && publishFileAssetMap.size
+                  ? rewriteToPreviewFilesFolder(page.html, publishFileAssetMap)
+                  : page.html;
+                await writeFileAtPath(dirHandle, page.path, pageHtml);
                 tick(i, `Preview: wrote ${i + 1}/${totalPages} page file(s)…`);
               }
               tick.done();
@@ -733,6 +832,9 @@ const plugin = {
             html = await crateToPreviewHtml(crate, { layouts: { default: layout } });
             renderMs = Date.now() - plainRenderStartMs;
             ctx.lastHtmlTemplate = null;
+          }
+          if (publishFileAssetMap && publishFileAssetMap.size) {
+            html = rewriteToPreviewFilesFolder(html, publishFileAssetMap);
           }
           await writeFile(dirHandle, HTML_FILE, html);
           log(`Wrote ${HTML_FILE}.`, "ok");

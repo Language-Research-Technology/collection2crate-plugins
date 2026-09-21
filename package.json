@@ -19,9 +19,10 @@
     "unicode-name": "^1.1.0"
   },
   "scripts": {
-    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs",
+    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node publish-preview-files.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs",
     "test:hooks": "node hooks.test.mjs",
     "test:publish-filter": "node publish-filter.test.mjs",
+    "test:publish-preview-files": "node publish-preview-files.test.mjs",
     "test:visualisation": "node visualisation.test.mjs",
     "test:transcript": "node transcript.test.mjs",
     "test:transcript-grammar": "node transcript-grammar.test.mjs",

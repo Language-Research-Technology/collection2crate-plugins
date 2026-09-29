@@ -9,7 +9,8 @@
 //                 and text to remove from rows, with a before/after preview
 //                 of the whole document.
 //   4. Rows     — select characters inside the cleaned sample rows and say
-//                 what they are:
+//                 what they are (or, for a fixed-width format, inside the rows
+//                 as the document has them, each field then being a column):
 //                 a speaker's code / name / alternate name / affiliation / id,
 //                 or a turn's number / speaker / text. The generated patterns
 //                 are re-run over the whole document on every change, so the
@@ -26,7 +27,7 @@ import {
   DEFAULT_GRAMMAR, IGNORE_FIELD, LAYOUT_PARTS, applyCleanup, applyLayout, grammarLayout, buildGrammar, buildRegions, exactPattern,
   columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
-  parseWithGrammar, suggestRegions, suggestSamples, textToLines,
+  parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn,
 } from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
@@ -241,6 +242,9 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.speakerSamples = null;
     state.turnSamples = null;
     state.optional = { speakerRow: [], turnRow: [] };
+    // A saved grammar says whether its rows are fixed-width; for a new one it
+    // is decided at the rows step, once the regions say which rows are main.
+    state.fixedWidth = base ? !!base.turnRow?.fixedWidth : null;
     // A saved grammar brings its cleanup rules with it.
     state.cleanup = {
       drop: [...(base?.ignore || [])],
@@ -663,6 +667,7 @@ async function cleanupStep(state, { openModal, error }) {
         element("div", { className: "tg-toolbar" }, customInput(cleanup.drop, false, "Skip-line pattern")),
 
         element("h3", { className: "tg-section-title", text: "Columns to drop" }),
+        ...(state.fixedWidth ? [element("p", { className: "field-hint", attrs: { style: "color: var(--warn)" }, text: "Main rows are being read as fixed-width columns (see the rows step), which leaves out every column you don't mark as a field — so there is no need to drop any here, and columns dropped here are not saved while that reading is on. Text removals still apply, to each field's value." })] : []),
         element("p", { className: "field-hint", text: "Data in main rows that nobody wants kept — counters, codes, annotation tiers. In a line with tabs a column is a tab-separated field; in a line without, it is the stretch of characters the selection covers, out to the neighbouring columns. Dropped columns are shown struck through." }),
         columnList,
         element("div", { className: "tg-toolbar" }, [columnPicker]),
@@ -708,7 +713,8 @@ async function cleanupStep(state, { openModal, error }) {
   // changed (or skipped) no longer shows what the pattern will read.
   state.clean = applyCleanup(lines, roles, markers, cleanup);
   for (const key of ["speakerSamples", "turnSamples"]) {
-    if (state[key]) state[key] = state[key].filter((sample) => state.clean.lines[sample.index] === sample.line);
+    const source = sampleLines(state, key === "speakerSamples" ? "speakers" : "main");
+    if (state[key]) state[key] = state[key].filter((sample) => source[sample.index] === sample.line);
   }
   return outcome;
 }
@@ -857,6 +863,10 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
 // The lines rows are marked up on: cleaned, once the cleanup step has run.
 const rowLines = (state) => state.clean?.lines || state.lines;
 
+// Fixed-width rows are the exception: they are marked up on the lines as the
+// document has them, since a removal would move the columns.
+const sampleLines = (state, region) => (region === "main" && state.fixedWidth ? state.lines : rowLines(state));
+
 function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onChange }) {
   const wrap = element("div");
   const cards = element("div");
@@ -865,8 +875,16 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const patternBox = element("textarea", { className: "tg-pattern", attrs: { readonly: "", rows: 3, "aria-label": `${title} pattern` } });
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
   const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
+  const columnsBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite" } });
+  const fixed = () => region === "main" && !!state.fixedWidth;
+  const hint = element("p", { className: "field-hint" });
+  const describeHint = () => {
+    hint.textContent = fixed()
+      ? `Mark the fields on one ${title.toLowerCase()} row. Each field becomes a column: the characters you select, widened over the blanks either side, in every row. Anything outside the marked columns is left out, and punctuation beside a turn number or speaker inside its column (an overlap "(") is matched but not kept.`
+      : `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked. Mark fixed text you don't want kept (a tag like "<u speaker=") as Ignore.`;
+  };
 
-  const candidates = () => rowLines(state)
+  const candidates = () => sampleLines(state, region)
     .map((line, index) => ({ line, index }))
     .filter(({ line, index }) => state.roles[index] === region && !state.markers[index] && line.trim());
 
@@ -893,7 +911,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     let spec = null;
     errorBox.textContent = "";
     try {
-      spec = buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey] });
+      spec = buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey], fixedWidth: fixed() });
     } catch (e) {
       errorBox.textContent = e.message;
     }
@@ -901,6 +919,9 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     const loose = spec?.unmarked || [];
     unmarkedBox.textContent = loose.length
       ? `Not marked: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there. Mark it as a field, or as Ignore if it is fixed text every row has.`
+      : "";
+    columnsBox.textContent = spec?.fixedWidth
+      ? `Columns: ${spec.fields.map((f) => `${f.label.toLowerCase()}, ${describeFixedColumn(f)}`).join(" · ")}.`
       : "";
     optionalBox.replaceChildren();
     if (spec) {
@@ -927,20 +948,39 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     onClick: () => {
       if (picker.disabled) return;
       const index = Number(picker.value);
-      state[samplesKey].push({ index, line: rowLines(state)[index], spans: [] });
+      state[samplesKey].push({ index, line: sampleLines(state, region)[index], spans: [] });
       state[samplesKey].sort((a, b) => a.index - b.index);
       drawCards();
       update();
     },
   });
 
+  // Switching between the two readings re-reads each sample from the lines
+  // that reading marks up; a sample whose line differs loses its marks.
+  const fixedToggle = region === "main" ? checkbox("Fixed-width columns — every field is at the same character positions in every row", { checked: fixed() }) : null;
+  fixedToggle?.input.addEventListener("change", () => {
+    state.fixedWidth = fixedToggle.input.checked;
+    const source = sampleLines(state, region);
+    for (const sample of state[samplesKey]) {
+      if (source[sample.index] === sample.line) continue;
+      sample.line = source[sample.index];
+      sample.spans = [];
+    }
+    describeHint();
+    drawCards();
+    update();
+  });
+
+  describeHint();
   wrap.append(
-    element("p", { className: "field-hint", text: `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked. Mark fixed text you don't want kept (a tag like "<u speaker=") as Ignore.` }),
+    ...(fixedToggle ? [fixedToggle.node] : []),
+    hint,
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),
     errorBox,
     element("h3", { className: "tg-section-title", text: "Generated pattern" }),
     patternBox,
+    columnsBox,
     unmarkedBox,
     optionalBox,
   );
@@ -1039,16 +1079,21 @@ function currentGrammar(state) {
     optional: state.optional,
     cleanup: state.cleanup,
     layout: state.layout || grammarLayout(null),
+    fixedWidth: !!state.fixedWidth,
   });
 }
 
 async function rowStep(state, { openModal, existing, error }) {
   const seed = state.base || DEFAULT_GRAMMAR;
+  // Offered the fixed-width reading when every main row is the same length.
+  if (state.fixedWidth == null) {
+    state.fixedWidth = looksFixedWidth(state.lines.filter((line, i) => state.roles[i] === "main" && !state.markers[i]));
+  }
   if (!state.speakerSamples) {
     state.speakerSamples = suggestSamples(rowLines(state), state.roles, state.markers, "speakers", seed.speakerRow);
   }
   if (!state.turnSamples) {
-    state.turnSamples = suggestSamples(rowLines(state), state.roles, state.markers, "main", seed.turnRow);
+    state.turnSamples = suggestSamples(sampleLines(state, "main"), state.roles, state.markers, "main", seed.turnRow);
   }
 
   const layout = state.layout || grammarLayout(null);

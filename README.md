@@ -383,11 +383,19 @@ the transcript processing option:
   the speaker on every row, the speakers are whoever the turns name. The patterns are generated from that markup
   (`grammar.js`'s `buildGrammar`) and re-run over the whole sample as you go,
   so you see what they parse and what they miss before saving.
+  A format whose rows put every field at the same character positions (the
+  London-Lund Corpus, say) can switch on **Fixed-width columns** on the Main
+  tab — offered by default when every main row is the same length. Fields are
+  then marked once, on a row as the document has it: each becomes a column
+  (the selection widened over the blanks either side, so a right-aligned
+  `10` also covers `100`), everything outside the marked columns is left
+  out, and punctuation beside a turn number or speaker inside its column (an
+  overlap `(`) is matched but not kept.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group
 regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
-markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read) and dropped columns (`dropColumns`: `{ "tab": n }` for the n-th tab-separated field of a line with tabs, `{ "from": a, "to": b }` for characters a up to b of a line without; 0-based, applied to main rows only, before `strip`). Only the shape of the sample is
+markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read) and dropped columns (`dropColumns`: `{ "tab": n }` for the n-th tab-separated field of a line with tabs, `{ "from": a, "to": b }` for characters a up to b of a line without; 0-based, applied to main rows only, before `strip`). A fixed-width `turnRow` also has `fixedWidth: true` and its `columns` (`{ key, from, to }`, 0-based, `to` exclusive or null for "to the end of the line"); it is matched against the line as the document has it, `strip` applies to each field's value instead, and it saves no `dropColumns`. Only the shape of the sample is
 kept — delimiters, brackets, which fields are optional — never its text,
 since the rows marked up are real speaker declarations. `parseWithGrammar(text,
 grammar)` is pure; it and the folder helpers live in

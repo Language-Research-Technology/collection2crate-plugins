@@ -14,7 +14,7 @@
 // into the turn above is recorded against its own line, and a turn whose
 // speaker nobody declared is flagged — never dropped.
 
-import { documentLines, parseWithGrammar, grammarPath, describeColumnRule, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
+import { documentLines, parseWithGrammar, grammarPath, describeColumnRule, describeFixedColumn, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
 
 // The three section names the built-in convention abbreviates in the CSV.
 // A grammar's other section names go into the CSV as written.
@@ -42,7 +42,11 @@ export function describeRow(spec, fieldDefs) {
   const fields = spec.fields?.length
     ? spec.fields
     : fieldDefs.filter((f) => new RegExp(`\\(\\?<${f.key}>`).test(spec.pattern)).map((f) => ({ ...f, optional: false }));
-  return fields.map((f) => (f.optional ? `[${f.label.toLowerCase()}]` : f.label.toLowerCase())).join(" · ");
+  const describe = (f) => {
+    const name = f.optional ? `[${f.label.toLowerCase()}]` : f.label.toLowerCase();
+    return spec.fixedWidth && Number.isInteger(f.from) ? `${name} (${describeFixedColumn(f)})` : name;
+  };
+  return fields.map(describe).join(" · ");
 }
 
 /**

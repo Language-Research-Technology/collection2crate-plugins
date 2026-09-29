@@ -358,6 +358,7 @@ function mergeFieldOrder(decomposed) {
  * optional even when every sample had it.
  */
 export function buildRowPattern(samples, fieldDefs, options = {}) {
+  if (options.fixedWidth) return buildFixedRowPattern(samples, fieldDefs, options);
   const forcedOptional = new Set(options.optional || []);
   const usable = (samples || []).filter((s) => s && (s.spans || []).some((span) => span.end > span.start && span.field !== IGNORE_FIELD));
   if (!usable.length) return null;
@@ -499,19 +500,185 @@ export function buildRowPattern(samples, fieldDefs, options = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Fixed-width rows
+// ---------------------------------------------------------------------------
+//
+// Some formats put every field of a row at the same character positions
+// (the London-Lund Corpus: tone-unit number, speaker, prosodic code and text,
+// each in its own column of an 80-character line). For those, a field is a
+// column rather than something between delimiters, and nothing needs to be
+// generalised: a field marked on a sample row is that stretch of characters
+// in every row, and whatever lies outside the marked columns is left out.
+//
+// The result is still an ordinary `{ pattern, flags }` row — each field a
+// lookahead anchored at its column — so the parser, the report and the
+// editor's re-reading of a saved grammar need nothing new. It also carries
+// `fixedWidth: true` and the columns themselves, 0-based, `to` exclusive and
+// null for a column that runs to the end of the line.
+
+const FIXED_VALUES = { number: VALUE_PATTERNS.number, code: VALUE_PATTERNS.code };
+
+// Punctuation beside a number or a code inside its column is matched but not
+// kept: the "(" an overlapping turn puts in front of its speaker, the period
+// after a turn number.
+const HUGGING = "[\\p{P}\\p{S}]*";
+const inColumn = (key, value) => `[\\t ]*${HUGGING}(?<${key}>${value})${HUGGING}[\\t ]*`;
+
+// A marked span widened over the spaces either side of it in its own line,
+// but not into another marked span (Ignore included): a right-aligned "10"
+// then also covers the "100" of a later row, and left-aligned text the
+// longer text of another. Where two fields' widenings meet in the same run of
+// spaces, the run is split between them.
+function widenedColumns(sample) {
+  const line = String(sample.line || "");
+  const spans = [...(sample.spans || [])].filter((s) => s && s.end > s.start).sort((a, b) => a.start - b.start);
+  for (let i = 1; i < spans.length; i++) {
+    if (spans[i].start < spans[i - 1].end) throw new Error(`"${spans[i - 1].field}" and "${spans[i].field}" overlap.`);
+  }
+  const widened = spans.map((span, i) => {
+    const floor = i > 0 ? spans[i - 1].end : 0;
+    const ceiling = i + 1 < spans.length ? spans[i + 1].start : line.length;
+    let from = span.start;
+    let to = span.end;
+    while (from > floor && line[from - 1] === " ") from--;
+    while (to < ceiling && line[to] === " ") to++;
+    return { ...span, from, to };
+  });
+  for (let i = 1; i < widened.length; i++) {
+    const [a, b] = [widened[i - 1], widened[i]];
+    if (a.to > b.from) {
+      const middle = a.end + Math.floor((b.start - a.end) / 2);
+      a.to = Math.max(a.end, middle);
+      b.from = a.to;
+    }
+  }
+  return widened
+    .filter((s) => s.field !== IGNORE_FIELD)
+    .map((s) => ({ key: s.field, from: s.from, to: s.to >= line.length ? null : s.to, start: s.start, end: s.end }));
+}
+
+/** A fixed-width column as the editor and the report describe it, counting from 1. */
+export function describeFixedColumn(column) {
+  return column.to == null
+    ? `characters ${column.from + 1} to the end`
+    : `characters ${column.from + 1}–${column.to}`;
+}
+
+/**
+ * A row pattern for a fixed-width format, from marked-up samples.
+ *
+ * Each sample's fields are widened into columns (see widenedColumns); with
+ * several samples, a field's column is the stretch every sample agrees on.
+ * A field only some samples mark is optional, as in buildRowPattern, and an
+ * optional column may be blank.
+ */
+export function buildFixedRowPattern(samples, fieldDefs, options = {}) {
+  const forcedOptional = new Set(options.optional || []);
+  const usable = (samples || []).filter((s) => s && (s.spans || []).some((span) => span.end > span.start && span.field !== IGNORE_FIELD));
+  if (!usable.length) return null;
+
+  const known = new Map(fieldDefs.map((f) => [f.key, f]));
+  const perSample = usable.map(widenedColumns);
+  const columns = new Map();
+  for (const sample of perSample) {
+    const keys = sample.map((c) => c.key);
+    const unknown = keys.find((k) => !known.has(k));
+    if (unknown) throw new Error(`"${unknown}" is not a field of this row.`);
+    const dupe = keys.find((k, i) => keys.indexOf(k) !== i);
+    if (dupe) throw new Error(`"${dupe}" is marked twice in one sample.`);
+    for (const c of sample) {
+      const seen = columns.get(c.key);
+      if (!seen) { columns.set(c.key, { key: c.key, from: c.from, to: c.to, present: 1, marks: [c] }); continue; }
+      seen.from = Math.max(seen.from, c.from);
+      seen.to = seen.to == null ? c.to : c.to == null ? seen.to : Math.min(seen.to, c.to);
+      seen.present++;
+      seen.marks.push(c);
+    }
+  }
+  for (const column of columns.values()) {
+    const label = known.get(column.key).label;
+    const outside = column.marks.find((m) => m.start < column.from || (column.to != null && m.end > column.to));
+    if (outside) throw new Error(`The samples put "${label}" in different columns — mark it where it lines up in every sample.`);
+  }
+  const ordered = [...columns.values()].sort((a, b) => a.from - b.from);
+  for (let i = 1; i < ordered.length; i++) {
+    if (ordered[i - 1].to == null || ordered[i - 1].to > ordered[i].from) {
+      throw new Error(`"${known.get(ordered[i - 1].key).label}" and "${known.get(ordered[i].key).label}" share columns.`);
+    }
+  }
+
+  const fieldInfo = ordered.map((c) => {
+    const def = known.get(c.key);
+    const optional = c.present < usable.length || forcedOptional.has(c.key);
+    return {
+      key: c.key, label: def.label, kind: def.kind, from: c.from, to: c.to,
+      present: c.present, samples: usable.length, optional, alwaysPresent: c.present === usable.length,
+    };
+  });
+
+  // Each field looks ahead from the start of the line to its column; a
+  // bounded column must end exactly where it says (the lookbehind), except
+  // free text, which a short line may cut off.
+  const at = (from) => (from ? `.{${from}}` : "");
+  const lookahead = (info) => {
+    const width = info.to == null ? null : info.to - info.from;
+    if (info.kind === "rest" || !FIXED_VALUES[info.kind]) {
+      const body = width == null ? ".*?" : `.{0,${width}}?`;
+      return `(?=${at(info.from)}[\\t ]*(?<${info.key}>${body})[\\t ]*${width == null ? "$" : `(?:(?<=^.{${info.to}})|$)`})`;
+    }
+    const column = inColumn(info.key, FIXED_VALUES[info.kind]);
+    const body = info.optional ? `(?:${column}|[\\t ]*)` : column;
+    const end = width == null ? "$" : `(?<=^.{${info.to}})`;
+    return `(?=${at(info.from)}${body}${end})`;
+  };
+  const pattern = `^${fieldInfo.map(lookahead).join("")}.*$`;
+
+  // A row is recognisable by its turn number alone, even when the rest of it
+  // is malformed — as buildRowPattern's rowStart.
+  const turn = fieldInfo.find((f) => f.kind === "number");
+  const rowStart = turn && fieldInfo.length > 1
+    ? `^${at(turn.from)}${inColumn("turn", VALUE_PATTERNS.number)}${turn.to == null ? "$" : `(?<=^.{${turn.to}})`}`
+    : null;
+
+  return {
+    pattern,
+    flags: "u",
+    rowStart,
+    fixedWidth: true,
+    columns: fieldInfo.map(({ key, from, to }) => ({ key, from, to })),
+    unmarked: [],
+    fields: fieldInfo.map(({ key, label, present, samples: count, optional, alwaysPresent, from, to }) => (
+      { key, label, present, samples: count, optional, alwaysPresent, from, to }
+    )),
+  };
+}
+
+/**
+ * Does every row of this sample look fixed-width — the same length, no tabs?
+ * The editor offers the fixed-width reading when it does.
+ */
+export function looksFixedWidth(lines) {
+  const rows = (lines || []).filter((line) => String(line || "").trim());
+  if (rows.length < 3 || rows.some((line) => line.includes("\t"))) return false;
+  const length = rows[0].length;
+  return length >= 20 && rows.every((line) => line.length === length);
+}
+
+// ---------------------------------------------------------------------------
 // The grammar as a whole
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null) }) {
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false }) {
   const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers, layout);
   // The cleanup step's rules, when there is one, replace the ignore patterns
   // derived from lines marked Ignore (it starts from those, and may edit them).
   const ignore = cleanup ? [...new Set(cleanup.drop.map((p) => p.trim()).filter(Boolean))] : markedIgnore;
   const strip = cleanup ? cleanup.strip.map((p) => p.trim()).filter(Boolean).map((pattern) => ({ pattern, flags: "u" })) : [];
-  const dropColumns = uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
+  // Fixed-width rows leave out every column that isn't a field already.
+  const dropColumns = fixedWidth ? [] : uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
   const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
-  const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow });
+  const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow, fixedWidth });
   return {
     version: GRAMMAR_VERSION,
     name: name || "default",
@@ -567,6 +734,7 @@ function compile(grammar) {
     speakerRow: layout.speakers ? re(grammar.speakerRow) : null,
     turnRow: re(grammar.turnRow),
     turnRowStart: grammar.turnRow?.rowStart ? new RegExp(grammar.turnRow.rowStart, "u") : null,
+    fixedWidth: !!grammar.turnRow?.fixedWidth,
     headerField: re(grammar.headerField) || new RegExp(HEADER_FIELD_PATTERN, "u"),
     speakersStart: layout.speakers ? marker(grammar.regions?.speakers?.start) : null,
     mainStart: marker(grammar.regions?.main?.start),
@@ -626,8 +794,16 @@ export function parseWithGrammar(input, grammar) {
     // line with the cleanup step's removals applied. Markers are read as is.
     // Dropped columns come out of main rows only, and before the removals:
     // a column is a position in the line as the document has it.
+    // Fixed-width rows are the exception: removals would move the columns,
+    // so a fixed-width row is read as is and the removals apply to its fields.
     let rowLine = applyStrip(line, re.strip);
-    const mainRowLine = re.columns.length ? applyStrip(dropColumns(line, re.columns), re.strip) : rowLine;
+    const mainRowLine = re.fixedWidth ? line
+      : re.columns.length ? applyStrip(dropColumns(line, re.columns), re.strip) : rowLine;
+    const turnFields = (groups) => {
+      const fields = cleanGroups(groups);
+      if (!re.fixedWidth) return fields;
+      return Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, applyStrip(v, re.strip).trim()]));
+    };
 
     // Region boundaries: a declared start marker when there is one, otherwise
     // the first line of the next region's row shape.
@@ -702,7 +878,7 @@ export function parseWithGrammar(input, grammar) {
 
     const m = re.turnRow && rowLine.match(re.turnRow);
     if (m) {
-      openTurn = { line: lineNumber, section, ...cleanGroups(m.groups) };
+      openTurn = { line: lineNumber, section, ...turnFields(m.groups) };
       result.turns.push(openTurn);
       return note(index, "main");
     }
@@ -711,7 +887,8 @@ export function parseWithGrammar(input, grammar) {
     // recorded, never folded silently.
     const looksLikeRow = !!re.turnRowStart?.test(rowLine);
     if (openTurn && "text" in openTurn && !looksLikeRow) {
-      openTurn.text = `${openTurn.text} ${rowLine.trim()}`.trim();
+      const tail = re.fixedWidth ? applyStrip(line, re.strip) : rowLine;
+      openTurn.text = `${openTurn.text} ${tail.trim()}`.trim();
       result.continuations.push({ line: lineNumber, into: openTurn.line, text: line });
       return note(index, "main:continuation");
     }
@@ -720,10 +897,16 @@ export function parseWithGrammar(input, grammar) {
       // the built-in reader treats one — kept with no speaker, so the gap
       // shows in the CSV, and flagged. Lines after it fold into it, not into
       // the turn before it.
-      const start = rowLine.match(re.turnRowStart)[0];
+      const start = rowLine.match(re.turnRowStart);
+      // A fixed-width row's text is still in its column; anything else's is
+      // whatever follows the turn number.
+      const textColumn = re.fixedWidth && (grammar.turnRow.columns || []).find((c) => c.key === "text");
+      const text = textColumn
+        ? applyStrip(rowLine.slice(textColumn.from, textColumn.to ?? undefined), re.strip)
+        : rowLine.slice(start[0].length);
       openTurn = {
-        line: lineNumber, section, turn: (start.match(/\d+/) || [""])[0], speaker: "",
-        text: rowLine.slice(start.length).replace(/\s+/g, " ").trim(), malformed: true,
+        line: lineNumber, section, turn: start.groups?.turn ?? (start[0].match(/\d+/) || [""])[0], speaker: "",
+        text: text.replace(/\s+/g, " ").trim(), malformed: true,
       };
       result.turns.push(openTurn);
       return note(index, "main:malformed");

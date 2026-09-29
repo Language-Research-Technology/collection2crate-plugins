@@ -27,7 +27,7 @@ import {
   DEFAULT_GRAMMAR, IGNORE_FIELD, LAYOUT_PARTS, applyCleanup, applyLayout, grammarLayout, buildGrammar, buildRegions, exactPattern,
   columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
-  parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn,
+  parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn, fixedColumnError,
 } from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
@@ -114,6 +114,18 @@ function ensureStyle() {
 .tg-method-option { display: flex; gap: 6px; align-items: flex-start; flex: 1 1 18em; cursor: pointer; }
 .tg-method-option > span { display: flex; flex-direction: column; gap: 2px; }
 .tg-method-option .field-hint { margin: 0; }
+.tg-strip-wrap { overflow-x: auto; background: var(--panel-2); border-radius: var(--radius-sm); padding: 4px 8px 6px; }
+.tg-strip-wrap .tg-strip { overflow: visible; padding: 0; background: transparent; border-radius: 0; }
+.tg-ruler { font-family: var(--mono); font-size: 14px; white-space: pre; line-height: 1.25; color: var(--muted); user-select: none; }
+.tg-ruler span[class^="tg-f-"] { color: var(--text); }
+.tg-colgrid { font-family: var(--mono); font-size: 14px; white-space: pre; line-height: 1.6; overflow-x: auto;
+  background: var(--panel-2); border-radius: var(--radius-sm); padding: 4px 8px; max-height: 40vh; overflow-y: auto; }
+.tg-colgrid .tg-ruler { position: sticky; top: 0; background: var(--panel-2); }
+.tg-colgrid .tg-gutter { color: var(--muted); user-select: none; }
+.tg-colgrid .tg-gutter.warn { color: var(--warn); }
+.tg-colrange { display: grid; grid-template-columns: 11em 5.5em 5.5em minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; margin: 6px 0 10px; }
+.tg-colrange input[type="number"] { width: 5em; }
+.tg-colrange .tg-colhead { color: var(--muted); font-size: 12px; }
 .tg-optional { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 ${fieldRules}
 `;
@@ -251,6 +263,10 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     // A saved grammar says whether its rows are fixed-width; for a new one it
     // is decided at the rows step, once the regions say which rows are main.
     state.fixedWidth = base ? !!base.turnRow?.fixedWidth : null;
+    // Its columns come back exactly as saved, not re-derived from the marks.
+    state.fixedColumns = base?.turnRow?.fixedWidth
+      ? Object.fromEntries((base.turnRow.columns || []).map(({ key, from, to }) => [key, { from, to }]))
+      : {};
     // A saved grammar brings its cleanup rules with it.
     state.cleanup = {
       drop: [...(base?.ignore || [])],
@@ -818,6 +834,55 @@ function selectionTracker(strip, getText) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Fixed-width: a character ruler, and the columns shaded across rows
+// ---------------------------------------------------------------------------
+
+// Two rows of digits counting characters from 1, the way the column ranges
+// are written: tens above (at 10, 20, …), units below. `gutter` is blank space
+// to leave before them, when the lines they rule are prefixed by one.
+function rulerRows(length, gutter = 0) {
+  let tens = "";
+  let units = "";
+  for (let i = 1; i <= length; i++) {
+    tens += i % 10 === 0 ? String(Math.floor(i / 10) % 10) : " ";
+    units += String(i % 10);
+  }
+  return [" ".repeat(gutter) + tens, " ".repeat(gutter) + units];
+}
+
+// The field whose column covers character `i` (0-based), if any.
+const columnAt = (columns, i) => (columns || []).find((c) => i >= c.from && (c.to == null || i < c.to));
+
+// Text split into spans by column, shaded in each field's colour.
+function columnSpans(text, columns) {
+  const out = [];
+  let run = "";
+  let runKey;
+  const flush = () => {
+    if (!run) return;
+    const node = element("span", { text: run });
+    if (runKey) { node.className = `tg-f-${runKey}`; node.title = runKey; }
+    out.push(node);
+    run = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const key = columnAt(columns, i)?.key;
+    if (key !== runKey) { flush(); runKey = key; }
+    run += text[i];
+  }
+  flush();
+  return out;
+}
+
+function renderRuler(node, length, columns, gutter = 0) {
+  const [tens, units] = rulerRows(length, gutter);
+  node.replaceChildren(
+    element("div", { text: tens }),
+    element("div", {}, [document.createTextNode(" ".repeat(gutter)), ...columnSpans(units.slice(gutter), columns)]),
+  );
+}
+
 // A button that acts on a text selection must not take the selection away.
 const keepsSelection = (node) => {
   node.addEventListener("mousedown", (e) => e.preventDefault());
@@ -825,7 +890,7 @@ const keepsSelection = (node) => {
 };
 
 // One marked-up row: the line as selectable text, and a button per field.
-function sampleCard(sample, fields, { onChange, onRemove }) {
+function sampleCard(sample, fields, { onChange, onRemove, onMark = () => {}, ruler = false }) {
   const labelOf = (key) => [...fields, IGNORE_BUTTON].find((f) => f.key === key).label;
   const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
   const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
@@ -841,6 +906,7 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     // A row has one of each field but may have several ignored runs.
     sample.spans = sample.spans.filter((s) => (field === IGNORE_FIELD || s.field !== field) && (s.end <= range.start || s.start >= range.end));
     sample.spans.push({ field, ...range });
+    onMark(field);
     hint.textContent = `Line ${sample.index + 1} — marked "${sample.line.slice(range.start, range.end)}" as ${labelOf(field).toLowerCase()}.`;
     renderStrip(strip, sample);
     onChange();
@@ -855,15 +921,21 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   });
 
   renderStrip(strip, sample);
-  return element("div", { className: "tg-sample" }, [
+  // With a ruler, the ruler and the line scroll together; the ruler shades
+  // the columns the fields are read from.
+  const rulerNode = ruler ? element("div", { className: "tg-ruler", attrs: { "aria-hidden": "true" } }) : null;
+  if (rulerNode) renderRuler(rulerNode, sample.line.length, []);
+  const card = element("div", { className: "tg-sample" }, [
     element("div", { className: "tg-sample-head" }, [
       hint,
       button("Clear marks", { onClick: () => { sample.spans = []; renderStrip(strip, sample); onChange(); } }),
       button("Remove row", { onClick: onRemove }),
     ]),
-    strip,
+    rulerNode ? element("div", { className: "tg-strip-wrap" }, [rulerNode, strip]) : strip,
     element("div", { className: "tg-fields" }, fieldButtons),
   ]);
+  card.showColumns = (columns) => { if (rulerNode) renderRuler(rulerNode, sample.line.length, columns); };
+  return card;
 }
 
 const READING_METHODS = [
@@ -907,6 +979,88 @@ const rowLines = (state) => state.clean?.lines || state.lines;
 // document has them, since a removal would move the columns.
 const sampleLines = (state, region) => (region === "main" && state.fixedWidth ? state.lines : rowLines(state));
 
+// Each fixed-width column's range, editable. Counting from 1 with both ends
+// included, as the ruler counts — so "9 to 14" is 0-based from 8, to 14.
+// A blank "to" runs to the end of the line.
+function fixedColumnEditor(spec, { onSet }) {
+  const grid = element("div", { className: "tg-colrange" }, [
+    element("span", { className: "tg-colhead", text: "Field" }),
+    element("span", { className: "tg-colhead", text: "From" }),
+    element("span", { className: "tg-colhead", text: "To" }),
+    element("span", { className: "tg-colhead", text: "" }),
+    element("span", { className: "tg-colhead", text: "" }),
+  ]);
+  const problem = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
+  for (const f of spec.fields) {
+    const from = element("input", { attrs: { type: "number", min: 1, value: f.from + 1, "aria-label": `${f.label} from character` } });
+    const to = element("input", { attrs: { type: "number", min: 1, value: f.to ?? "", placeholder: "end", "aria-label": `${f.label} to character` } });
+    const commit = () => {
+      const range = { from: Number(from.value) - 1, to: to.value.trim() === "" ? null : Number(to.value) };
+      const error = from.value.trim() === "" ? "the first character is needed" : fixedColumnError(range);
+      const refused = error ? `${f.label}: ${error}.` : onSet(f.key, range);
+      // A refused range stays in the boxes, with the reason, to be corrected.
+      if (refused) problem.textContent = refused;
+    };
+    from.addEventListener("change", commit);
+    to.addEventListener("change", commit);
+    const auto = spec.autoColumns.find((c) => c.key === f.key);
+    const edited = spec.edited.includes(f.key);
+    const status = edited
+      ? `Set here${auto ? ` — the marks give ${describeFixedColumn(auto).replace("characters ", "")}` : ""}`
+      : "From the marks";
+    grid.append(
+      element("span", {}, [element("span", { className: `tg-swatch tg-swatch-${f.key}` }), document.createTextNode(f.label)]),
+      from,
+      to,
+      element("span", { className: "field-hint", text: status }),
+      edited ? button("Use the marks", { onClick: () => onSet(f.key, null), title: "Go back to the column the marked samples give" }) : element("span"),
+    );
+  }
+  return element("div", {}, [
+    element("p", { className: "field-hint", text: "Characters counted from 1, both ends included, as on the ruler. Leave To blank for a column that runs to the end of the line. Marking a field again puts its column back to what the marks give." }),
+    grid,
+    problem,
+  ]);
+}
+
+const PREVIEW_ROWS = 12;
+const PREVIEW_MISSES = 6;
+
+// Several rows with the columns shaded down them, under a ruler: where a
+// column cuts into a value, it shows. Rows the pattern doesn't match come
+// first (flagged), then the rest in order, up to PREVIEW_ROWS.
+function columnPreview(rows, spec) {
+  const re = new RegExp(spec.pattern, spec.flags || "u");
+  const misses = rows.filter(({ line }) => !re.test(line));
+  const picked = [...misses.slice(0, PREVIEW_MISSES)];
+  for (const row of rows) {
+    if (picked.length >= PREVIEW_ROWS) break;
+    if (!picked.includes(row)) picked.push(row);
+  }
+  picked.sort((a, b) => a.index - b.index);
+  if (!picked.length) return element("p", { className: "empty-note", text: "No main rows to show." });
+  const numberWidth = String(Math.max(...picked.map((r) => r.index + 1))).length;
+  const gutter = numberWidth + 3;
+  const ruler = element("div", { className: "tg-ruler", attrs: { "aria-hidden": "true" } });
+  renderRuler(ruler, Math.max(...picked.map((r) => r.line.length)), spec.columns, gutter);
+  const missed = new Set(misses);
+  const grid = element("div", { className: "tg-colgrid" }, [
+    ruler,
+    ...picked.map((row) => element("div", {}, [
+      element("span", {
+        className: missed.has(row) ? "tg-gutter warn" : "tg-gutter",
+        text: `${String(row.index + 1).padStart(numberWidth)} ${missed.has(row) ? "✕" : " "} `,
+        attrs: missed.has(row) ? { title: "The columns don't read this row" } : {},
+      }),
+      ...columnSpans(row.line, spec.columns),
+    ])),
+  ]);
+  const note = misses.length
+    ? `${misses.length} of ${rows.length} row(s) don't fit the columns (✕) — ${misses.length > PREVIEW_MISSES ? `the first ${PREVIEW_MISSES} are` : "they are"} shown with the others.`
+    : `Every one of the ${rows.length} row(s) fits the columns; ${picked.length < rows.length ? `the first ${picked.length} are shown` : "all are shown"}.`;
+  return element("div", {}, [element("p", { className: "field-hint", text: note }), grid]);
+}
+
 function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onChange }) {
   const wrap = element("div");
   const cards = element("div");
@@ -915,7 +1069,9 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const patternBox = element("textarea", { className: "tg-pattern", attrs: { readonly: "", rows: 3, "aria-label": `${title} pattern` } });
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
   const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
-  const columnsBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite" } });
+  const columnsBox = element("div", { attrs: { "aria-live": "polite" } });
+  let cardNodes = [];
+  state.fixedColumns ||= {};
   const fixed = () => region === "main" && !!state.fixedWidth;
   const hint = element("p", { className: "field-hint" });
   const describeHint = () => {
@@ -939,10 +1095,15 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   }
 
   function drawCards() {
-    cards.replaceChildren(...state[samplesKey].map((sample) => sampleCard(sample, fields, {
+    cardNodes = state[samplesKey].map((sample) => sampleCard(sample, fields, {
       onChange: update,
       onRemove: () => { state[samplesKey] = state[samplesKey].filter((s) => s !== sample); drawCards(); update(); },
-    })));
+      // Marking a field again means its column should follow the new marks,
+      // not a range set by hand for the old ones.
+      onMark: (field) => { if (fixed()) delete state.fixedColumns[field]; },
+      ruler: fixed(),
+    }));
+    cards.replaceChildren(...cardNodes);
     if (!state[samplesKey].length) cards.append(element("p", { className: "empty-note", text: "No sample rows yet — add one below." }));
     fillPicker();
   }
@@ -951,7 +1112,11 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     let spec = null;
     errorBox.textContent = "";
     try {
-      spec = buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey], fixedWidth: fixed() });
+      spec = buildRowPattern(state[samplesKey], fields, {
+        optional: state.optional[optionalKey],
+        fixedWidth: fixed(),
+        columns: fixed() ? state.fixedColumns : null,
+      });
     } catch (e) {
       errorBox.textContent = e.message;
     }
@@ -960,9 +1125,29 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     unmarkedBox.textContent = loose.length
       ? `Not marked: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there. Mark it as a field, or as Ignore if it is fixed text every row has.`
       : "";
-    columnsBox.textContent = spec?.fixedWidth
-      ? `Columns: ${spec.fields.map((f) => `${f.label.toLowerCase()}, ${describeFixedColumn(f)}`).join(" · ")}.`
-      : "";
+    columnsBox.replaceChildren(...(spec?.fixedWidth ? [
+      element("h3", { className: "tg-section-title", text: "Columns" }),
+      fixedColumnEditor(spec, {
+        // A range that would break the columns (overlapping another) is
+        // refused here rather than applied: applied, it would leave no
+        // columns to show, and so nowhere to correct it.
+        onSet: (key, range) => {
+          const next = { ...state.fixedColumns };
+          if (range) next[key] = range; else delete next[key];
+          try {
+            buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey], fixedWidth: true, columns: next });
+          } catch (e) {
+            return e.message;
+          }
+          state.fixedColumns = next;
+          update();
+          return null;
+        },
+      }),
+      element("h3", { className: "tg-section-title", text: "Columns across rows" }),
+      columnPreview(candidates(), spec),
+    ] : []));
+    for (const card of cardNodes) card.showColumns(spec?.fixedWidth ? spec.columns : []);
     optionalBox.replaceChildren();
     if (spec) {
       for (const f of spec.fields) {
@@ -1119,6 +1304,7 @@ function currentGrammar(state) {
     cleanup: state.cleanup,
     layout: state.layout || grammarLayout(null),
     fixedWidth: !!state.fixedWidth,
+    fixedColumns: state.fixedWidth ? state.fixedColumns : null,
   });
 }
 

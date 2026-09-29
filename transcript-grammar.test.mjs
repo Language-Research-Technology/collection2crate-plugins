@@ -13,7 +13,7 @@ import {
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
   applyLayout, grammarLayout, dropColumns, columnRulesFor, columnRuleError, droppedColumnRanges,
-  describeColumnRule, grammarFingerprint, buildFixedRowPattern, looksFixedWidth, describeFixedColumn,
+  describeColumnRule, grammarFingerprint, buildFixedRowPattern, looksFixedWidth, describeFixedColumn, fixedColumnError,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -671,6 +671,38 @@ check("fixed width: a row with a turn number that doesn't fit is kept, read by i
   const blank = parsed.turns.find((t) => t.turn === "120");
   assert.equal(blank.malformed, true);
   assert.equal(blank.text, "nobody speaking here");
+});
+
+check("fixed width: a column set by hand replaces the one the marks give", () => {
+  const auto = buildFixedRowPattern([fixedSample()], TURN_FIELDS);
+  const autoText = auto.columns.find((c) => c.key === "text");
+  // Text cut to its first five characters.
+  const spec = buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { text: { from: 27, to: 32 } } });
+  assert.deepEqual(spec.columns.find((c) => c.key === "text"), { key: "text", from: 27, to: 32 });
+  assert.deepEqual(spec.edited, ["text"]);
+  assert.deepEqual(spec.autoColumns.find((c) => c.key === "text"), autoText);
+  const m = FIXED_LINES[0].match(new RegExp(spec.pattern, "u"));
+  assert.equal(m.groups.text, "first");
+});
+
+check("fixed width: a column set by hand that overlaps another, or runs backwards, is refused", () => {
+  assert.throws(() => buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { turn: { from: 8, to: 20 } } }), /share columns/);
+  assert.equal(fixedColumnError({ from: 5, to: 5 }), "the last character must come at or after the first");
+  assert.equal(fixedColumnError({ from: 5, to: null }), null);
+  assert.throws(() => buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { turn: { from: -1, to: 4 } } }), /Turn number/);
+});
+
+check("fixed width: hand-set columns are saved, and the editor-only details are not", () => {
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [fixedSample()], layout: FIXED_LAYOUT, fixedWidth: true,
+    fixedColumns: { text: { from: 26, to: null } },
+  });
+  assert.deepEqual(grammar.turnRow.columns.find((c) => c.key === "text"), { key: "text", from: 26, to: null });
+  assert.equal("autoColumns" in grammar.turnRow, false);
+  assert.equal("edited" in grammar.turnRow, false);
+  // Open-ended text now takes the closing "/" too.
+  assert.match(parseWithGrammar(FIXED_LINES, grammar).turns[1].text, /^a reply#\s+\/$/);
 });
 
 if (failures) {

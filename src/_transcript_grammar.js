@@ -557,6 +557,13 @@ function widenedColumns(sample) {
     .map((s) => ({ key: s.field, from: s.from, to: s.to >= line.length ? null : s.to, start: s.start, end: s.end }));
 }
 
+/** What is wrong with a hand-set fixed-width column `{ from, to }`, or null. */
+export function fixedColumnError(column) {
+  if (!column || !isCount(column.from)) return "the first character must be a whole number from 1";
+  if (column.to != null && (!isCount(column.to) || column.to <= column.from)) return "the last character must come at or after the first";
+  return null;
+}
+
 /** A fixed-width column as the editor and the report describe it, counting from 1. */
 export function describeFixedColumn(column) {
   return column.to == null
@@ -595,8 +602,21 @@ export function buildFixedRowPattern(samples, fieldDefs, options = {}) {
       seen.marks.push(c);
     }
   }
+  // Where the markup alone puts each column, before any range set by hand.
+  const autoColumns = [...columns.values()].map(({ key, from, to }) => ({ key, from, to }));
   for (const column of columns.values()) {
     const label = known.get(column.key).label;
+    // A range set by hand is taken as given: it is how a column is made
+    // narrower or wider than the samples' blanks allow.
+    const set = options.columns?.[column.key];
+    if (set) {
+      const problem = fixedColumnError(set);
+      if (problem) throw new Error(`${label}: ${problem}.`);
+      column.from = set.from;
+      column.to = set.to ?? null;
+      column.edited = true;
+      continue;
+    }
     const outside = column.marks.find((m) => m.start < column.from || (column.to != null && m.end > column.to));
     if (outside) throw new Error(`The samples put "${label}" in different columns — mark it where it lines up in every sample.`);
   }
@@ -611,7 +631,7 @@ export function buildFixedRowPattern(samples, fieldDefs, options = {}) {
     const def = known.get(c.key);
     const optional = c.present < usable.length || forcedOptional.has(c.key);
     return {
-      key: c.key, label: def.label, kind: def.kind, from: c.from, to: c.to,
+      key: c.key, label: def.label, kind: def.kind, from: c.from, to: c.to, edited: !!c.edited,
       present: c.present, samples: usable.length, optional, alwaysPresent: c.present === usable.length,
     };
   });
@@ -646,6 +666,10 @@ export function buildFixedRowPattern(samples, fieldDefs, options = {}) {
     rowStart,
     fixedWidth: true,
     columns: fieldInfo.map(({ key, from, to }) => ({ key, from, to })),
+    // For the editor only (buildGrammar drops it): the columns the markup
+    // gives, and which were set by hand instead.
+    autoColumns,
+    edited: fieldInfo.filter((f) => f.edited).map((f) => f.key),
     unmarked: [],
     fields: fieldInfo.map(({ key, label, present, samples: count, optional, alwaysPresent, from, to }) => (
       { key, label, present, samples: count, optional, alwaysPresent, from, to }
@@ -669,7 +693,7 @@ export function looksFixedWidth(lines) {
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false }) {
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false, fixedColumns = null }) {
   const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers, layout);
   // The cleanup step's rules, when there is one, replace the ignore patterns
   // derived from lines marked Ignore (it starts from those, and may edit them).
@@ -678,7 +702,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
   // Fixed-width rows leave out every column that isn't a field already.
   const dropColumns = fixedWidth ? [] : uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
   const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
-  const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow, fixedWidth });
+  const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow, fixedWidth, columns: fixedColumns });
   return {
     version: GRAMMAR_VERSION,
     name: name || "default",
@@ -694,7 +718,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
 
 function withoutSampleText(spec) {
   if (!spec) return spec;
-  const { unmarked, ...kept } = spec;
+  const { unmarked, autoColumns, edited, ...kept } = spec;
   return kept;
 }
 

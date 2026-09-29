@@ -391,7 +391,12 @@ the transcript processing option:
   (the selection widened over the blanks either side, so a right-aligned
   `10` also covers `100`), everything outside the marked columns is left
   out, and punctuation beside a turn number or speaker inside its column (an
-  overlap `(`) is matched but not kept.
+  overlap `(`) is matched but not kept. A ruler over each sample row counts
+  the characters and shades the columns; the **Columns** list gives each
+  field's range (from 1, both ends included) in boxes that can be edited
+  directly, with **Use the marks** to go back to what the marks give; and
+  **Columns across rows** shows the columns shaded down a dozen rows of the
+  sample, the ones the columns don't read first, flagged ✕.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group

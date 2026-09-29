@@ -108,6 +108,12 @@ function ensureStyle() {
 .tg-toolbar input[type="text"] { flex: 1; width: auto; min-width: 14em; }
 .tg-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin-bottom: 6px; }
 .tg-rule .field-hint { margin: 0; white-space: nowrap; }
+.tg-method { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px 8px; margin: 0 0 10px;
+  display: flex; gap: 18px; flex-wrap: wrap; }
+.tg-method legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+.tg-method-option { display: flex; gap: 6px; align-items: flex-start; flex: 1 1 18em; cursor: pointer; }
+.tg-method-option > span { display: flex; flex-direction: column; gap: 2px; }
+.tg-method-option .field-hint { margin: 0; }
 .tg-optional { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 ${fieldRules}
 `;
@@ -860,6 +866,40 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   ]);
 }
 
+const READING_METHODS = [
+  {
+    fixedWidth: false,
+    label: "Text pattern",
+    hint: "Fields are found by the delimiters and brackets between them, wherever they fall in the line.",
+  },
+  {
+    fixedWidth: true,
+    label: "Fixed-width columns",
+    hint: "Every field is at the same character positions in every row; each field is read from its column.",
+  },
+];
+
+// A choice between the two ways of reading main rows, as a pair of radios.
+function readingMethodChoice(fixedWidth, onChange) {
+  const name = `tg-method-${Math.random().toString(36).slice(2)}`;
+  const options = READING_METHODS.map((method) => {
+    const input = element("input", { attrs: { type: "radio", name, value: String(method.fixedWidth) } });
+    input.checked = method.fixedWidth === fixedWidth;
+    input.addEventListener("change", () => { if (input.checked) onChange(method.fixedWidth); });
+    return element("label", { className: "tg-method-option" }, [
+      input,
+      element("span", {}, [
+        element("strong", { text: method.label }),
+        element("span", { className: "field-hint", text: method.hint }),
+      ]),
+    ]);
+  });
+  return element("fieldset", { className: "tg-method" }, [
+    element("legend", { text: "Read main rows by" }),
+    ...options,
+  ]);
+}
+
 // The lines rows are marked up on: cleaned, once the cleanup step has run.
 const rowLines = (state) => state.clean?.lines || state.lines;
 
@@ -955,11 +995,10 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     },
   });
 
-  // Switching between the two readings re-reads each sample from the lines
-  // that reading marks up; a sample whose line differs loses its marks.
-  const fixedToggle = region === "main" ? checkbox("Fixed-width columns — every field is at the same character positions in every row", { checked: fixed() }) : null;
-  fixedToggle?.input.addEventListener("change", () => {
-    state.fixedWidth = fixedToggle.input.checked;
+  // The two ways of reading main rows. Switching re-reads each sample from
+  // the lines that method marks up; a sample whose line differs loses its marks.
+  const methodChoice = region === "main" ? readingMethodChoice(fixed(), (fixedWidth) => {
+    state.fixedWidth = fixedWidth;
     const source = sampleLines(state, region);
     for (const sample of state[samplesKey]) {
       if (source[sample.index] === sample.line) continue;
@@ -969,11 +1008,11 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     describeHint();
     drawCards();
     update();
-  });
+  }) : null;
 
   describeHint();
   wrap.append(
-    ...(fixedToggle ? [fixedToggle.node] : []),
+    ...(methodChoice ? [methodChoice] : []),
     hint,
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),

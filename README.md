@@ -384,8 +384,9 @@ the transcript processing option:
   (`grammar.js`'s `buildGrammar`) and re-run over the whole sample as you go,
   so you see what they parse and what they miss before saving.
   A format whose rows put every field at the same character positions (the
-  London-Lund Corpus, say) can switch on **Fixed-width columns** on the Main
-  tab — offered by default when every main row is the same length. Fields are
+  London-Lund Corpus, say) can choose to read main rows by **Fixed-width
+  columns** instead of by **Text pattern** — a choice at the top of the Main
+  tab, set to fixed-width by default when every main row is the same length. Fields are
   then marked once, on a row as the document has it: each becomes a column
   (the selection widened over the blanks either side, so a right-aligned
   `10` also covers `100`), everything outside the marked columns is left

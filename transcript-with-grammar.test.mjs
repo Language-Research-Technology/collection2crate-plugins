@@ -354,5 +354,28 @@ await check("a grammar's own labels become extra CSV columns, headed by the labe
   assert.equal(toCsv(result.rows).split("\n")[0], "speakerID,text,section");
 });
 
+await check("a grammar's own speaker labels become PropertyValues of each speaker's Person", async () => {
+  const lines = ["Speakers:", "AA: Alex [teacher]", "BB: Sam [student]", "", "BODY", "1\tAA:\thello", "2\tBB:\thi"];
+  const grammar = buildGrammar({
+    name: "roles", lines,
+    roles: ["speakers", "speakers", "speakers", "speakers", "main", "main", "main"],
+    markers: [true, false, false, false, true, false, false],
+    layout: { header: false, speakers: true, markers: true },
+    speakerCustomFields: [{ key: "c_role", label: "Role" }],
+    speakerSamples: [markup(lines[1], [["code", "AA"], ["name", "Alex"], ["c_role", "teacher"]])],
+    turnSamples: [markup(lines[5], [["turn", "1"], ["speaker", "AA"], ["text", "hello"]])],
+  });
+  assert.deepEqual(grammar.speakerRow.customFields, [{ key: "c_role", label: "Role" }]);
+  const result = await processTranscriptText(lines.join("\n"), { grammar, grammarName: "roles" });
+  assert.equal(result.nonConforming.total, 0);
+  const entities = buildSpeakerPersonEntities(result.speakerMap);
+  const alex = entities.find((e) => e["@id"] === "#AA");
+  assert.deepEqual(alex.additionalProperty, [{ "@id": "#AA-role" }]);
+  assert.deepEqual(entities.find((e) => e["@id"] === "#AA-role"), { "@id": "#AA-role", "@type": "PropertyValue", name: "Role", value: "teacher" });
+  assert.equal(entities.find((e) => e["@id"] === "#BB-role").value, "student");
+  // The CSV is untouched: speaker labels are about speakers, not rows.
+  assert.equal(toCsv(result.rows, result.extraColumns).split("\n")[0], "speakerID,text,section");
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);

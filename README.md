@@ -409,6 +409,10 @@ the transcript processing option:
   label some sample marks is saved in `turnRow.customFields` (`{ key, label }`,
   the key its group in the pattern), and ca-data-prep writes its values as an
   extra CSV column after `speakerID,text,section`, headed by the label.
+  Speaker rows take labels of their own the same way ("Role", "Age"), saved in
+  `speakerRow.customFields`; ca-data-prep gives each speaker's Person an
+  `additionalProperty` for each non-empty one — a `PropertyValue` entity
+  (`#AA-role`) with the label as its `name` and the value as its `value`.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group

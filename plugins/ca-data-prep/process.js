@@ -441,6 +441,9 @@ export function declaredCodeSet(speakerMap) {
   return codes;
 }
 
+// "#AA" and "Year of birth" → "#AA-year-of-birth".
+const propertyValueId = (entityId, label) => `${entityId}-${String(label).trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "property"}`;
+
 export function buildSpeakerPersonEntities(speakerMap) {
   const entities = [];
 
@@ -456,6 +459,16 @@ export function buildSpeakerPersonEntities(speakerMap) {
     if (details.affiliation) entity.affiliation = details.affiliation;
     if (details.optionalCode) entity.identifier = details.optionalCode;
     entities.push(entity);
+
+    // Fields a transcript grammar's own labels read from the declaration
+    // ("Role", "Age"): name/value pairs, each its own PropertyValue entity.
+    const extra = Object.entries(details.extra || {}).filter(([, value]) => String(value ?? "").trim());
+    if (extra.length) {
+      entity.additionalProperty = extra.map(([label]) => ({ "@id": propertyValueId(entityId, label) }));
+      for (const [label, value] of extra) {
+        entities.push({ "@id": propertyValueId(entityId, label), "@type": "PropertyValue", name: label, value: String(value).trim() });
+      }
+    }
   }
 
   return entities;

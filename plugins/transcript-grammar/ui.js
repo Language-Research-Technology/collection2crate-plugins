@@ -28,7 +28,7 @@ import {
   columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn, fixedColumnError,
-  turnFieldDefs, customFieldKey, customLabelError,
+  turnFieldDefs, speakerFieldDefs, customFieldKey, customLabelError,
 } from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
@@ -140,8 +140,10 @@ ${fieldRules}
 // Colours for labels a person adds, in the order they are added.
 const CUSTOM_COLOURS = ["#9333ea", "#0d9488", "#ca8a04", "#e11d48", "#4f46e5", "#65a30d", "#c2410c", "#0284c7"];
 
-// The custom fields' colour rules, rewritten whenever the labels change.
-function ensureCustomStyle(customFields) {
+// The custom fields' colour rules, rewritten whenever the labels change —
+// main rows' and speaker rows' together, their keys being distinct.
+function ensureCustomStyle(state) {
+  const customFields = [...(state.customFields || []), ...(state.speakerCustomFields || [])];
   let style = document.getElementById("transcript-grammar-custom-style");
   if (!style) {
     style = document.createElement("style");
@@ -290,6 +292,7 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.joinRepeats = base ? !!base.turnRow?.joinRepeats : null;
     // And the labels of its own fields.
     state.customFields = (base?.turnRow?.customFields || []).map(({ key, label }) => ({ key, label }));
+    state.speakerCustomFields = (base?.speakerRow?.customFields || []).map(({ key, label }) => ({ key, label }));
     // Its columns come back exactly as saved, not re-derived from the marks.
     state.fixedColumns = base?.turnRow?.fixedWidth
       ? Object.fromEntries((base.turnRow.columns || []).map(({ key, from, to }) => [key, { from, to }]))
@@ -1090,9 +1093,13 @@ function columnPreview(rows, spec) {
 
 function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, title, onChange }) {
   // Main rows take the person's own labels as well as the built-in fields.
+  // Main and speaker rows take the person's own labels as well as their
+  // built-in fields, each row kind its own list.
   const isMain = region === "main";
-  if (isMain) state.customFields ||= [];
-  const fieldsNow = () => (isMain ? turnFieldDefs(state.customFields) : baseFields);
+  const customKey = isMain ? "customFields" : "speakerCustomFields";
+  state.customFields ||= [];
+  state.speakerCustomFields ||= [];
+  const fieldsNow = () => (isMain ? turnFieldDefs : speakerFieldDefs)(state[customKey]);
   const wrap = element("div");
   const cards = element("div");
   const picker = element("select");
@@ -1207,32 +1214,35 @@ function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, 
   }
 
   // The person's own labels: added here, marked like any field, removed with
-  // their marks. They are kept on each row, and become CSV columns.
-  const labelsBox = isMain ? element("div", { className: "tg-labels" }) : null;
+  // their marks. On main rows they become CSV columns; on speaker rows,
+  // name/value properties of each speaker's Person.
+  const labelsBox = element("div", { className: "tg-labels" });
   const drawLabels = () => {
-    if (!labelsBox) return;
-    ensureCustomStyle(state.customFields);
-    const input = element("input", { attrs: { type: "text", placeholder: "New label, e.g. Prosody", "aria-label": "New label", spellcheck: "false" } });
+    ensureCustomStyle(state);
+    const example = isMain ? "Prosody" : "Role";
+    const input = element("input", { attrs: { type: "text", placeholder: `New label, e.g. ${example}`, "aria-label": "New label", spellcheck: "false" } });
     const problem = element("span", { className: "field-hint", attrs: { style: "color: var(--err)" } });
     const addLabel = () => {
-      const error = customLabelError(input.value, state.customFields);
+      const error = customLabelError(input.value, state[customKey], baseFields);
       if (error) { problem.textContent = error; input.focus(); return; }
       const label = input.value.trim();
-      state.customFields.push({ key: customFieldKey(label, state.customFields.map((f) => f.key)), label });
+      // Unique across both row kinds, so each key has one colour.
+      const taken = [...state.customFields, ...state.speakerCustomFields].map((f) => f.key);
+      state[customKey].push({ key: customFieldKey(label, taken), label });
       drawLabels();
       drawCards();
       update();
     };
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addLabel(); } });
-    const chips = state.customFields.map((f) => element("span", { className: "tg-chip" }, [
+    const chips = state[customKey].map((f) => element("span", { className: "tg-chip" }, [
       element("span", { className: `tg-swatch tg-swatch-${f.key}` }),
       element("span", { text: f.label }),
       button("×", {
         title: `Remove "${f.label}" and its marks`,
         onClick: () => {
-          state.customFields = state.customFields.filter((c) => c !== f);
+          state[customKey] = state[customKey].filter((c) => c !== f);
           for (const sample of state[samplesKey]) sample.spans = sample.spans.filter((span) => span.field !== f.key);
-          delete state.fixedColumns[f.key];
+          if (isMain) delete state.fixedColumns[f.key];
           state.optional[optionalKey] = (state.optional[optionalKey] || []).filter((k) => k !== f.key);
           drawLabels();
           drawCards();
@@ -1244,7 +1254,12 @@ function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, 
       element("span", { className: "field-hint", text: "Your own labels:" }),
       ...chips,
       input,
-      button("Add label", { onClick: addLabel, title: "Add a field of your own to mark on the rows below — its values are kept as a CSV column" }),
+      button("Add label", {
+        onClick: addLabel,
+        title: isMain
+          ? "Add a field of your own to mark on the rows below — its values are kept as a CSV column"
+          : "Add a field of your own to mark on the rows below — its values are kept as properties of each speaker",
+      }),
       problem,
     );
   };
@@ -1301,7 +1316,7 @@ function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, 
   wrap.append(
     ...(methodChoice ? [methodChoice] : []),
     hint,
-    ...(labelsBox ? [labelsBox] : []),
+    labelsBox,
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),
     errorBox,
@@ -1364,11 +1379,12 @@ function testPanel(state, region) {
       const total = rowLines(state).filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
       const items = region === "speakers" ? parsed.speakers : parsed.turns.filter((t) => !t.malformed);
       const turnFields = turnFieldDefs(grammar.turnRow?.customFields);
+      const speakerFields = speakerFieldDefs(grammar.speakerRow?.customFields);
       const columns = region === "speakers"
-        ? ["line", ...SPEAKER_FIELDS.map((f) => f.key)]
+        ? ["line", ...speakerFields.map((f) => f.key)]
         : ["line", "section", ...turnFields.map((f) => f.key)];
       const labels = region === "speakers"
-        ? ["Line", ...SPEAKER_FIELDS.map((f) => f.label)]
+        ? ["Line", ...speakerFields.map((f) => f.label)]
         : ["Line", "Section", ...turnFields.map((f) => f.label)];
       const table = dataTable(labels);
       for (const item of items.slice(0, RENDER_CAP)) {
@@ -1423,6 +1439,7 @@ function grammarInputs(state) {
     fixedColumns: state.fixedWidth ? state.fixedColumns : null,
     joinRepeats: !!state.joinRepeats,
     customFields: state.customFields || [],
+    speakerCustomFields: state.speakerCustomFields || [],
   };
 }
 
@@ -1585,8 +1602,9 @@ function renderParse(parsed, grammar) {
   }
   const meta = dataTable(["Key", "Value"]);
   for (const [k, v] of Object.entries(parsed.metadata)) meta.body.append(element("tr", {}, [element("td", { text: k }), element("td", { text: truncate(v, 120) })]));
-  const speakers = dataTable(["Line", ...SPEAKER_FIELDS.map((f) => f.label)]);
-  for (const s of parsed.speakers) speakers.body.append(element("tr", {}, ["line", ...SPEAKER_FIELDS.map((f) => f.key)].map((k) => element("td", { text: String(s[k] ?? "") }))));
+  const speakerFields = speakerFieldDefs(grammar?.speakerRow?.customFields);
+  const speakers = dataTable(["Line", ...speakerFields.map((f) => f.label)]);
+  for (const s of parsed.speakers) speakers.body.append(element("tr", {}, ["line", ...speakerFields.map((f) => f.key)].map((k) => element("td", { text: String(s[k] ?? "") }))));
   const turnFields = turnFieldDefs(grammar?.turnRow?.customFields);
   const turns = dataTable(["Line", "Section", ...turnFields.map((f) => f.label)]);
   for (const t of parsed.turns.slice(0, RENDER_CAP)) turns.body.append(element("tr", {}, ["line", "section", ...turnFields.map((f) => f.key)].map((k) => element("td", { text: truncate(String(t[k] ?? ""), 80) }))));

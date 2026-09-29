@@ -63,6 +63,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   const speakerMap = new Map();
   const speakerDiagnostics = [];
   const byId = new Map();
+  // A grammar's own speaker fields, by label, for the Person entities.
+  const speakerCustom = grammar.speakerRow?.customFields || [];
   for (const speaker of parsed.speakers) {
     const key = speaker.code || String(speaker.id || "").replace(/^#/, "");
     const optionalCode = idWithHash(speaker.id);
@@ -89,6 +91,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
         optionalCode,
         resolvedSpeakerID: optionalCode || key,
         line: speaker.line,
+        ...(speakerCustom.length ? { extra: Object.fromEntries(speakerCustom.map((f) => [f.label, speaker[f.key] || ""])) } : {}),
       });
       if (optionalCode) byId.set(optionalCode, key);
     }

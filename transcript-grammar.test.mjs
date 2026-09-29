@@ -14,7 +14,7 @@ import {
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
   applyLayout, grammarLayout, dropColumns, columnRulesFor, columnRuleError, droppedColumnRanges,
   describeColumnRule, grammarFingerprint, buildFixedRowPattern, looksFixedWidth, describeFixedColumn, fixedColumnError,
-  customFieldKey, customLabelError, turnFieldDefs,
+  customFieldKey, customLabelError, turnFieldDefs, speakerFieldDefs,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -808,6 +808,15 @@ check("custom labels: a saved grammar's labels are checked", () => {
   const grammar = splitGrammar(false);
   grammar.turnRow.customFields = [{ key: "bad key", label: "" }];
   assert.equal(validateGrammar(grammar).length, 2);
+});
+
+check("custom labels: speaker rows take labels of their own, checked against speaker fields", () => {
+  assert.equal(customLabelError("Name", [], SPEAKER_FIELDS), 'there is already a "Name"');
+  assert.equal(customLabelError("Text", [], SPEAKER_FIELDS), null);
+  assert.deepEqual(speakerFieldDefs([{ key: "c_role", label: "Role" }]).map((f) => f.key), ["code", "name", "alternateName", "affiliation", "id", "c_role"]);
+  const grammar = splitGrammar(false);
+  grammar.speakerRow = { pattern: "^x$", customFields: [{ key: "nope", label: "Role" }] };
+  assert.match(validateGrammar(grammar).join(" "), /speakerRow\.customFields\[0\]/);
 });
 
 if (failures) {

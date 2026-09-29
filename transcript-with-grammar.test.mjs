@@ -6,7 +6,7 @@
 //   node transcript-with-grammar.test.mjs
 import assert from "node:assert/strict";
 import { buildGrammar, documentLines, grammarFingerprint, grammarPath, listSavedGrammars } from "./src/_transcript_grammar.js";
-import { processTranscriptText, buildSpeakerPersonEntities } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, buildSpeakerPersonEntities, toCsv } from "./plugins/ca-data-prep/process.js";
 import { resolveTranscriptGrammar, warnIfGrammarChanged } from "./plugins/ca-data-prep/index.js";
 import { generateChatText } from "./plugins/chat-export/index.js";
 
@@ -336,6 +336,22 @@ await check("Build warns when the grammar changed after Process — and not when
   l = logger();
   assert.equal(await warnIfGrammarChanged({ ...ctx(l.log), options: { transcriptGrammar: "" } }, readText), true);
   assert.match(l.entries[0].message, /parsed with the grammar "own", but the built-in convention is chosen now/);
+});
+
+await check("a grammar's own labels become extra CSV columns, headed by the label", async () => {
+  const lines = ["1\tAA:\tfirst turn\t[low]", "2\tBB:\tsecond, turn\t[high]"];
+  const grammar = buildGrammar({
+    name: "labels", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], layout: { header: false, speakers: false, markers: false },
+    customFields: [{ key: "c_pitch", label: "Pitch level" }],
+    turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first turn"], ["c_pitch", "low"]])],
+  });
+  const result = await processTranscriptText(lines.join("\n"), { grammar, grammarName: "labels" });
+  assert.deepEqual(result.extraColumns, ["Pitch level"]);
+  assert.equal(toCsv(result.rows, result.extraColumns),
+    'speakerID,text,section,Pitch level\n#AA,first turn,MAIN,low\n#BB,"second, turn",MAIN,high\n');
+  // Without labels, the CSV is the three columns it always was.
+  assert.equal(toCsv(result.rows).split("\n")[0], "speakerID,text,section");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

@@ -403,6 +403,12 @@ the transcript processing option:
   row above, as long as nothing but blank, skipped or wrapped lines comes
   between. A new grammar starts with it on when the sample has such rows; the
   editor says how many, and saves it as `turnRow.joinRepeats`.
+  Main rows can also carry fields of your own: **Your own labels** on the Main
+  tab adds one ("Prosody", "Overlap"), which gets its own mark button and
+  colour and is marked like the built-in fields, with either reading. A
+  label some sample marks is saved in `turnRow.customFields` (`{ key, label }`,
+  the key its group in the pattern), and ca-data-prep writes its values as an
+  extra CSV column after `speakerID,text,section`, headed by the label.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group

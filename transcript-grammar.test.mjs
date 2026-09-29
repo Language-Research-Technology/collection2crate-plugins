@@ -14,6 +14,7 @@ import {
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
   applyLayout, grammarLayout, dropColumns, columnRulesFor, columnRuleError, droppedColumnRanges,
   describeColumnRule, grammarFingerprint, buildFixedRowPattern, looksFixedWidth, describeFixedColumn, fixedColumnError,
+  customFieldKey, customLabelError, turnFieldDefs,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -757,6 +758,56 @@ check("joining: works the same for rows read by a text pattern", () => {
     layout: FIXED_LAYOUT, joinRepeats: true,
   });
   assert.deepEqual(parseWithGrammar(lines, grammar).turns.map((t) => t.text), ["first part second part", "reply"]);
+});
+
+// ---------------------------------------------------------------------------
+// Custom labels
+// ---------------------------------------------------------------------------
+
+const PROSODY = { key: "c_prosody", label: "Prosody" };
+
+check("custom labels: keys are group names, unique, and labels can't repeat a field", () => {
+  assert.equal(customFieldKey("Prosodic code"), "c_prosodic_code");
+  assert.equal(customFieldKey("Prosody", ["c_prosody"]), "c_prosody_2");
+  assert.equal(customFieldKey("声調"), "c_field");
+  assert.equal(customLabelError("text"), 'there is already a "text"');
+  assert.equal(customLabelError("Prosody", [PROSODY]), 'there is already a "Prosody"');
+  assert.equal(customLabelError("  "), "give the label a name");
+  assert.equal(customLabelError("Overlap", [PROSODY]), null);
+  assert.deepEqual(turnFieldDefs([PROSODY]).map((f) => f.key), ["turn", "speaker", "text", "c_prosody"]);
+});
+
+check("custom labels: a marked label is read from its column in fixed-width rows", () => {
+  const sample = fixedSample();
+  sample.spans.push({ field: PROSODY.key, start: 23, end: 25 });
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [sample], optional: { turnRow: ["speaker"] },
+    layout: FIXED_LAYOUT, fixedWidth: true, customFields: [PROSODY, { key: "c_unused", label: "Unused" }],
+  });
+  assert.deepEqual(validateGrammar(grammar), []);
+  // Only the labels a sample marks are saved.
+  assert.deepEqual(grammar.turnRow.customFields, [PROSODY]);
+  const turns = parseWithGrammar(FIXED_LINES, grammar).turns;
+  assert.deepEqual(turns.map((t) => t.c_prosody), ["11", "11", "11", "11", "11"]);
+  assert.equal(turns[0].text, "first words here#");
+});
+
+check("custom labels: a marked label is read in text-pattern rows too", () => {
+  const lines = ["1\tAA:\tfirst part\t[low]", "2\tBB:\treply\t[high]"];
+  const grammar = buildGrammar({
+    name: "text", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], layout: FIXED_LAYOUT, customFields: [{ key: "c_pitch", label: "Pitch" }],
+    turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first part"], ["c_pitch", "low"]])],
+  });
+  const turns = parseWithGrammar(lines, grammar).turns;
+  assert.deepEqual(turns.map((t) => [t.text, t.c_pitch]), [["first part", "low"], ["reply", "high"]]);
+});
+
+check("custom labels: a saved grammar's labels are checked", () => {
+  const grammar = splitGrammar(false);
+  grammar.turnRow.customFields = [{ key: "bad key", label: "" }];
+  assert.equal(validateGrammar(grammar).length, 2);
 });
 
 if (failures) {

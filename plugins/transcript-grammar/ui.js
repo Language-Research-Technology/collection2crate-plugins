@@ -28,6 +28,7 @@ import {
   columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
   parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn, fixedColumnError,
+  turnFieldDefs, customFieldKey, customLabelError,
 } from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
@@ -126,10 +127,32 @@ function ensureStyle() {
 .tg-colrange { display: grid; grid-template-columns: 11em 5.5em 5.5em minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; margin: 6px 0 10px; }
 .tg-colrange input[type="number"] { width: 5em; }
 .tg-colrange .tg-colhead { color: var(--muted); font-size: 12px; }
+.tg-labels { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 10px; font-size: 13px; }
+.tg-labels input[type="text"] { width: 14em; }
+.tg-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 4px 1px 8px; }
+.tg-chip button { border: 0; background: transparent; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 4px; }
 .tg-optional { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 ${fieldRules}
 `;
   document.head.append(style);
+}
+
+// Colours for labels a person adds, in the order they are added.
+const CUSTOM_COLOURS = ["#9333ea", "#0d9488", "#ca8a04", "#e11d48", "#4f46e5", "#65a30d", "#c2410c", "#0284c7"];
+
+// The custom fields' colour rules, rewritten whenever the labels change.
+function ensureCustomStyle(customFields) {
+  let style = document.getElementById("transcript-grammar-custom-style");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "transcript-grammar-custom-style";
+    document.head.append(style);
+  }
+  style.textContent = (customFields || []).map(({ key }, i) => {
+    const colour = CUSTOM_COLOURS[i % CUSTOM_COLOURS.length];
+    return `.tg-f-${key} { background: color-mix(in srgb, ${colour} 24%, transparent); box-shadow: inset 0 -2px 0 ${colour}; }\n` +
+      `.tg-swatch-${key} { background: ${colour}; }`;
+  }).join("\n");
 }
 
 const truncate = (text, n = 90) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
@@ -265,6 +288,8 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.fixedWidth = base ? !!base.turnRow?.fixedWidth : null;
     // Likewise joining repeated rows: saved, or decided at the rows step.
     state.joinRepeats = base ? !!base.turnRow?.joinRepeats : null;
+    // And the labels of its own fields.
+    state.customFields = (base?.turnRow?.customFields || []).map(({ key, label }) => ({ key, label }));
     // Its columns come back exactly as saved, not re-derived from the marks.
     state.fixedColumns = base?.turnRow?.fixedWidth
       ? Object.fromEntries((base.turnRow.columns || []).map(({ key, from, to }) => [key, { from, to }]))
@@ -1063,7 +1088,11 @@ function columnPreview(rows, spec) {
   return element("div", {}, [element("p", { className: "field-hint", text: note }), grid]);
 }
 
-function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onChange }) {
+function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, title, onChange }) {
+  // Main rows take the person's own labels as well as the built-in fields.
+  const isMain = region === "main";
+  if (isMain) state.customFields ||= [];
+  const fieldsNow = () => (isMain ? turnFieldDefs(state.customFields) : baseFields);
   const wrap = element("div");
   const cards = element("div");
   const picker = element("select");
@@ -1102,7 +1131,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   }
 
   function drawCards() {
-    cardNodes = state[samplesKey].map((sample) => sampleCard(sample, fields, {
+    cardNodes = state[samplesKey].map((sample) => sampleCard(sample, fieldsNow(), {
       onChange: update,
       onRemove: () => { state[samplesKey] = state[samplesKey].filter((s) => s !== sample); drawCards(); update(); },
       // Marking a field again means its column should follow the new marks,
@@ -1119,7 +1148,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     let spec = null;
     errorBox.textContent = "";
     try {
-      spec = buildRowPattern(state[samplesKey], fields, {
+      spec = buildRowPattern(state[samplesKey], fieldsNow(), {
         optional: state.optional[optionalKey],
         fixedWidth: fixed(),
         columns: fixed() ? state.fixedColumns : null,
@@ -1142,7 +1171,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
           const next = { ...state.fixedColumns };
           if (range) next[key] = range; else delete next[key];
           try {
-            buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey], fixedWidth: true, columns: next });
+            buildRowPattern(state[samplesKey], fieldsNow(), { optional: state.optional[optionalKey], fixedWidth: true, columns: next });
           } catch (e) {
             return e.message;
           }
@@ -1176,6 +1205,49 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     }
     onChange();
   }
+
+  // The person's own labels: added here, marked like any field, removed with
+  // their marks. They are kept on each row, and become CSV columns.
+  const labelsBox = isMain ? element("div", { className: "tg-labels" }) : null;
+  const drawLabels = () => {
+    if (!labelsBox) return;
+    ensureCustomStyle(state.customFields);
+    const input = element("input", { attrs: { type: "text", placeholder: "New label, e.g. Prosody", "aria-label": "New label", spellcheck: "false" } });
+    const problem = element("span", { className: "field-hint", attrs: { style: "color: var(--err)" } });
+    const addLabel = () => {
+      const error = customLabelError(input.value, state.customFields);
+      if (error) { problem.textContent = error; input.focus(); return; }
+      const label = input.value.trim();
+      state.customFields.push({ key: customFieldKey(label, state.customFields.map((f) => f.key)), label });
+      drawLabels();
+      drawCards();
+      update();
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addLabel(); } });
+    const chips = state.customFields.map((f) => element("span", { className: "tg-chip" }, [
+      element("span", { className: `tg-swatch tg-swatch-${f.key}` }),
+      element("span", { text: f.label }),
+      button("×", {
+        title: `Remove "${f.label}" and its marks`,
+        onClick: () => {
+          state.customFields = state.customFields.filter((c) => c !== f);
+          for (const sample of state[samplesKey]) sample.spans = sample.spans.filter((span) => span.field !== f.key);
+          delete state.fixedColumns[f.key];
+          state.optional[optionalKey] = (state.optional[optionalKey] || []).filter((k) => k !== f.key);
+          drawLabels();
+          drawCards();
+          update();
+        },
+      }),
+    ]));
+    labelsBox.replaceChildren(
+      element("span", { className: "field-hint", text: "Your own labels:" }),
+      ...chips,
+      input,
+      button("Add label", { onClick: addLabel, title: "Add a field of your own to mark on the rows below — its values are kept as a CSV column" }),
+      problem,
+    );
+  };
 
   // How many rows joining would take in, counted with joining on whatever
   // the box says. A new grammar starts with it on when there are some.
@@ -1225,9 +1297,11 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   }) : null;
 
   describeHint();
+  drawLabels();
   wrap.append(
     ...(methodChoice ? [methodChoice] : []),
     hint,
+    ...(labelsBox ? [labelsBox] : []),
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),
     errorBox,
@@ -1289,12 +1363,13 @@ function testPanel(state, region) {
       }
       const total = rowLines(state).filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
       const items = region === "speakers" ? parsed.speakers : parsed.turns.filter((t) => !t.malformed);
+      const turnFields = turnFieldDefs(grammar.turnRow?.customFields);
       const columns = region === "speakers"
         ? ["line", ...SPEAKER_FIELDS.map((f) => f.key)]
-        : ["line", "section", ...TURN_FIELDS.map((f) => f.key)];
+        : ["line", "section", ...turnFields.map((f) => f.key)];
       const labels = region === "speakers"
         ? ["Line", ...SPEAKER_FIELDS.map((f) => f.label)]
-        : ["Line", "Section", ...TURN_FIELDS.map((f) => f.label)];
+        : ["Line", "Section", ...turnFields.map((f) => f.label)];
       const table = dataTable(labels);
       for (const item of items.slice(0, RENDER_CAP)) {
         table.body.append(element("tr", {}, columns.map((c) => element("td", { text: truncate(String(item[c] ?? ""), 80) }))));
@@ -1347,6 +1422,7 @@ function grammarInputs(state) {
     fixedWidth: !!state.fixedWidth,
     fixedColumns: state.fixedWidth ? state.fixedColumns : null,
     joinRepeats: !!state.joinRepeats,
+    customFields: state.customFields || [],
   };
 }
 
@@ -1473,7 +1549,7 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
       const lines = file && !textarea.value.trim() ? await readDocument(file) : textToLines(textarea.value);
       const source = file && !textarea.value.trim() ? file.name : "pasted text";
       const parsed = parseWithGrammar(lines, grammar);
-      output.replaceChildren(...renderParse(parsed));
+      output.replaceChildren(...renderParse(parsed, grammar));
       log?.(`transcript-grammar: ${grammarSelect.value} on ${source} — ${Object.keys(parsed.metadata).length} header field(s), ${parsed.speakers.length} speaker(s), ${parsed.turns.filter((t) => !t.malformed).length} turn(s), ${parsed.unmatched.length + parsed.turns.filter((t) => t.malformed).length} line(s) not matched.`, parsed.unmatched.length || parsed.turns.some((t) => t.malformed) ? "warn" : "ok");
     } catch (e) {
       output.replaceChildren(element("p", { className: "tg-error", text: e.message }));
@@ -1497,7 +1573,7 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
   });
 }
 
-function renderParse(parsed) {
+function renderParse(parsed, grammar) {
   const nodes = [];
   const malformed = parsed.turns.filter((t) => t.malformed);
   const problems = [...parsed.unmatched, ...malformed.map((t) => ({ ...t, region: "main", malformed: true }))].sort((a, b) => a.line - b.line);
@@ -1511,8 +1587,9 @@ function renderParse(parsed) {
   for (const [k, v] of Object.entries(parsed.metadata)) meta.body.append(element("tr", {}, [element("td", { text: k }), element("td", { text: truncate(v, 120) })]));
   const speakers = dataTable(["Line", ...SPEAKER_FIELDS.map((f) => f.label)]);
   for (const s of parsed.speakers) speakers.body.append(element("tr", {}, ["line", ...SPEAKER_FIELDS.map((f) => f.key)].map((k) => element("td", { text: String(s[k] ?? "") }))));
-  const turns = dataTable(["Line", "Section", ...TURN_FIELDS.map((f) => f.label)]);
-  for (const t of parsed.turns.slice(0, RENDER_CAP)) turns.body.append(element("tr", {}, ["line", "section", ...TURN_FIELDS.map((f) => f.key)].map((k) => element("td", { text: truncate(String(t[k] ?? ""), 80) }))));
+  const turnFields = turnFieldDefs(grammar?.turnRow?.customFields);
+  const turns = dataTable(["Line", "Section", ...turnFields.map((f) => f.label)]);
+  for (const t of parsed.turns.slice(0, RENDER_CAP)) turns.body.append(element("tr", {}, ["line", "section", ...turnFields.map((f) => f.key)].map((k) => element("td", { text: truncate(String(t[k] ?? ""), 80) }))));
   nodes.push(
     element("h3", { className: "tg-section-title", text: "Header metadata" }), meta.node,
     element("h3", { className: "tg-section-title", text: "Speakers" }), speakers.node,

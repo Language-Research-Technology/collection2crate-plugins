@@ -43,6 +43,36 @@ export const TURN_FIELDS = [
   { key: "text", label: "Text", kind: "rest" },
 ];
 
+// Fields a person names for themselves ("Prosody", "Overlap") and marks on
+// main rows like the built-in ones. Each is `{ key, label }`: the label is
+// what the editor and the CSV call it, the key names its group in the
+// pattern, so it has to be a regex group name and not collide with a
+// built-in field.
+const CUSTOM_KEY = /^c_[A-Za-z0-9_]+$/;
+
+/** The key for a new custom field labelled `label`, unique among `taken`. */
+export function customFieldKey(label, taken = []) {
+  const base = `c_${String(label).normalize("NFKD").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase() || "field"}`;
+  const used = new Set(taken);
+  let key = base;
+  for (let n = 2; used.has(key); n++) key = `${base}_${n}`;
+  return key;
+}
+
+/** What is wrong with a label for a new custom field, or null. */
+export function customLabelError(label, existing = []) {
+  const trimmed = String(label || "").trim();
+  if (!trimmed) return "give the label a name";
+  const taken = [...TURN_FIELDS.map((f) => f.label), "Ignore", ...existing.map((f) => f.label)];
+  if (taken.some((l) => l.toLowerCase() === trimmed.toLowerCase())) return `there is already a "${trimmed}"`;
+  return null;
+}
+
+/** The turn row's fields: the built-in ones, then the custom ones. */
+export function turnFieldDefs(customFields = []) {
+  return [...TURN_FIELDS, ...(customFields || []).map(({ key, label }) => ({ key, label, kind: "text", custom: true }))];
+}
+
 // Same bound as ca-data-prep's CODE: short, no whitespace, no colon — the
 // length limit is what stops an ordinary word from passing as a code.
 const VALUE_PATTERNS = {
@@ -693,7 +723,7 @@ export function looksFixedWidth(lines) {
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false, fixedColumns = null, joinRepeats = false }) {
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false, fixedColumns = null, joinRepeats = false, customFields = [] }) {
   const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers, layout);
   // The cleanup step's rules, when there is one, replace the ignore patterns
   // derived from lines marked Ignore (it starts from those, and may edit them).
@@ -702,8 +732,11 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
   // Fixed-width rows leave out every column that isn't a field already.
   const dropColumns = fixedWidth ? [] : uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
   const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
-  const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow, fixedWidth, columns: fixedColumns });
+  const turnRow = buildRowPattern(turnSamples, turnFieldDefs(customFields), { optional: optional.turnRow, fixedWidth, columns: fixedColumns });
   if (turnRow && joinRepeats) turnRow.joinRepeats = true;
+  // Only the custom fields some sample marks are part of the row.
+  const marked = (customFields || []).filter((f) => turnRow?.fields.some((field) => field.key === f.key));
+  if (turnRow && marked.length) turnRow.customFields = marked.map(({ key, label }) => ({ key, label }));
   return {
     version: GRAMMAR_VERSION,
     name: name || "default",
@@ -741,6 +774,12 @@ export function validateGrammar(grammar) {
   tryCompile("regions.main.sectionPattern", grammar.regions?.main?.sectionPattern);
   (grammar.ignore || []).forEach((p, i) => tryCompile(`ignore[${i}]`, p));
   (grammar.strip || []).forEach((s, i) => tryCompile(`strip[${i}]`, s?.pattern, s?.flags));
+  const custom = grammar.turnRow?.customFields;
+  if (custom != null && !Array.isArray(custom)) problems.push("turnRow.customFields: not a list");
+  else (custom || []).forEach((f, i) => {
+    if (!f || !CUSTOM_KEY.test(f.key || "")) problems.push(`turnRow.customFields[${i}]: key must look like c_name`);
+    if (!String(f?.label || "").trim()) problems.push(`turnRow.customFields[${i}]: no label`);
+  });
   if (grammar.dropColumns != null && !Array.isArray(grammar.dropColumns)) problems.push("dropColumns: not a list");
   else (grammar.dropColumns || []).forEach((rule, i) => {
     const problem = columnRuleError(rule);
@@ -1358,7 +1397,9 @@ export function grammarFingerprint(grammar) {
   const columns = grammar?.dropColumns?.length ? [grammar.dropColumns] : [];
   // Likewise joining repeated rows, only when a grammar does it.
   const joins = turnRow?.joinRepeats ? ["joinRepeats"] : [];
-  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow), ...columns, ...joins]);
+  // And custom fields: their labels head CSV columns.
+  const custom = turnRow?.customFields?.length ? [turnRow.customFields] : [];
+  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow), ...columns, ...joins, ...custom]);
   // FNV-1a, 32-bit. Collisions only matter as a missed "grammar changed"
   // warning, and a person saving grammars is not an adversary.
   let hash = 0x811c9dc5;

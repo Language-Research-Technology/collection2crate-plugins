@@ -441,6 +441,9 @@ export function declaredCodeSet(speakerMap) {
   return codes;
 }
 
+// "#AA" and "Year of birth" → "#AA-year-of-birth".
+const propertyValueId = (entityId, label) => `${entityId}-${String(label).trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "property"}`;
+
 export function buildSpeakerPersonEntities(speakerMap) {
   const entities = [];
 
@@ -456,6 +459,16 @@ export function buildSpeakerPersonEntities(speakerMap) {
     if (details.affiliation) entity.affiliation = details.affiliation;
     if (details.optionalCode) entity.identifier = details.optionalCode;
     entities.push(entity);
+
+    // Fields a transcript grammar's own labels read from the declaration
+    // ("Role", "Age"): name/value pairs, each its own PropertyValue entity.
+    const extra = Object.entries(details.extra || {}).filter(([, value]) => String(value ?? "").trim());
+    if (extra.length) {
+      entity.additionalProperty = extra.map(([label]) => ({ "@id": propertyValueId(entityId, label) }));
+      for (const [label, value] of extra) {
+        entities.push({ "@id": propertyValueId(entityId, label), "@type": "PropertyValue", name: label, value: String(value).trim() });
+      }
+    }
   }
 
   return entities;
@@ -709,13 +722,19 @@ export function stripTimecodes(text, removed = []) {
   return cleaned;
 }
 
-export function toCsv(rows) {
-  const output = ["speakerID,text,section"];
+/**
+ * The transcript CSV. `extraColumns` are the labels of a grammar's own
+ * fields, each a column after the three every transcript has, filled from
+ * `row.extra`.
+ */
+export function toCsv(rows, extraColumns = []) {
+  const output = [["speakerID", "text", "section", ...extraColumns.map(escapeCsv)].join(",")];
   for (const row of rows) {
     const speakerID = escapeCsv(row.speakerID || "");
     const text = escapeCsv(row.text || "");
     const section = escapeCsv(row.section || "MAIN");
-    output.push(`${speakerID},${text},${section}`);
+    const extra = extraColumns.map((label) => `,${escapeCsv(row.extra?.[label] ?? "")}`).join("");
+    output.push(`${speakerID},${text},${section}${extra}`);
   }
   return output.join("\n") + "\n";
 }
@@ -969,6 +988,7 @@ async function processTranscriptTextWithGrammar(text, config) {
     speakerID: cleanCharacterValues(row.speakerID),
     text: cleanCharacterValues(row.text),
     section: cleanCharacterValues(row.section || "MAIN"),
+    ...(row.extra ? { extra: Object.fromEntries(Object.entries(row.extra).map(([k, v]) => [k, cleanCharacterValues(v)])) } : {}),
   }));
 
   const { nonConforming, report } = result;
@@ -1000,6 +1020,7 @@ async function processTranscriptTextWithGrammar(text, config) {
 
   return {
     rows,
+    extraColumns: result.extraColumns || [],
     speakerMap: result.speakerMap,
     metadata: result.metadata,
     warnings: result.warnings,

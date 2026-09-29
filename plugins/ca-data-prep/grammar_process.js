@@ -14,7 +14,7 @@
 // into the turn above is recorded against its own line, and a turn whose
 // speaker nobody declared is flagged — never dropped.
 
-import { documentLines, parseWithGrammar, grammarPath, describeColumnRule, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
+import { documentLines, parseWithGrammar, grammarPath, describeColumnRule, describeFixedColumn, SPEAKER_FIELDS, TURN_FIELDS } from "../../src/_transcript_grammar.js";
 
 // The three section names the built-in convention abbreviates in the CSV.
 // A grammar's other section names go into the CSV as written.
@@ -42,7 +42,11 @@ export function describeRow(spec, fieldDefs) {
   const fields = spec.fields?.length
     ? spec.fields
     : fieldDefs.filter((f) => new RegExp(`\\(\\?<${f.key}>`).test(spec.pattern)).map((f) => ({ ...f, optional: false }));
-  return fields.map((f) => (f.optional ? `[${f.label.toLowerCase()}]` : f.label.toLowerCase())).join(" · ");
+  const describe = (f) => {
+    const name = f.optional ? `[${f.label.toLowerCase()}]` : f.label.toLowerCase();
+    return spec.fixedWidth && Number.isInteger(f.from) ? `${name} (${describeFixedColumn(f)})` : name;
+  };
+  return fields.map(describe).join(" · ");
 }
 
 /**
@@ -59,6 +63,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   const speakerMap = new Map();
   const speakerDiagnostics = [];
   const byId = new Map();
+  // A grammar's own speaker fields, by label, for the Person entities.
+  const speakerCustom = grammar.speakerRow?.customFields || [];
   for (const speaker of parsed.speakers) {
     const key = speaker.code || String(speaker.id || "").replace(/^#/, "");
     const optionalCode = idWithHash(speaker.id);
@@ -85,6 +91,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
         optionalCode,
         resolvedSpeakerID: optionalCode || key,
         line: speaker.line,
+        ...(speakerCustom.length ? { extra: Object.fromEntries(speakerCustom.map((f) => [f.label, speaker[f.key] || ""])) } : {}),
       });
       if (optionalCode) byId.set(optionalCode, key);
     }
@@ -142,6 +149,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
   };
 
   const bodyDiagnostics = [];
+  const customFields = grammar.turnRow?.customFields || [];
   const rows = parsed.turns.map((turn) => {
     const issues = [];
     if (turn.malformed) issues.push({ field: "row", kind: "turn-row-malformed", detail: `turn number "${turn.turn}" — added to the CSV with no speaker` });
@@ -152,6 +160,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
       bodyDiagnostics.push({ line: turn.line, content: lines[turn.line - 1].trim(), section: turn.section || "(no section)", code: turn.speaker || null, issues });
     }
     const row = { speakerID: resolveSpeaker(turn.speaker), text: turn.text || "", section: sectionCode(turn.section) };
+    // A grammar's own fields ride along, by label, for the CSV's extra columns.
+    if (customFields.length) row.extra = Object.fromEntries(customFields.map((f) => [f.label, turn[f.key] || ""]));
     return row;
   });
 
@@ -204,6 +214,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
 
   return {
     rows,
+    extraColumns: customFields.map((f) => f.label),
     speakerMap,
     metadata: parsed.metadata,
     warnings,
@@ -215,7 +226,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     report: {
       grammarLine: `Parsed with the transcript grammar "${grammarName}" (${grammarPath(grammarName)}).`,
       cleanupLine: `Cleanup: ${(grammar.ignore || []).length} line-skip rule(s) (${parsed.ignored.length} line(s) skipped), ${(grammar.strip || []).length} removal rule(s): ${(grammar.strip || []).map((r) => r.pattern).join("  ") || "none"}` +
-        `, ${(grammar.dropColumns || []).length} dropped column(s) in main rows: ${(grammar.dropColumns || []).map(describeColumnRule).join("; ") || "none"}`,
+        `, ${(grammar.dropColumns || []).length} dropped column(s) in main rows: ${(grammar.dropColumns || []).map(describeColumnRule).join("; ") || "none"}` +
+        (grammar.turnRow?.joinRepeats ? `; ${parsed.joined.length} row(s) joined to the row above for repeating its turn number and speaker` : ""),
       speakerExpected: declaresSpeakers
         ? [
           `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,

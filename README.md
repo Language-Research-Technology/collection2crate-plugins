@@ -383,11 +383,41 @@ the transcript processing option:
   the speaker on every row, the speakers are whoever the turns name. The patterns are generated from that markup
   (`grammar.js`'s `buildGrammar`) and re-run over the whole sample as you go,
   so you see what they parse and what they miss before saving.
+  A format whose rows put every field at the same character positions (the
+  London-Lund Corpus, say) can choose to read main rows by **Fixed-width
+  columns** instead of by **Text pattern** — a choice at the top of the Main
+  tab, set to fixed-width by default when every main row is the same length. Fields are
+  then marked once, on a row as the document has it: each becomes a column
+  (the selection widened over the blanks either side, so a right-aligned
+  `10` also covers `100`), everything outside the marked columns is left
+  out, and punctuation beside a turn number or speaker inside its column (an
+  overlap `(`) is matched but not kept. A ruler over each sample row counts
+  the characters and shades the columns; the **Columns** list gives each
+  field's range (from 1, both ends included) in boxes that can be edited
+  directly, with **Use the marks** to go back to what the marks give; and
+  **Columns across rows** shows the columns shaded down a dozen rows of the
+  sample, the ones the columns don't read first, flagged ✕.
+  With either reading, **Join a row to the one above when it repeats its turn
+  number and speaker** reads a row split over several lines (a London-Lund
+  tone unit too long for its line) as one: the text of each repeat joins the
+  row above, as long as nothing but blank, skipped or wrapped lines comes
+  between. A new grammar starts with it on when the sample has such rows; the
+  editor says how many, and saves it as `turnRow.joinRepeats`.
+  Main rows can also carry fields of your own: **Your own labels** on the Main
+  tab adds one ("Prosody", "Overlap"), which gets its own mark button and
+  colour and is marked like the built-in fields, with either reading. A
+  label some sample marks is saved in `turnRow.customFields` (`{ key, label }`,
+  the key its group in the pattern), and ca-data-prep writes its values as an
+  extra CSV column after `speakerID,text,section`, headed by the label.
+  Speaker rows take labels of their own the same way ("Role", "Age"), saved in
+  `speakerRow.customFields`; ca-data-prep gives each speaker's Person an
+  `additionalProperty` for each non-empty one — a `PropertyValue` entity
+  (`#AA-role`) with the label as its `name` and the value as its `value`.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group
 regular expressions (`speakerRow`, `turnRow`, `headerField`), region start
-markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read) and dropped columns (`dropColumns`: `{ "tab": n }` for the n-th tab-separated field of a line with tabs, `{ "from": a, "to": b }` for characters a up to b of a line without; 0-based, applied to main rows only, before `strip`). Only the shape of the sample is
+markers, section names, line-skip patterns (`ignore`) and removal patterns (`strip`, applied to speaker and main lines before rows are read) and dropped columns (`dropColumns`: `{ "tab": n }` for the n-th tab-separated field of a line with tabs, `{ "from": a, "to": b }` for characters a up to b of a line without; 0-based, applied to main rows only, before `strip`). A fixed-width `turnRow` also has `fixedWidth: true` and its `columns` (`{ key, from, to }`, 0-based, `to` exclusive or null for "to the end of the line"); it is matched against the line as the document has it, `strip` applies to each field's value instead, and it saves no `dropColumns`. Only the shape of the sample is
 kept — delimiters, brackets, which fields are optional — never its text,
 since the rows marked up are real speaker declarations. `parseWithGrammar(text,
 grammar)` is pure; it and the folder helpers live in

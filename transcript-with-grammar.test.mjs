@@ -6,7 +6,7 @@
 //   node transcript-with-grammar.test.mjs
 import assert from "node:assert/strict";
 import { buildGrammar, documentLines, grammarFingerprint, grammarPath, listSavedGrammars } from "./src/_transcript_grammar.js";
-import { processTranscriptText, buildSpeakerPersonEntities } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, buildSpeakerPersonEntities, toCsv } from "./plugins/ca-data-prep/process.js";
 import { resolveTranscriptGrammar, warnIfGrammarChanged } from "./plugins/ca-data-prep/index.js";
 import { generateChatText } from "./plugins/chat-export/index.js";
 
@@ -336,6 +336,45 @@ await check("Build warns when the grammar changed after Process — and not when
   l = logger();
   assert.equal(await warnIfGrammarChanged({ ...ctx(l.log), options: { transcriptGrammar: "" } }, readText), true);
   assert.match(l.entries[0].message, /parsed with the grammar "own", but the built-in convention is chosen now/);
+});
+
+await check("a grammar's own labels become extra CSV columns, headed by the label", async () => {
+  const lines = ["1\tAA:\tfirst turn\t[low]", "2\tBB:\tsecond, turn\t[high]"];
+  const grammar = buildGrammar({
+    name: "labels", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], layout: { header: false, speakers: false, markers: false },
+    customFields: [{ key: "c_pitch", label: "Pitch level" }],
+    turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first turn"], ["c_pitch", "low"]])],
+  });
+  const result = await processTranscriptText(lines.join("\n"), { grammar, grammarName: "labels" });
+  assert.deepEqual(result.extraColumns, ["Pitch level"]);
+  assert.equal(toCsv(result.rows, result.extraColumns),
+    'speakerID,text,section,Pitch level\n#AA,first turn,MAIN,low\n#BB,"second, turn",MAIN,high\n');
+  // Without labels, the CSV is the three columns it always was.
+  assert.equal(toCsv(result.rows).split("\n")[0], "speakerID,text,section");
+});
+
+await check("a grammar's own speaker labels become PropertyValues of each speaker's Person", async () => {
+  const lines = ["Speakers:", "AA: Alex [teacher]", "BB: Sam [student]", "", "BODY", "1\tAA:\thello", "2\tBB:\thi"];
+  const grammar = buildGrammar({
+    name: "roles", lines,
+    roles: ["speakers", "speakers", "speakers", "speakers", "main", "main", "main"],
+    markers: [true, false, false, false, true, false, false],
+    layout: { header: false, speakers: true, markers: true },
+    speakerCustomFields: [{ key: "c_role", label: "Role" }],
+    speakerSamples: [markup(lines[1], [["code", "AA"], ["name", "Alex"], ["c_role", "teacher"]])],
+    turnSamples: [markup(lines[5], [["turn", "1"], ["speaker", "AA"], ["text", "hello"]])],
+  });
+  assert.deepEqual(grammar.speakerRow.customFields, [{ key: "c_role", label: "Role" }]);
+  const result = await processTranscriptText(lines.join("\n"), { grammar, grammarName: "roles" });
+  assert.equal(result.nonConforming.total, 0);
+  const entities = buildSpeakerPersonEntities(result.speakerMap);
+  const alex = entities.find((e) => e["@id"] === "#AA");
+  assert.deepEqual(alex.additionalProperty, [{ "@id": "#AA-role" }]);
+  assert.deepEqual(entities.find((e) => e["@id"] === "#AA-role"), { "@id": "#AA-role", "@type": "PropertyValue", name: "Role", value: "teacher" });
+  assert.equal(entities.find((e) => e["@id"] === "#BB-role").value, "student");
+  // The CSV is untouched: speaker labels are about speakers, not rows.
+  assert.equal(toCsv(result.rows, result.extraColumns).split("\n")[0], "speakerID,text,section");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

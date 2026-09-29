@@ -13,7 +13,8 @@ import {
   escapeRegex, parseWithGrammar, spansFromMatch, suggestRegions, suggestSamples,
   textToLines, validateGrammar, applyCleanup, exactPattern, shapePattern, patternError,
   applyLayout, grammarLayout, dropColumns, columnRulesFor, columnRuleError, droppedColumnRanges,
-  describeColumnRule, grammarFingerprint,
+  describeColumnRule, grammarFingerprint, buildFixedRowPattern, looksFixedWidth, describeFixedColumn, fixedColumnError,
+  customFieldKey, customLabelError, turnFieldDefs, speakerFieldDefs,
 } from "./src/_transcript_grammar.js";
 
 let failures = 0;
@@ -575,6 +576,247 @@ check("a speaker pattern is not saved when the format has no speaker info", () =
   });
   assert.equal(grammar.speakerRow, null);
   assert.equal(grammar.regions.speakers.start, null);
+});
+
+// ---------------------------------------------------------------------------
+// Fixed-width rows
+// ---------------------------------------------------------------------------
+
+// Laid out like a London-Lund Corpus line: text id, a right-aligned turn
+// number, counters, an optional "(" before the speaker, a code, the text, and
+// a closing "/" in the last column. Every line the same width.
+const FIXED = (turn, overlap, speaker, text) =>
+  ` 1 1   1 ${String(turn).padStart(4)} 1 1${overlap ? "(" : " "}${speaker}    11  ${text.padEnd(50)} / `;
+const FIXED_LINES = [
+  FIXED(10, false, "B", "first words here#"),
+  FIXED(20, false, "A", "a reply#"),
+  FIXED(100, false, "A", "a longer turn number#"),
+  FIXED(110, true, "B", "overlapping talk#"),
+  FIXED(120, false, " ", "nobody speaking here"),
+];
+const fixedSample = (index = 0) => {
+  const line = FIXED_LINES[index];
+  return markup(line, [["turn", String([10, 20, 100, 110, 120][index])], ["speaker", line[18]], ["text", line.slice(26, 76).trim()]]);
+};
+const FIXED_ROLES = FIXED_LINES.map(() => "main");
+const FIXED_MARKERS = FIXED_LINES.map(() => false);
+const FIXED_LAYOUT = { header: false, speakers: false, markers: false };
+
+check("fixed width: a format of same-width rows is recognised, and ordinary rows are not", () => {
+  assert.equal(looksFixedWidth(FIXED_LINES), true);
+  assert.equal(looksFixedWidth(LINES.slice(8, 11)), false);
+});
+
+check("fixed width: marked fields widen over the blanks either side into columns", () => {
+  const spec = buildFixedRowPattern([fixedSample()], TURN_FIELDS);
+  assert.equal(spec.fixedWidth, true);
+  assert.deepEqual(spec.columns.map((c) => c.key), ["turn", "speaker", "text"]);
+  const turn = spec.columns[0];
+  // The "10" was marked; the column also covers a right-aligned "100".
+  assert.ok(turn.from <= 10 && turn.to >= 13, JSON.stringify(turn));
+  // Text stops short of the closing "/".
+  const text = spec.columns[2];
+  assert.equal(FIXED_LINES[0].slice(text.to).trim(), "/");
+  assert.equal(describeFixedColumn({ from: 0, to: 4 }), "characters 1–4");
+  assert.equal(describeFixedColumn({ from: 4, to: null }), "characters 5 to the end");
+});
+
+check("fixed width: every row is read by column, punctuation beside a code is not kept", () => {
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [fixedSample()], optional: { turnRow: ["speaker"] },
+    layout: FIXED_LAYOUT, fixedWidth: true,
+  });
+  assert.deepEqual(validateGrammar(grammar), []);
+  const parsed = parseWithGrammar(FIXED_LINES, grammar);
+  assert.deepEqual(parsed.unmatched, []);
+  assert.deepEqual(parsed.turns.map((t) => [t.turn, t.speaker, t.text]), [
+    ["10", "B", "first words here#"],
+    ["20", "A", "a reply#"],
+    ["100", "A", "a longer turn number#"],
+    ["110", "B", "overlapping talk#"],
+    ["120", "", "nobody speaking here"],
+  ]);
+});
+
+check("fixed width: a saved grammar maps back onto its columns for editing", () => {
+  const spec = buildFixedRowPattern([fixedSample()], TURN_FIELDS);
+  const spans = spansFromMatch(FIXED_LINES[2], spec);
+  assert.deepEqual(spans.map((s) => FIXED_LINES[2].slice(s.start, s.end)), ["100", "A", "a longer turn number#"]);
+});
+
+check("fixed width: removals apply to field values, not the line, so columns stay put", () => {
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [fixedSample()], optional: { turnRow: ["speaker"] },
+    layout: FIXED_LAYOUT, fixedWidth: true,
+    cleanup: { drop: [], strip: ["#", " 1 1"], columns: [{ from: 0, to: 4 }] },
+  });
+  // Unmarked columns are left out already; a dropped column would move them.
+  assert.deepEqual(grammar.dropColumns, []);
+  const parsed = parseWithGrammar(FIXED_LINES, grammar);
+  assert.deepEqual(parsed.turns.slice(0, 2).map((t) => [t.turn, t.speaker, t.text]), [["10", "B", "first words here"], ["20", "A", "a reply"]]);
+});
+
+check("fixed width: samples that put a field in different places are refused", () => {
+  const moved = { line: FIXED_LINES[1], spans: [{ field: "turn", start: 0, end: 2 }, { field: "text", start: 26, end: 34 }] };
+  assert.throws(() => buildFixedRowPattern([fixedSample(), moved], TURN_FIELDS), /different columns/);
+});
+
+check("fixed width: a row with a turn number that doesn't fit is kept, read by its columns", () => {
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [fixedSample()], layout: FIXED_LAYOUT, fixedWidth: true,
+  });
+  const parsed = parseWithGrammar(FIXED_LINES, grammar);
+  const blank = parsed.turns.find((t) => t.turn === "120");
+  assert.equal(blank.malformed, true);
+  assert.equal(blank.text, "nobody speaking here");
+});
+
+check("fixed width: a column set by hand replaces the one the marks give", () => {
+  const auto = buildFixedRowPattern([fixedSample()], TURN_FIELDS);
+  const autoText = auto.columns.find((c) => c.key === "text");
+  // Text cut to its first five characters.
+  const spec = buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { text: { from: 27, to: 32 } } });
+  assert.deepEqual(spec.columns.find((c) => c.key === "text"), { key: "text", from: 27, to: 32 });
+  assert.deepEqual(spec.edited, ["text"]);
+  assert.deepEqual(spec.autoColumns.find((c) => c.key === "text"), autoText);
+  const m = FIXED_LINES[0].match(new RegExp(spec.pattern, "u"));
+  assert.equal(m.groups.text, "first");
+});
+
+check("fixed width: a column set by hand that overlaps another, or runs backwards, is refused", () => {
+  assert.throws(() => buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { turn: { from: 8, to: 20 } } }), /share columns/);
+  assert.equal(fixedColumnError({ from: 5, to: 5 }), "the last character must come at or after the first");
+  assert.equal(fixedColumnError({ from: 5, to: null }), null);
+  assert.throws(() => buildFixedRowPattern([fixedSample()], TURN_FIELDS, { columns: { turn: { from: -1, to: 4 } } }), /Turn number/);
+});
+
+check("fixed width: hand-set columns are saved, and the editor-only details are not", () => {
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [fixedSample()], layout: FIXED_LAYOUT, fixedWidth: true,
+    fixedColumns: { text: { from: 26, to: null } },
+  });
+  assert.deepEqual(grammar.turnRow.columns.find((c) => c.key === "text"), { key: "text", from: 26, to: null });
+  assert.equal("autoColumns" in grammar.turnRow, false);
+  assert.equal("edited" in grammar.turnRow, false);
+  // Open-ended text now takes the closing "/" too.
+  assert.match(parseWithGrammar(FIXED_LINES, grammar).turns[1].text, /^a reply#\s+\/$/);
+});
+
+// ---------------------------------------------------------------------------
+// Joining rows split over lines
+// ---------------------------------------------------------------------------
+
+const SPLIT_LINES = [
+  FIXED(10, false, "B", "the first half of a"),
+  FIXED(10, false, "B", "long unit#"),
+  FIXED(20, false, "A", "a reply#"),
+  FIXED(10, false, "B", "not straight after#"),
+  FIXED(30, false, "B", "one speaker"),
+  FIXED(30, false, "A", "then another#"),
+  FIXED(40, false, "B", "three"),
+  FIXED(40, true, "B", "lines"),
+  FIXED(40, false, "B", "long#"),
+];
+const splitGrammar = (joinRepeats) => buildGrammar({
+  name: "split", lines: SPLIT_LINES, roles: SPLIT_LINES.map(() => "main"), markers: SPLIT_LINES.map(() => false),
+  speakerSamples: [], turnSamples: [fixedSample()], layout: FIXED_LAYOUT, fixedWidth: true, joinRepeats,
+});
+
+check("joining: a row repeating the turn number and speaker of the row above joins it", () => {
+  const parsed = parseWithGrammar(SPLIT_LINES, splitGrammar(true));
+  assert.deepEqual(parsed.turns.map((t) => [t.line, t.turn, t.speaker, t.text]), [
+    [1, "10", "B", "the first half of a long unit#"],
+    [3, "20", "A", "a reply#"],
+    // Not straight after the first 10, so not joined to it.
+    [4, "10", "B", "not straight after#"],
+    // Same number, another speaker: two rows.
+    [5, "30", "B", "one speaker"],
+    [6, "30", "A", "then another#"],
+    // Punctuation beside the speaker doesn't make it another speaker.
+    [7, "40", "B", "three lines long#"],
+  ]);
+  assert.deepEqual(parsed.joined.map((j) => [j.line, j.into]), [[2, 1], [8, 7], [9, 7]]);
+  assert.equal(parsed.roles[1], "main:joined");
+});
+
+check("joining: off unless the grammar says so, and saved in its fingerprint", () => {
+  assert.equal(parseWithGrammar(SPLIT_LINES, splitGrammar(false)).turns.length, 9);
+  assert.equal(splitGrammar(false).turnRow.joinRepeats, undefined);
+  assert.equal(splitGrammar(true).turnRow.joinRepeats, true);
+  assert.notEqual(grammarFingerprint(splitGrammar(true)), grammarFingerprint(splitGrammar(false)));
+});
+
+check("joining: works the same for rows read by a text pattern", () => {
+  const lines = ["1\tAA:\tfirst part", "1\tAA:\tsecond part", "2\tBB:\treply"];
+  const grammar = buildGrammar({
+    name: "text", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first part"]])],
+    layout: FIXED_LAYOUT, joinRepeats: true,
+  });
+  assert.deepEqual(parseWithGrammar(lines, grammar).turns.map((t) => t.text), ["first part second part", "reply"]);
+});
+
+// ---------------------------------------------------------------------------
+// Custom labels
+// ---------------------------------------------------------------------------
+
+const PROSODY = { key: "c_prosody", label: "Prosody" };
+
+check("custom labels: keys are group names, unique, and labels can't repeat a field", () => {
+  assert.equal(customFieldKey("Prosodic code"), "c_prosodic_code");
+  assert.equal(customFieldKey("Prosody", ["c_prosody"]), "c_prosody_2");
+  assert.equal(customFieldKey("声調"), "c_field");
+  assert.equal(customLabelError("text"), 'there is already a "text"');
+  assert.equal(customLabelError("Prosody", [PROSODY]), 'there is already a "Prosody"');
+  assert.equal(customLabelError("  "), "give the label a name");
+  assert.equal(customLabelError("Overlap", [PROSODY]), null);
+  assert.deepEqual(turnFieldDefs([PROSODY]).map((f) => f.key), ["turn", "speaker", "text", "c_prosody"]);
+});
+
+check("custom labels: a marked label is read from its column in fixed-width rows", () => {
+  const sample = fixedSample();
+  sample.spans.push({ field: PROSODY.key, start: 23, end: 25 });
+  const grammar = buildGrammar({
+    name: "fixed", lines: FIXED_LINES, roles: FIXED_ROLES, markers: FIXED_MARKERS,
+    speakerSamples: [], turnSamples: [sample], optional: { turnRow: ["speaker"] },
+    layout: FIXED_LAYOUT, fixedWidth: true, customFields: [PROSODY, { key: "c_unused", label: "Unused" }],
+  });
+  assert.deepEqual(validateGrammar(grammar), []);
+  // Only the labels a sample marks are saved.
+  assert.deepEqual(grammar.turnRow.customFields, [PROSODY]);
+  const turns = parseWithGrammar(FIXED_LINES, grammar).turns;
+  assert.deepEqual(turns.map((t) => t.c_prosody), ["11", "11", "11", "11", "11"]);
+  assert.equal(turns[0].text, "first words here#");
+});
+
+check("custom labels: a marked label is read in text-pattern rows too", () => {
+  const lines = ["1\tAA:\tfirst part\t[low]", "2\tBB:\treply\t[high]"];
+  const grammar = buildGrammar({
+    name: "text", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], layout: FIXED_LAYOUT, customFields: [{ key: "c_pitch", label: "Pitch" }],
+    turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first part"], ["c_pitch", "low"]])],
+  });
+  const turns = parseWithGrammar(lines, grammar).turns;
+  assert.deepEqual(turns.map((t) => [t.text, t.c_pitch]), [["first part", "low"], ["reply", "high"]]);
+});
+
+check("custom labels: a saved grammar's labels are checked", () => {
+  const grammar = splitGrammar(false);
+  grammar.turnRow.customFields = [{ key: "bad key", label: "" }];
+  assert.equal(validateGrammar(grammar).length, 2);
+});
+
+check("custom labels: speaker rows take labels of their own, checked against speaker fields", () => {
+  assert.equal(customLabelError("Name", [], SPEAKER_FIELDS), 'there is already a "Name"');
+  assert.equal(customLabelError("Text", [], SPEAKER_FIELDS), null);
+  assert.deepEqual(speakerFieldDefs([{ key: "c_role", label: "Role" }]).map((f) => f.key), ["code", "name", "alternateName", "affiliation", "id", "c_role"]);
+  const grammar = splitGrammar(false);
+  grammar.speakerRow = { pattern: "^x$", customFields: [{ key: "nope", label: "Role" }] };
+  assert.match(validateGrammar(grammar).join(" "), /speakerRow\.customFields\[0\]/);
 });
 
 if (failures) {

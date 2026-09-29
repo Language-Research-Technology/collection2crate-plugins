@@ -9,7 +9,8 @@
 //                 and text to remove from rows, with a before/after preview
 //                 of the whole document.
 //   4. Rows     — select characters inside the cleaned sample rows and say
-//                 what they are:
+//                 what they are (or, for a fixed-width format, inside the rows
+//                 as the document has them, each field then being a column):
 //                 a speaker's code / name / alternate name / affiliation / id,
 //                 or a turn's number / speaker / text. The generated patterns
 //                 are re-run over the whole document on every change, so the
@@ -26,7 +27,8 @@ import {
   DEFAULT_GRAMMAR, IGNORE_FIELD, LAYOUT_PARTS, applyCleanup, applyLayout, grammarLayout, buildGrammar, buildRegions, exactPattern,
   columnRulesFor, describeColumnRule, droppedColumnRanges,
   ignoreLinePattern, literalLinePattern, patternError, shapePattern, buildRowPattern, checkRegionOrder,
-  parseWithGrammar, suggestRegions, suggestSamples, textToLines,
+  parseWithGrammar, suggestRegions, suggestSamples, textToLines, looksFixedWidth, describeFixedColumn, fixedColumnError,
+  turnFieldDefs, speakerFieldDefs, customFieldKey, customLabelError,
 } from "../../src/_transcript_grammar.js";
 
 const MODAL_CLASS = "tg-modal";
@@ -107,10 +109,52 @@ function ensureStyle() {
 .tg-toolbar input[type="text"] { flex: 1; width: auto; min-width: 14em; }
 .tg-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin-bottom: 6px; }
 .tg-rule .field-hint { margin: 0; white-space: nowrap; }
+.tg-method { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px 8px; margin: 0 0 10px;
+  display: flex; gap: 18px; flex-wrap: wrap; }
+.tg-method legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+.tg-method-option { display: flex; gap: 6px; align-items: flex-start; flex: 1 1 18em; cursor: pointer; }
+.tg-method-option > span { display: flex; flex-direction: column; gap: 2px; }
+.tg-method-option .field-hint { margin: 0; }
+.tg-strip-wrap { overflow-x: auto; background: var(--panel-2); border-radius: var(--radius-sm); padding: 4px 8px 6px; }
+.tg-strip-wrap .tg-strip { overflow: visible; padding: 0; background: transparent; border-radius: 0; }
+.tg-ruler { font-family: var(--mono); font-size: 14px; white-space: pre; line-height: 1.25; color: var(--muted); user-select: none; }
+.tg-ruler span[class^="tg-f-"] { color: var(--text); }
+.tg-colgrid { font-family: var(--mono); font-size: 14px; white-space: pre; line-height: 1.6; overflow-x: auto;
+  background: var(--panel-2); border-radius: var(--radius-sm); padding: 4px 8px; max-height: 40vh; overflow-y: auto; }
+.tg-colgrid .tg-ruler { position: sticky; top: 0; background: var(--panel-2); }
+.tg-colgrid .tg-gutter { color: var(--muted); user-select: none; }
+.tg-colgrid .tg-gutter.warn { color: var(--warn); }
+.tg-colrange { display: grid; grid-template-columns: 11em 5.5em 5.5em minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; margin: 6px 0 10px; }
+.tg-colrange input[type="number"] { width: 5em; }
+.tg-colrange .tg-colhead { color: var(--muted); font-size: 12px; }
+.tg-labels { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 10px; font-size: 13px; }
+.tg-labels input[type="text"] { width: 14em; }
+.tg-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 4px 1px 8px; }
+.tg-chip button { border: 0; background: transparent; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 4px; }
 .tg-optional { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 ${fieldRules}
 `;
   document.head.append(style);
+}
+
+// Colours for labels a person adds, in the order they are added.
+const CUSTOM_COLOURS = ["#9333ea", "#0d9488", "#ca8a04", "#e11d48", "#4f46e5", "#65a30d", "#c2410c", "#0284c7"];
+
+// The custom fields' colour rules, rewritten whenever the labels change —
+// main rows' and speaker rows' together, their keys being distinct.
+function ensureCustomStyle(state) {
+  const customFields = [...(state.customFields || []), ...(state.speakerCustomFields || [])];
+  let style = document.getElementById("transcript-grammar-custom-style");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "transcript-grammar-custom-style";
+    document.head.append(style);
+  }
+  style.textContent = (customFields || []).map(({ key }, i) => {
+    const colour = CUSTOM_COLOURS[i % CUSTOM_COLOURS.length];
+    return `.tg-f-${key} { background: color-mix(in srgb, ${colour} 24%, transparent); box-shadow: inset 0 -2px 0 ${colour}; }\n` +
+      `.tg-swatch-${key} { background: ${colour}; }`;
+  }).join("\n");
 }
 
 const truncate = (text, n = 90) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
@@ -241,6 +285,18 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     state.speakerSamples = null;
     state.turnSamples = null;
     state.optional = { speakerRow: [], turnRow: [] };
+    // A saved grammar says whether its rows are fixed-width; for a new one it
+    // is decided at the rows step, once the regions say which rows are main.
+    state.fixedWidth = base ? !!base.turnRow?.fixedWidth : null;
+    // Likewise joining repeated rows: saved, or decided at the rows step.
+    state.joinRepeats = base ? !!base.turnRow?.joinRepeats : null;
+    // And the labels of its own fields.
+    state.customFields = (base?.turnRow?.customFields || []).map(({ key, label }) => ({ key, label }));
+    state.speakerCustomFields = (base?.speakerRow?.customFields || []).map(({ key, label }) => ({ key, label }));
+    // Its columns come back exactly as saved, not re-derived from the marks.
+    state.fixedColumns = base?.turnRow?.fixedWidth
+      ? Object.fromEntries((base.turnRow.columns || []).map(({ key, from, to }) => [key, { from, to }]))
+      : {};
     // A saved grammar brings its cleanup rules with it.
     state.cleanup = {
       drop: [...(base?.ignore || [])],
@@ -663,6 +719,7 @@ async function cleanupStep(state, { openModal, error }) {
         element("div", { className: "tg-toolbar" }, customInput(cleanup.drop, false, "Skip-line pattern")),
 
         element("h3", { className: "tg-section-title", text: "Columns to drop" }),
+        ...(state.fixedWidth ? [element("p", { className: "field-hint", attrs: { style: "color: var(--warn)" }, text: "Main rows are being read as fixed-width columns (see the rows step), which leaves out every column you don't mark as a field — so there is no need to drop any here, and columns dropped here are not saved while that reading is on. Text removals still apply, to each field's value." })] : []),
         element("p", { className: "field-hint", text: "Data in main rows that nobody wants kept — counters, codes, annotation tiers. In a line with tabs a column is a tab-separated field; in a line without, it is the stretch of characters the selection covers, out to the neighbouring columns. Dropped columns are shown struck through." }),
         columnList,
         element("div", { className: "tg-toolbar" }, [columnPicker]),
@@ -708,7 +765,8 @@ async function cleanupStep(state, { openModal, error }) {
   // changed (or skipped) no longer shows what the pattern will read.
   state.clean = applyCleanup(lines, roles, markers, cleanup);
   for (const key of ["speakerSamples", "turnSamples"]) {
-    if (state[key]) state[key] = state[key].filter((sample) => state.clean.lines[sample.index] === sample.line);
+    const source = sampleLines(state, key === "speakerSamples" ? "speakers" : "main");
+    if (state[key]) state[key] = state[key].filter((sample) => source[sample.index] === sample.line);
   }
   return outcome;
 }
@@ -806,6 +864,55 @@ function selectionTracker(strip, getText) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Fixed-width: a character ruler, and the columns shaded across rows
+// ---------------------------------------------------------------------------
+
+// Two rows of digits counting characters from 1, the way the column ranges
+// are written: tens above (at 10, 20, …), units below. `gutter` is blank space
+// to leave before them, when the lines they rule are prefixed by one.
+function rulerRows(length, gutter = 0) {
+  let tens = "";
+  let units = "";
+  for (let i = 1; i <= length; i++) {
+    tens += i % 10 === 0 ? String(Math.floor(i / 10) % 10) : " ";
+    units += String(i % 10);
+  }
+  return [" ".repeat(gutter) + tens, " ".repeat(gutter) + units];
+}
+
+// The field whose column covers character `i` (0-based), if any.
+const columnAt = (columns, i) => (columns || []).find((c) => i >= c.from && (c.to == null || i < c.to));
+
+// Text split into spans by column, shaded in each field's colour.
+function columnSpans(text, columns) {
+  const out = [];
+  let run = "";
+  let runKey;
+  const flush = () => {
+    if (!run) return;
+    const node = element("span", { text: run });
+    if (runKey) { node.className = `tg-f-${runKey}`; node.title = runKey; }
+    out.push(node);
+    run = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const key = columnAt(columns, i)?.key;
+    if (key !== runKey) { flush(); runKey = key; }
+    run += text[i];
+  }
+  flush();
+  return out;
+}
+
+function renderRuler(node, length, columns, gutter = 0) {
+  const [tens, units] = rulerRows(length, gutter);
+  node.replaceChildren(
+    element("div", { text: tens }),
+    element("div", {}, [document.createTextNode(" ".repeat(gutter)), ...columnSpans(units.slice(gutter), columns)]),
+  );
+}
+
 // A button that acts on a text selection must not take the selection away.
 const keepsSelection = (node) => {
   node.addEventListener("mousedown", (e) => e.preventDefault());
@@ -813,7 +920,7 @@ const keepsSelection = (node) => {
 };
 
 // One marked-up row: the line as selectable text, and a button per field.
-function sampleCard(sample, fields, { onChange, onRemove }) {
+function sampleCard(sample, fields, { onChange, onRemove, onMark = () => {}, ruler = false }) {
   const labelOf = (key) => [...fields, IGNORE_BUTTON].find((f) => f.key === key).label;
   const strip = element("div", { className: "tg-strip", attrs: { tabindex: "0", "aria-label": `Line ${sample.index + 1}` } });
   const hint = element("span", { className: "field-hint", text: `Line ${sample.index + 1} — select characters, then say what they are.` });
@@ -829,6 +936,7 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
     // A row has one of each field but may have several ignored runs.
     sample.spans = sample.spans.filter((s) => (field === IGNORE_FIELD || s.field !== field) && (s.end <= range.start || s.start >= range.end));
     sample.spans.push({ field, ...range });
+    onMark(field);
     hint.textContent = `Line ${sample.index + 1} — marked "${sample.line.slice(range.start, range.end)}" as ${labelOf(field).toLowerCase()}.`;
     renderStrip(strip, sample);
     onChange();
@@ -843,21 +951,155 @@ function sampleCard(sample, fields, { onChange, onRemove }) {
   });
 
   renderStrip(strip, sample);
-  return element("div", { className: "tg-sample" }, [
+  // With a ruler, the ruler and the line scroll together; the ruler shades
+  // the columns the fields are read from.
+  const rulerNode = ruler ? element("div", { className: "tg-ruler", attrs: { "aria-hidden": "true" } }) : null;
+  if (rulerNode) renderRuler(rulerNode, sample.line.length, []);
+  const card = element("div", { className: "tg-sample" }, [
     element("div", { className: "tg-sample-head" }, [
       hint,
       button("Clear marks", { onClick: () => { sample.spans = []; renderStrip(strip, sample); onChange(); } }),
       button("Remove row", { onClick: onRemove }),
     ]),
-    strip,
+    rulerNode ? element("div", { className: "tg-strip-wrap" }, [rulerNode, strip]) : strip,
     element("div", { className: "tg-fields" }, fieldButtons),
+  ]);
+  card.showColumns = (columns) => { if (rulerNode) renderRuler(rulerNode, sample.line.length, columns); };
+  return card;
+}
+
+const READING_METHODS = [
+  {
+    fixedWidth: false,
+    label: "Text pattern",
+    hint: "Fields are found by the delimiters and brackets between them, wherever they fall in the line.",
+  },
+  {
+    fixedWidth: true,
+    label: "Fixed-width columns",
+    hint: "Every field is at the same character positions in every row; each field is read from its column.",
+  },
+];
+
+// A choice between the two ways of reading main rows, as a pair of radios.
+function readingMethodChoice(fixedWidth, onChange) {
+  const name = `tg-method-${Math.random().toString(36).slice(2)}`;
+  const options = READING_METHODS.map((method) => {
+    const input = element("input", { attrs: { type: "radio", name, value: String(method.fixedWidth) } });
+    input.checked = method.fixedWidth === fixedWidth;
+    input.addEventListener("change", () => { if (input.checked) onChange(method.fixedWidth); });
+    return element("label", { className: "tg-method-option" }, [
+      input,
+      element("span", {}, [
+        element("strong", { text: method.label }),
+        element("span", { className: "field-hint", text: method.hint }),
+      ]),
+    ]);
+  });
+  return element("fieldset", { className: "tg-method" }, [
+    element("legend", { text: "Read main rows by" }),
+    ...options,
   ]);
 }
 
 // The lines rows are marked up on: cleaned, once the cleanup step has run.
 const rowLines = (state) => state.clean?.lines || state.lines;
 
-function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onChange }) {
+// Fixed-width rows are the exception: they are marked up on the lines as the
+// document has them, since a removal would move the columns.
+const sampleLines = (state, region) => (region === "main" && state.fixedWidth ? state.lines : rowLines(state));
+
+// Each fixed-width column's range, editable. Counting from 1 with both ends
+// included, as the ruler counts — so "9 to 14" is 0-based from 8, to 14.
+// A blank "to" runs to the end of the line.
+function fixedColumnEditor(spec, { onSet }) {
+  const grid = element("div", { className: "tg-colrange" }, [
+    element("span", { className: "tg-colhead", text: "Field" }),
+    element("span", { className: "tg-colhead", text: "From" }),
+    element("span", { className: "tg-colhead", text: "To" }),
+    element("span", { className: "tg-colhead", text: "" }),
+    element("span", { className: "tg-colhead", text: "" }),
+  ]);
+  const problem = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
+  for (const f of spec.fields) {
+    const from = element("input", { attrs: { type: "number", min: 1, value: f.from + 1, "aria-label": `${f.label} from character` } });
+    const to = element("input", { attrs: { type: "number", min: 1, value: f.to ?? "", placeholder: "end", "aria-label": `${f.label} to character` } });
+    const commit = () => {
+      const range = { from: Number(from.value) - 1, to: to.value.trim() === "" ? null : Number(to.value) };
+      const error = from.value.trim() === "" ? "the first character is needed" : fixedColumnError(range);
+      const refused = error ? `${f.label}: ${error}.` : onSet(f.key, range);
+      // A refused range stays in the boxes, with the reason, to be corrected.
+      if (refused) problem.textContent = refused;
+    };
+    from.addEventListener("change", commit);
+    to.addEventListener("change", commit);
+    const auto = spec.autoColumns.find((c) => c.key === f.key);
+    const edited = spec.edited.includes(f.key);
+    const status = edited
+      ? `Set here${auto ? ` — the marks give ${describeFixedColumn(auto).replace("characters ", "")}` : ""}`
+      : "From the marks";
+    grid.append(
+      element("span", {}, [element("span", { className: `tg-swatch tg-swatch-${f.key}` }), document.createTextNode(f.label)]),
+      from,
+      to,
+      element("span", { className: "field-hint", text: status }),
+      edited ? button("Use the marks", { onClick: () => onSet(f.key, null), title: "Go back to the column the marked samples give" }) : element("span"),
+    );
+  }
+  return element("div", {}, [
+    element("p", { className: "field-hint", text: "Characters counted from 1, both ends included, as on the ruler. Leave To blank for a column that runs to the end of the line. Marking a field again puts its column back to what the marks give." }),
+    grid,
+    problem,
+  ]);
+}
+
+const PREVIEW_ROWS = 12;
+const PREVIEW_MISSES = 6;
+
+// Several rows with the columns shaded down them, under a ruler: where a
+// column cuts into a value, it shows. Rows the pattern doesn't match come
+// first (flagged), then the rest in order, up to PREVIEW_ROWS.
+function columnPreview(rows, spec) {
+  const re = new RegExp(spec.pattern, spec.flags || "u");
+  const misses = rows.filter(({ line }) => !re.test(line));
+  const picked = [...misses.slice(0, PREVIEW_MISSES)];
+  for (const row of rows) {
+    if (picked.length >= PREVIEW_ROWS) break;
+    if (!picked.includes(row)) picked.push(row);
+  }
+  picked.sort((a, b) => a.index - b.index);
+  if (!picked.length) return element("p", { className: "empty-note", text: "No main rows to show." });
+  const numberWidth = String(Math.max(...picked.map((r) => r.index + 1))).length;
+  const gutter = numberWidth + 3;
+  const ruler = element("div", { className: "tg-ruler", attrs: { "aria-hidden": "true" } });
+  renderRuler(ruler, Math.max(...picked.map((r) => r.line.length)), spec.columns, gutter);
+  const missed = new Set(misses);
+  const grid = element("div", { className: "tg-colgrid" }, [
+    ruler,
+    ...picked.map((row) => element("div", {}, [
+      element("span", {
+        className: missed.has(row) ? "tg-gutter warn" : "tg-gutter",
+        text: `${String(row.index + 1).padStart(numberWidth)} ${missed.has(row) ? "✕" : " "} `,
+        attrs: missed.has(row) ? { title: "The columns don't read this row" } : {},
+      }),
+      ...columnSpans(row.line, spec.columns),
+    ])),
+  ]);
+  const note = misses.length
+    ? `${misses.length} of ${rows.length} row(s) don't fit the columns (✕) — ${misses.length > PREVIEW_MISSES ? `the first ${PREVIEW_MISSES} are` : "they are"} shown with the others.`
+    : `Every one of the ${rows.length} row(s) fits the columns; ${picked.length < rows.length ? `the first ${picked.length} are shown` : "all are shown"}.`;
+  return element("div", {}, [element("p", { className: "field-hint", text: note }), grid]);
+}
+
+function rowPanel(state, { region, fields: baseFields, samplesKey, optionalKey, title, onChange }) {
+  // Main rows take the person's own labels as well as the built-in fields.
+  // Main and speaker rows take the person's own labels as well as their
+  // built-in fields, each row kind its own list.
+  const isMain = region === "main";
+  const customKey = isMain ? "customFields" : "speakerCustomFields";
+  state.customFields ||= [];
+  state.speakerCustomFields ||= [];
+  const fieldsNow = () => (isMain ? turnFieldDefs : speakerFieldDefs)(state[customKey]);
   const wrap = element("div");
   const cards = element("div");
   const picker = element("select");
@@ -865,8 +1107,23 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const patternBox = element("textarea", { className: "tg-pattern", attrs: { readonly: "", rows: 3, "aria-label": `${title} pattern` } });
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
   const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
+  const columnsBox = element("div", { attrs: { "aria-live": "polite" } });
+  // Rows split over lines, repeating the row above's turn number and
+  // speaker (a London-Lund tone unit too long for its line), read as one.
+  const joinBox = region === "main" ? checkbox("Join a row to the one above when it repeats its turn number and speaker", { checked: !!state.joinRepeats }) : null;
+  const joinHint = element("span", { className: "field-hint" });
+  joinBox?.input.addEventListener("change", () => { state.joinRepeats = joinBox.input.checked; update(); });
+  let cardNodes = [];
+  state.fixedColumns ||= {};
+  const fixed = () => region === "main" && !!state.fixedWidth;
+  const hint = element("p", { className: "field-hint" });
+  const describeHint = () => {
+    hint.textContent = fixed()
+      ? `Mark the fields on one ${title.toLowerCase()} row. Each field becomes a column: the characters you select, widened over the blanks either side, in every row. Anything outside the marked columns is left out, and punctuation beside a turn number or speaker inside its column (an overlap "(") is matched but not kept.`
+      : `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked. Mark fixed text you don't want kept (a tag like "<u speaker=") as Ignore.`;
+  };
 
-  const candidates = () => rowLines(state)
+  const candidates = () => sampleLines(state, region)
     .map((line, index) => ({ line, index }))
     .filter(({ line, index }) => state.roles[index] === region && !state.markers[index] && line.trim());
 
@@ -881,10 +1138,15 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   }
 
   function drawCards() {
-    cards.replaceChildren(...state[samplesKey].map((sample) => sampleCard(sample, fields, {
+    cardNodes = state[samplesKey].map((sample) => sampleCard(sample, fieldsNow(), {
       onChange: update,
       onRemove: () => { state[samplesKey] = state[samplesKey].filter((s) => s !== sample); drawCards(); update(); },
-    })));
+      // Marking a field again means its column should follow the new marks,
+      // not a range set by hand for the old ones.
+      onMark: (field) => { if (fixed()) delete state.fixedColumns[field]; },
+      ruler: fixed(),
+    }));
+    cards.replaceChildren(...cardNodes);
     if (!state[samplesKey].length) cards.append(element("p", { className: "empty-note", text: "No sample rows yet — add one below." }));
     fillPicker();
   }
@@ -893,7 +1155,11 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     let spec = null;
     errorBox.textContent = "";
     try {
-      spec = buildRowPattern(state[samplesKey], fields, { optional: state.optional[optionalKey] });
+      spec = buildRowPattern(state[samplesKey], fieldsNow(), {
+        optional: state.optional[optionalKey],
+        fixedWidth: fixed(),
+        columns: fixed() ? state.fixedColumns : null,
+      });
     } catch (e) {
       errorBox.textContent = e.message;
     }
@@ -902,6 +1168,30 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     unmarkedBox.textContent = loose.length
       ? `Not marked: ${loose.map((t) => `"${shown(t)}"`).join(", ")}. The pattern accepts anything there. Mark it as a field, or as Ignore if it is fixed text every row has.`
       : "";
+    columnsBox.replaceChildren(...(spec?.fixedWidth ? [
+      element("h3", { className: "tg-section-title", text: "Columns" }),
+      fixedColumnEditor(spec, {
+        // A range that would break the columns (overlapping another) is
+        // refused here rather than applied: applied, it would leave no
+        // columns to show, and so nowhere to correct it.
+        onSet: (key, range) => {
+          const next = { ...state.fixedColumns };
+          if (range) next[key] = range; else delete next[key];
+          try {
+            buildRowPattern(state[samplesKey], fieldsNow(), { optional: state.optional[optionalKey], fixedWidth: true, columns: next });
+          } catch (e) {
+            return e.message;
+          }
+          state.fixedColumns = next;
+          update();
+          return null;
+        },
+      }),
+      element("h3", { className: "tg-section-title", text: "Columns across rows" }),
+      columnPreview(candidates(), spec),
+    ] : []));
+    for (const card of cardNodes) card.showColumns(spec?.fixedWidth ? spec.columns : []);
+    if (joinBox) describeJoins(spec);
     optionalBox.replaceChildren();
     if (spec) {
       for (const f of spec.fields) {
@@ -923,26 +1213,119 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     onChange();
   }
 
+  // The person's own labels: added here, marked like any field, removed with
+  // their marks. On main rows they become CSV columns; on speaker rows,
+  // name/value properties of each speaker's Person.
+  const labelsBox = element("div", { className: "tg-labels" });
+  const drawLabels = () => {
+    ensureCustomStyle(state);
+    const example = isMain ? "Prosody" : "Role";
+    const input = element("input", { attrs: { type: "text", placeholder: `New label, e.g. ${example}`, "aria-label": "New label", spellcheck: "false" } });
+    const problem = element("span", { className: "field-hint", attrs: { style: "color: var(--err)" } });
+    const addLabel = () => {
+      const error = customLabelError(input.value, state[customKey], baseFields);
+      if (error) { problem.textContent = error; input.focus(); return; }
+      const label = input.value.trim();
+      // Unique across both row kinds, so each key has one colour.
+      const taken = [...state.customFields, ...state.speakerCustomFields].map((f) => f.key);
+      state[customKey].push({ key: customFieldKey(label, taken), label });
+      drawLabels();
+      drawCards();
+      update();
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addLabel(); } });
+    const chips = state[customKey].map((f) => element("span", { className: "tg-chip" }, [
+      element("span", { className: `tg-swatch tg-swatch-${f.key}` }),
+      element("span", { text: f.label }),
+      button("×", {
+        title: `Remove "${f.label}" and its marks`,
+        onClick: () => {
+          state[customKey] = state[customKey].filter((c) => c !== f);
+          for (const sample of state[samplesKey]) sample.spans = sample.spans.filter((span) => span.field !== f.key);
+          if (isMain) delete state.fixedColumns[f.key];
+          state.optional[optionalKey] = (state.optional[optionalKey] || []).filter((k) => k !== f.key);
+          drawLabels();
+          drawCards();
+          update();
+        },
+      }),
+    ]));
+    labelsBox.replaceChildren(
+      element("span", { className: "field-hint", text: "Your own labels:" }),
+      ...chips,
+      input,
+      button("Add label", {
+        onClick: addLabel,
+        title: isMain
+          ? "Add a field of your own to mark on the rows below — its values are kept as a CSV column"
+          : "Add a field of your own to mark on the rows below — its values are kept as properties of each speaker",
+      }),
+      problem,
+    );
+  };
+
+  // How many rows joining would take in, counted with joining on whatever
+  // the box says. A new grammar starts with it on when there are some.
+  function describeJoins(spec) {
+    let repeats = 0;
+    if (spec?.fields.some((f) => f.key === "turn")) {
+      try {
+        repeats = parseWithGrammar(state.lines, buildGrammar({ ...grammarInputs(state), joinRepeats: true })).joined.length;
+      } catch { repeats = 0; }
+    }
+    if (state.joinRepeats == null && spec) {
+      state.joinRepeats = repeats > 0;
+      joinBox.input.checked = state.joinRepeats;
+    }
+    joinBox.input.disabled = !spec?.fields.some((f) => f.key === "turn");
+    joinHint.textContent = joinBox.input.disabled
+      ? "Mark the turn number to join rows by it."
+      : repeats
+        ? `${repeats} row(s) in this sample repeat the turn number and speaker of the row above.`
+        : "No row in this sample repeats the turn number and speaker of the row above.";
+  }
+
   const add = button("Add sample row", {
     onClick: () => {
       if (picker.disabled) return;
       const index = Number(picker.value);
-      state[samplesKey].push({ index, line: rowLines(state)[index], spans: [] });
+      state[samplesKey].push({ index, line: sampleLines(state, region)[index], spans: [] });
       state[samplesKey].sort((a, b) => a.index - b.index);
       drawCards();
       update();
     },
   });
 
+  // The two ways of reading main rows. Switching re-reads each sample from
+  // the lines that method marks up; a sample whose line differs loses its marks.
+  const methodChoice = region === "main" ? readingMethodChoice(fixed(), (fixedWidth) => {
+    state.fixedWidth = fixedWidth;
+    const source = sampleLines(state, region);
+    for (const sample of state[samplesKey]) {
+      if (source[sample.index] === sample.line) continue;
+      sample.line = source[sample.index];
+      sample.spans = [];
+    }
+    describeHint();
+    drawCards();
+    update();
+  }) : null;
+
+  describeHint();
+  drawLabels();
   wrap.append(
-    element("p", { className: "field-hint", text: `Mark up one or more ${title.toLowerCase()} rows. A field left out of some rows becomes optional; the delimiters and brackets around each field are taken from the rows as marked. Mark fixed text you don't want kept (a tag like "<u speaker=") as Ignore.` }),
+    ...(methodChoice ? [methodChoice] : []),
+    hint,
+    labelsBox,
     cards,
     element("div", { className: "tg-toolbar" }, [picker, add]),
     errorBox,
     element("h3", { className: "tg-section-title", text: "Generated pattern" }),
     patternBox,
+    columnsBox,
     unmarkedBox,
     optionalBox,
+    ...(joinBox ? [element("div", { className: "tg-toolbar" }, [joinBox.node, joinHint])] : []),
   );
   drawCards();
   update();
@@ -995,12 +1378,14 @@ function testPanel(state, region) {
       }
       const total = rowLines(state).filter((l, i) => state.roles[i] === region && !state.markers[i] && l.trim()).length;
       const items = region === "speakers" ? parsed.speakers : parsed.turns.filter((t) => !t.malformed);
+      const turnFields = turnFieldDefs(grammar.turnRow?.customFields);
+      const speakerFields = speakerFieldDefs(grammar.speakerRow?.customFields);
       const columns = region === "speakers"
-        ? ["line", ...SPEAKER_FIELDS.map((f) => f.key)]
-        : ["line", "section", ...TURN_FIELDS.map((f) => f.key)];
+        ? ["line", ...speakerFields.map((f) => f.key)]
+        : ["line", "section", ...turnFields.map((f) => f.key)];
       const labels = region === "speakers"
-        ? ["Line", ...SPEAKER_FIELDS.map((f) => f.label)]
-        : ["Line", "Section", ...TURN_FIELDS.map((f) => f.label)];
+        ? ["Line", ...speakerFields.map((f) => f.label)]
+        : ["Line", "Section", ...turnFields.map((f) => f.label)];
       const table = dataTable(labels);
       for (const item of items.slice(0, RENDER_CAP)) {
         table.body.append(element("tr", {}, columns.map((c) => element("td", { text: truncate(String(item[c] ?? ""), 80) }))));
@@ -1008,6 +1393,7 @@ function testPanel(state, region) {
       const summary = element("p", { className: "tg-summary" }, [
         element("span", { className: unmatched.length ? "warn" : "ok", text: `${items.length} row(s) parsed` }),
         document.createTextNode(` from ${total} line(s) marked ${ROLE_LABELS[region]}`),
+        region === "main" && parsed.joined.length ? document.createTextNode(` · ${parsed.joined.length} line(s) joined to the row above (same turn number and speaker)`) : null,
         region === "main" && parsed.continuations.length ? document.createTextNode(` · ${parsed.continuations.length} line(s) folded into the row above as continuations`) : null,
         unmatched.length ? element("span", { className: "warn", text: ` · ${unmatched.length} not matched` }) : null,
         items.length > RENDER_CAP ? document.createTextNode(` · first ${RENDER_CAP} shown`) : null,
@@ -1016,6 +1402,12 @@ function testPanel(state, region) {
         element("h3", { className: "tg-section-title", text: "What this parses in the sample" }),
         summary,
         ...unmatched.slice(0, 50).map((u) => element("div", { className: "tg-unmatched", text: `${u.line}: ${shown(u.text)}${u.malformed ? "   (kept as a row with no speaker)" : ""}` })),
+        region === "main" && parsed.joined.length
+          ? element("details", {}, [
+            element("summary", { className: "field-hint", text: "Joined rows" }),
+            ...parsed.joined.slice(0, 50).map((j) => element("div", { className: "tg-unmatched", text: `${j.line} → ${j.into}: ${shown(j.text)}`, attrs: { style: "color: var(--muted)" } })),
+          ])
+          : null,
         region === "main" && parsed.continuations.length
           ? element("details", {}, [
             element("summary", { className: "field-hint", text: "Continuation lines" }),
@@ -1029,7 +1421,11 @@ function testPanel(state, region) {
 }
 
 function currentGrammar(state) {
-  return buildGrammar({
+  return buildGrammar(grammarInputs(state));
+}
+
+function grammarInputs(state) {
+  return {
     name: state.name,
     lines: state.lines,
     roles: state.roles,
@@ -1039,16 +1435,25 @@ function currentGrammar(state) {
     optional: state.optional,
     cleanup: state.cleanup,
     layout: state.layout || grammarLayout(null),
-  });
+    fixedWidth: !!state.fixedWidth,
+    fixedColumns: state.fixedWidth ? state.fixedColumns : null,
+    joinRepeats: !!state.joinRepeats,
+    customFields: state.customFields || [],
+    speakerCustomFields: state.speakerCustomFields || [],
+  };
 }
 
 async function rowStep(state, { openModal, existing, error }) {
   const seed = state.base || DEFAULT_GRAMMAR;
+  // Offered the fixed-width reading when every main row is the same length.
+  if (state.fixedWidth == null) {
+    state.fixedWidth = looksFixedWidth(state.lines.filter((line, i) => state.roles[i] === "main" && !state.markers[i]));
+  }
   if (!state.speakerSamples) {
     state.speakerSamples = suggestSamples(rowLines(state), state.roles, state.markers, "speakers", seed.speakerRow);
   }
   if (!state.turnSamples) {
-    state.turnSamples = suggestSamples(rowLines(state), state.roles, state.markers, "main", seed.turnRow);
+    state.turnSamples = suggestSamples(sampleLines(state, "main"), state.roles, state.markers, "main", seed.turnRow);
   }
 
   const layout = state.layout || grammarLayout(null);
@@ -1161,7 +1566,7 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
       const lines = file && !textarea.value.trim() ? await readDocument(file) : textToLines(textarea.value);
       const source = file && !textarea.value.trim() ? file.name : "pasted text";
       const parsed = parseWithGrammar(lines, grammar);
-      output.replaceChildren(...renderParse(parsed));
+      output.replaceChildren(...renderParse(parsed, grammar));
       log?.(`transcript-grammar: ${grammarSelect.value} on ${source} — ${Object.keys(parsed.metadata).length} header field(s), ${parsed.speakers.length} speaker(s), ${parsed.turns.filter((t) => !t.malformed).length} turn(s), ${parsed.unmatched.length + parsed.turns.filter((t) => t.malformed).length} line(s) not matched.`, parsed.unmatched.length || parsed.turns.some((t) => t.malformed) ? "warn" : "ok");
     } catch (e) {
       output.replaceChildren(element("p", { className: "tg-error", text: e.message }));
@@ -1185,11 +1590,11 @@ export async function openGrammarTester({ openModal, grammars, loadGrammar, read
   });
 }
 
-function renderParse(parsed) {
+function renderParse(parsed, grammar) {
   const nodes = [];
   const malformed = parsed.turns.filter((t) => t.malformed);
   const problems = [...parsed.unmatched, ...malformed.map((t) => ({ ...t, region: "main", malformed: true }))].sort((a, b) => a.line - b.line);
-  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length - malformed.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched · ${malformed.length} malformed row(s)`;
+  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length - malformed.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.joined.length} joined row(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched · ${malformed.length} malformed row(s)`;
   nodes.push(element("p", { className: "tg-summary" }, [element("span", { className: problems.length ? "warn" : "ok", text: summary })]));
   for (const u of problems.slice(0, 100)) {
     const text = u.malformed ? `${u.turn}… ${u.text}   (row with no speaker)` : shown(u.text);
@@ -1197,10 +1602,12 @@ function renderParse(parsed) {
   }
   const meta = dataTable(["Key", "Value"]);
   for (const [k, v] of Object.entries(parsed.metadata)) meta.body.append(element("tr", {}, [element("td", { text: k }), element("td", { text: truncate(v, 120) })]));
-  const speakers = dataTable(["Line", ...SPEAKER_FIELDS.map((f) => f.label)]);
-  for (const s of parsed.speakers) speakers.body.append(element("tr", {}, ["line", ...SPEAKER_FIELDS.map((f) => f.key)].map((k) => element("td", { text: String(s[k] ?? "") }))));
-  const turns = dataTable(["Line", "Section", ...TURN_FIELDS.map((f) => f.label)]);
-  for (const t of parsed.turns.slice(0, RENDER_CAP)) turns.body.append(element("tr", {}, ["line", "section", ...TURN_FIELDS.map((f) => f.key)].map((k) => element("td", { text: truncate(String(t[k] ?? ""), 80) }))));
+  const speakerFields = speakerFieldDefs(grammar?.speakerRow?.customFields);
+  const speakers = dataTable(["Line", ...speakerFields.map((f) => f.label)]);
+  for (const s of parsed.speakers) speakers.body.append(element("tr", {}, ["line", ...speakerFields.map((f) => f.key)].map((k) => element("td", { text: String(s[k] ?? "") }))));
+  const turnFields = turnFieldDefs(grammar?.turnRow?.customFields);
+  const turns = dataTable(["Line", "Section", ...turnFields.map((f) => f.label)]);
+  for (const t of parsed.turns.slice(0, RENDER_CAP)) turns.body.append(element("tr", {}, ["line", "section", ...turnFields.map((f) => f.key)].map((k) => element("td", { text: truncate(String(t[k] ?? ""), 80) }))));
   nodes.push(
     element("h3", { className: "tg-section-title", text: "Header metadata" }), meta.node,
     element("h3", { className: "tg-section-title", text: "Speakers" }), speakers.node,

@@ -176,7 +176,7 @@ const plugin = {
               "warn",
             );
           }
-          const csvText = toCsv(result.rows);
+          const csvText = toCsv(result.rows, result.extraColumns);
           const csvDirName = CSV_DIR;
           const logDirName = LOG_DIR;
 

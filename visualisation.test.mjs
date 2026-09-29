@@ -14,6 +14,15 @@ import {
   analyzeCollocations, documentsForSelection, fisherExact,
   tokenize as tokenizeCollocations,
 } from "./plugins/collocation/index.js";
+import {
+  analyzeSentiment, annotateSection, buildSummary,
+  documentsForSelection as documentsForSentimentSelection,
+} from "./plugins/sentimentexplorer/index.js";
+import {
+  buildSeedDictionary, buildVocabulary, fitLDA, fitSeededLDA, topTermsPerTopic,
+  documentsForSelection as documentsForTopicSelection,
+  tokenize as tokenizeTopics,
+} from "./plugins/topicdetector/index.js";
 import { chartGeometry } from "./plugins/chart/index.js";
 import { REGISTRY } from "./index.js";
 
@@ -209,6 +218,161 @@ check("selects one file and combines selected CSV columns", () => {
     ["node note"],
     "non-CSV sources keep their existing document text"
   );
+});
+
+console.log("\nsentimentexplorer");
+
+const lexicon = new Map([
+  ["excellent", new Set(["joy", "positive", "trust"])],
+  ["sad", new Set(["sadness", "negative"])],
+]);
+
+check("annotates a word belonging to several categories at once", () => {
+  const [row] = annotateSection(["excellent"], "s1", lexicon);
+  assert.equal(row.joy, 1);
+  assert.equal(row.positive, 1);
+  assert.equal(row.trust, 1);
+  assert.equal(row.anger, 0);
+});
+
+check("a word absent from the lexicon annotates as all zeros", () => {
+  const [row] = annotateSection(["unknown"], "s1", lexicon);
+  assert.ok(Object.entries(row).every(([key, value]) => key === "section" || key === "token_index" || key === "word" || value === 0));
+});
+
+check("buildSummary counts and rounds percentages per section", () => {
+  const rows = [
+    ...annotateSection(["excellent", "sad"], "s1", lexicon),
+    ...annotateSection(["excellent"], "s2", lexicon),
+  ];
+  const summary = buildSummary(rows);
+  const s1 = summary.find((row) => row.section === "s1");
+  assert.equal(s1.total_tokens, 2);
+  assert.equal(s1.joy_n, 1);
+  assert.equal(s1.joy_pct, 50);
+});
+
+check("a token never crosses a section boundary", () => {
+  const { annotated } = analyzeSentiment(
+    [{ source: "a.txt", text: "excellent" }, { source: "b.txt", text: "sad" }],
+    lexicon,
+  );
+  assert.deepEqual(annotated.map((row) => [row.section, row.token_index]), [["a.txt", 1], ["b.txt", 1]]);
+});
+
+check("selects one file and combines selected CSV columns, same as collocation", () => {
+  const documents = [{ source: "notes.txt", text: "excellent" }];
+  const tables = [{
+    source: "data.csv",
+    header: ["text", "note"],
+    rows: [["sad", "extra"]],
+  }];
+  assert.deepEqual(
+    documentsForSentimentSelection(documents, tables, "data.csv", ["text"]).map((row) => row.text),
+    ["sad"],
+  );
+  assert.deepEqual(
+    documentsForSentimentSelection(documents, tables, "notes.txt").map((row) => row.text),
+    ["excellent"],
+  );
+});
+
+check("selects multiple files at once, each keeping its own source", () => {
+  const documents = [{ source: "notes.txt", text: "excellent" }];
+  const tables = [
+    { source: "data.csv", header: ["text", "note"], rows: [["sad", "extra"]] },
+    { source: "other.csv", header: ["text"], rows: [["joy"]] },
+  ];
+  const rows = documentsForSentimentSelection(documents, tables, ["notes.txt", "data.csv", "other.csv"], ["text"]);
+  assert.deepEqual(rows.map((row) => [row.source, row.text]), [
+    ["notes.txt", "excellent"], ["data.csv", "sad"], ["other.csv", "joy"],
+  ]);
+});
+
+check("an explicit empty selection means nothing, not everything", () => {
+  const documents = [{ source: "notes.txt", text: "excellent" }];
+  assert.deepEqual(documentsForSentimentSelection(documents, [], []), []);
+  assert.deepEqual(documentsForSentimentSelection(documents, [], undefined), documents);
+});
+
+check("a per-file column Map picks a different column from each selected table", () => {
+  const tables = [
+    { source: "a.csv", header: ["text", "note"], rows: [["ignored", "from-a"]] },
+    { source: "b.csv", header: ["translation", "text"], rows: [["from-b", "ignored"]] },
+  ];
+  const columns = new Map([["a.csv", ["note"]], ["b.csv", ["translation"]]]);
+  const rows = documentsForSentimentSelection([], tables, ["a.csv", "b.csv"], columns);
+  assert.deepEqual(rows.map((row) => [row.source, row.text]), [
+    ["a.csv", "from-a"], ["b.csv", "from-b"],
+  ]);
+});
+
+console.log("\ntopicdetector");
+
+check("tokenises Unicode words and drops single characters and pure numbers", () => {
+  assert.deepEqual(tokenizeTopics("Yolŋu-matha a 123 don't 2026"), ["yolŋu-matha", "don't"]);
+});
+
+check("table rows are independent documents while plain-file lines merge into one document", () => {
+  const flat = [
+    { source: "a.txt", text: "first line" },
+    { source: "a.txt", text: "second line" },
+  ];
+  const tables = [{ source: "b.csv", header: ["text"], rows: [["row one"], ["row two"]] }];
+  const docs = documentsForTopicSelection(flat, tables, ["a.txt", "b.csv"], []);
+  assert.deepEqual(docs.map((d) => [d.source, d.label || "", d.text]), [
+    ["a.txt", "", "first line second line"],
+    ["b.csv", "b.csv · row 1", "row one"],
+    ["b.csv", "b.csv · row 2", "row two"],
+  ]);
+});
+
+check("buildVocabulary trims by frequency and drops emptied documents", () => {
+  const docs = [["a", "a", "b"], ["a", "c"], ["z"]];
+  const { vocabulary, documents, keptDocumentIndexes, droppedDocumentIndexes } =
+    buildVocabulary(docs, { minTermFreq: 2, minDocFreq: 2 });
+  assert.deepEqual(vocabulary, ["a"]);
+  assert.deepEqual(keptDocumentIndexes, [0, 1]);
+  assert.deepEqual(droppedDocumentIndexes, [2], "the doc with only 'z' has nothing left after trimming");
+  assert.deepEqual(documents, [[0, 0], [0]]);
+});
+
+check("fitLDA is deterministic for a fixed seed", () => {
+  const docs = [[0, 1, 0, 1], [1, 2, 1, 2], [0, 0, 2, 2]];
+  const a = fitLDA(docs, 3, { k: 2, seed: 7, iterations: 25 });
+  const b = fitLDA(docs, 3, { k: 2, seed: 7, iterations: 25 });
+  assert.deepEqual(a.termTopicWeights, b.termTopicWeights);
+  assert.deepEqual(a.docTopicWeights, b.docTopicWeights);
+});
+
+check("topTermsPerTopic orders most probable term first", () => {
+  const vocabulary = ["apple", "banana", "cherry"];
+  const weights = [[0.1, 0.7, 0.2], [0.6, 0.1, 0.3]];
+  assert.deepEqual(topTermsPerTopic(weights, vocabulary, 2), [
+    ["banana", "cherry"], ["apple", "cherry"],
+  ]);
+});
+
+check("buildSeedDictionary drops empty topics and throws when none have words", () => {
+  const dict = buildSeedDictionary(["Fruit", "Empty"], [["apple", "banana"], []]);
+  assert.deepEqual(dict.map((t) => t.name), ["Fruit"]);
+  assert.throws(() => buildSeedDictionary(["A", "B"], [[], []]));
+});
+
+check("fitSeededLDA pulls a seed-word-dominated document toward its topic, and an unmatched one toward 'other'", () => {
+  const vocabulary = ["apple", "banana", "rocket", "engine"];
+  // doc 0/1: fruit words; doc 2: unrelated to any seed word.
+  const docs = [
+    [0, 1, 0, 1, 0], [1, 0, 1, 0, 1],
+    [2, 3, 2, 3, 2],
+  ];
+  const dict = buildSeedDictionary(["Fruit"], [["apple", "banana"]]);
+  const result = fitSeededLDA(docs, vocabulary, dict, { seed: 3, iterations: 50 });
+  assert.deepEqual(result.topicNames, ["Fruit", "other"]);
+  const best = result.docTopicWeights.map((w) => w.indexOf(Math.max(...w)));
+  assert.equal(best[0], 0, "a fruit-heavy document is assigned to the seeded topic");
+  assert.equal(best[1], 0);
+  assert.equal(best[2], 1, "a document matching no seed word falls to the residual topic");
 });
 
 console.log("\nchart");

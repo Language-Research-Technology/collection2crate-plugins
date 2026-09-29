@@ -130,12 +130,40 @@ function renderPropertyRow(properties, name, onIncludeChange) {
   joinSelect.value = propConfig.join || "";
   joinSelect.addEventListener("change", () => {
     if (joinSelect.value) propConfig.join = joinSelect.value; else delete propConfig.join;
+    normalizeWrap.hidden = !propConfig.load_text;
   });
+
+  const normalizeCheckbox = document.createElement("input");
+  normalizeCheckbox.type = "checkbox";
+  normalizeCheckbox.checked = propConfig.normalize_whitespace === true;
+  normalizeCheckbox.addEventListener("change", () => {
+    if (normalizeCheckbox.checked) propConfig.normalize_whitespace = true;
+    else delete propConfig.normalize_whitespace;
+  });
+  const normalizeLabel = document.createElement("label");
+  normalizeLabel.className = "checkbox";
+  normalizeLabel.style.cssText = "gap:4px; font-size:13px; margin-right:14px;";
+  const normalizeText = document.createElement("span");
+  normalizeText.textContent = "normalize whitespace";
+  normalizeLabel.append(normalizeCheckbox, normalizeText);
+  const normalizeHint = document.createElement("div");
+  normalizeHint.className = "field-hint";
+  normalizeHint.textContent = "Collapse spaces, tabs, and line breaks in loaded text or joined cells to single spaces.";
+  const normalizeWrap = document.createElement("div");
+  normalizeWrap.style.cssText = "margin:2px 0 6px 26px;";
+  normalizeWrap.hidden = !propConfig.load_text;
+  normalizeWrap.append(normalizeLabel, normalizeHint);
 
   const loadTextCb = checkboxWithLabel("load text", !!propConfig.load_text, (checked) => {
     propConfig.load_text = checked;
     joinSelect.disabled = !checked;
-    if (!checked) { delete propConfig.join; joinSelect.value = ""; }
+    if (!checked) {
+      delete propConfig.join;
+      delete propConfig.normalize_whitespace;
+      joinSelect.value = "";
+      normalizeCheckbox.checked = false;
+    }
+    normalizeWrap.hidden = !checked;
   });
 
   const joinWrap = document.createElement("span");
@@ -148,7 +176,7 @@ function renderPropertyRow(properties, name, onIncludeChange) {
   row.append(includeCb, expandCb, loadTextCb, joinWrap);
 
   const container = document.createElement("div");
-  container.append(row, subPanel);
+  container.append(row, normalizeWrap, subPanel);
   return container;
 }
 

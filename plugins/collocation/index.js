@@ -258,6 +258,12 @@ export function createPlugin() {
       render(container, { documents = [], tables = [] }) {
         let rows = [];
         let parameters = null;
+        const introHeading = element("h2", { text: "Collocations" });
+        const introText = note(
+          "Choose one file or all files to analyse. For CSV/TSV files, select the columns containing text. " +
+          "Enter one or more comma-separated node words, set the left/right context window and frequency " +
+          "threshold, then calculate to see nearby collocates ranked by the selected association measure."
+        );
         const sources = [...new Set([
           ...(documents || []).map((document) => document.source),
           ...(tables || []).map((table) => table.source),
@@ -278,6 +284,8 @@ export function createPlugin() {
         const status = element("p", { className: "field-hint" });
         const resultsWrap = element("div", { attrs: { hidden: true } });
         const { body, node: table } = dataTable(RESULT_COLUMNS.map((column) => column));
+        table.style.maxHeight = "50rem";
+        table.style.overflowY = "auto";
         const chart = element("div");
         const guideTable = dataTable(["Measure", "Definition"]);
         GUIDE.forEach(({ measure: id, description }) => guideTable.body.append(element("tr", {}, [element("td", { text: id }), element("td", { text: description })])));
@@ -368,6 +376,8 @@ export function createPlugin() {
         nodeWordsField.style.alignItems = "stretch";
         nodeWordsField.style.gap = "0.25rem";
         container.replaceChildren(
+          introHeading,
+          introText,
           element("div", { className: "actions" }, [field("File", sourceSelect), columnField]),
           nodeWordsField,
           element("div", { className: "actions" }, [ignoreCase.node, field("Left span", spanLeft), field("Right span", spanRight), field("Min. frequency", minFreq), field("Top N", topN), field("Plot measure", measure), filter]),

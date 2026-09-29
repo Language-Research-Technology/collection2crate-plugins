@@ -693,7 +693,7 @@ export function looksFixedWidth(lines) {
 // ---------------------------------------------------------------------------
 
 /** Assemble everything the editor produced into the saved config shape. */
-export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false, fixedColumns = null }) {
+export function buildGrammar({ name, lines, roles, markers, speakerSamples, turnSamples, optional = {}, cleanup = null, layout = grammarLayout(null), fixedWidth = false, fixedColumns = null, joinRepeats = false }) {
   const { regions, ignore: markedIgnore } = buildRegions(lines, roles, markers, layout);
   // The cleanup step's rules, when there is one, replace the ignore patterns
   // derived from lines marked Ignore (it starts from those, and may edit them).
@@ -703,6 +703,7 @@ export function buildGrammar({ name, lines, roles, markers, speakerSamples, turn
   const dropColumns = fixedWidth ? [] : uniqueColumnRules((cleanup?.columns || []).filter((rule) => !columnRuleError(rule)));
   const speakerRow = layout.speakers ? buildRowPattern(speakerSamples, SPEAKER_FIELDS, { optional: optional.speakerRow }) : null;
   const turnRow = buildRowPattern(turnSamples, TURN_FIELDS, { optional: optional.turnRow, fixedWidth, columns: fixedColumns });
+  if (turnRow && joinRepeats) turnRow.joinRepeats = true;
   return {
     version: GRAMMAR_VERSION,
     name: name || "default",
@@ -759,6 +760,7 @@ function compile(grammar) {
     turnRow: re(grammar.turnRow),
     turnRowStart: grammar.turnRow?.rowStart ? new RegExp(grammar.turnRow.rowStart, "u") : null,
     fixedWidth: !!grammar.turnRow?.fixedWidth,
+    joinRepeats: !!grammar.turnRow?.joinRepeats,
     headerField: re(grammar.headerField) || new RegExp(HEADER_FIELD_PATTERN, "u"),
     speakersStart: layout.speakers ? marker(grammar.regions?.speakers?.start) : null,
     mainStart: marker(grammar.regions?.main?.start),
@@ -787,7 +789,7 @@ export function parseWithGrammar(input, grammar) {
   const lines = Array.isArray(input) ? input : textToLines(input);
   const re = compile(grammar);
   const result = {
-    metadata: {}, speakers: [], turns: [], sections: [], ignored: [], continuations: [], unmatched: [],
+    metadata: {}, speakers: [], turns: [], sections: [], ignored: [], continuations: [], joined: [], unmatched: [],
     roles: new Array(lines.length).fill(null),
   };
 
@@ -902,7 +904,19 @@ export function parseWithGrammar(input, grammar) {
 
     const m = re.turnRow && rowLine.match(re.turnRow);
     if (m) {
-      openTurn = { line: lineNumber, section, ...turnFields(m.groups) };
+      const fields = turnFields(m.groups);
+      // A row that repeats the turn number and speaker of the row just above
+      // it is the rest of that row, split over lines (a London-Lund tone
+      // unit too long for its line): its text joins the row above.
+      // The open turn is the last row read, so only a row straight after
+      // another (blank, skipped and folded lines aside) can join it.
+      if (re.joinRepeats && openTurn && !openTurn.malformed
+        && fields.turn && fields.turn === openTurn.turn && (fields.speaker || "") === (openTurn.speaker || "")) {
+        openTurn.text = `${openTurn.text || ""} ${fields.text || ""}`.trim();
+        result.joined.push({ line: lineNumber, into: openTurn.line, text: line });
+        return note(index, "main:joined");
+      }
+      openTurn = { line: lineNumber, section, ...fields };
       result.turns.push(openTurn);
       return note(index, "main");
     }
@@ -1342,7 +1356,9 @@ export function grammarFingerprint(grammar) {
   // Dropped columns count only when there are some, so a grammar saved
   // before they existed keeps the fingerprint it had.
   const columns = grammar?.dropColumns?.length ? [grammar.dropColumns] : [];
-  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow), ...columns]);
+  // Likewise joining repeated rows, only when a grammar does it.
+  const joins = turnRow?.joinRepeats ? ["joinRepeats"] : [];
+  const text = JSON.stringify([regions, ignore, headerField, strip(speakerRow), strip(turnRow), ...columns, ...joins]);
   // FNV-1a, 32-bit. Collisions only matter as a missed "grammar changed"
   // warning, and a person saving grammars is not an adversary.
   let hash = 0x811c9dc5;

@@ -263,6 +263,8 @@ async function sourceStep(state, { openModal, grammars, loadGrammar, readDocumen
     // A saved grammar says whether its rows are fixed-width; for a new one it
     // is decided at the rows step, once the regions say which rows are main.
     state.fixedWidth = base ? !!base.turnRow?.fixedWidth : null;
+    // Likewise joining repeated rows: saved, or decided at the rows step.
+    state.joinRepeats = base ? !!base.turnRow?.joinRepeats : null;
     // Its columns come back exactly as saved, not re-derived from the marks.
     state.fixedColumns = base?.turnRow?.fixedWidth
       ? Object.fromEntries((base.turnRow.columns || []).map(({ key, from, to }) => [key, { from, to }]))
@@ -1070,6 +1072,11 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
   const errorBox = element("p", { className: "tg-error", attrs: { "aria-live": "polite" } });
   const unmarkedBox = element("p", { className: "tg-summary", attrs: { "aria-live": "polite", style: "color: var(--warn)" } });
   const columnsBox = element("div", { attrs: { "aria-live": "polite" } });
+  // Rows split over lines, repeating the row above's turn number and
+  // speaker (a London-Lund tone unit too long for its line), read as one.
+  const joinBox = region === "main" ? checkbox("Join a row to the one above when it repeats its turn number and speaker", { checked: !!state.joinRepeats }) : null;
+  const joinHint = element("span", { className: "field-hint" });
+  joinBox?.input.addEventListener("change", () => { state.joinRepeats = joinBox.input.checked; update(); });
   let cardNodes = [];
   state.fixedColumns ||= {};
   const fixed = () => region === "main" && !!state.fixedWidth;
@@ -1148,6 +1155,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
       columnPreview(candidates(), spec),
     ] : []));
     for (const card of cardNodes) card.showColumns(spec?.fixedWidth ? spec.columns : []);
+    if (joinBox) describeJoins(spec);
     optionalBox.replaceChildren();
     if (spec) {
       for (const f of spec.fields) {
@@ -1167,6 +1175,27 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
       }
     }
     onChange();
+  }
+
+  // How many rows joining would take in, counted with joining on whatever
+  // the box says. A new grammar starts with it on when there are some.
+  function describeJoins(spec) {
+    let repeats = 0;
+    if (spec?.fields.some((f) => f.key === "turn")) {
+      try {
+        repeats = parseWithGrammar(state.lines, buildGrammar({ ...grammarInputs(state), joinRepeats: true })).joined.length;
+      } catch { repeats = 0; }
+    }
+    if (state.joinRepeats == null && spec) {
+      state.joinRepeats = repeats > 0;
+      joinBox.input.checked = state.joinRepeats;
+    }
+    joinBox.input.disabled = !spec?.fields.some((f) => f.key === "turn");
+    joinHint.textContent = joinBox.input.disabled
+      ? "Mark the turn number to join rows by it."
+      : repeats
+        ? `${repeats} row(s) in this sample repeat the turn number and speaker of the row above.`
+        : "No row in this sample repeats the turn number and speaker of the row above.";
   }
 
   const add = button("Add sample row", {
@@ -1207,6 +1236,7 @@ function rowPanel(state, { region, fields, samplesKey, optionalKey, title, onCha
     columnsBox,
     unmarkedBox,
     optionalBox,
+    ...(joinBox ? [element("div", { className: "tg-toolbar" }, [joinBox.node, joinHint])] : []),
   );
   drawCards();
   update();
@@ -1272,6 +1302,7 @@ function testPanel(state, region) {
       const summary = element("p", { className: "tg-summary" }, [
         element("span", { className: unmatched.length ? "warn" : "ok", text: `${items.length} row(s) parsed` }),
         document.createTextNode(` from ${total} line(s) marked ${ROLE_LABELS[region]}`),
+        region === "main" && parsed.joined.length ? document.createTextNode(` · ${parsed.joined.length} line(s) joined to the row above (same turn number and speaker)`) : null,
         region === "main" && parsed.continuations.length ? document.createTextNode(` · ${parsed.continuations.length} line(s) folded into the row above as continuations`) : null,
         unmatched.length ? element("span", { className: "warn", text: ` · ${unmatched.length} not matched` }) : null,
         items.length > RENDER_CAP ? document.createTextNode(` · first ${RENDER_CAP} shown`) : null,
@@ -1280,6 +1311,12 @@ function testPanel(state, region) {
         element("h3", { className: "tg-section-title", text: "What this parses in the sample" }),
         summary,
         ...unmatched.slice(0, 50).map((u) => element("div", { className: "tg-unmatched", text: `${u.line}: ${shown(u.text)}${u.malformed ? "   (kept as a row with no speaker)" : ""}` })),
+        region === "main" && parsed.joined.length
+          ? element("details", {}, [
+            element("summary", { className: "field-hint", text: "Joined rows" }),
+            ...parsed.joined.slice(0, 50).map((j) => element("div", { className: "tg-unmatched", text: `${j.line} → ${j.into}: ${shown(j.text)}`, attrs: { style: "color: var(--muted)" } })),
+          ])
+          : null,
         region === "main" && parsed.continuations.length
           ? element("details", {}, [
             element("summary", { className: "field-hint", text: "Continuation lines" }),
@@ -1293,7 +1330,11 @@ function testPanel(state, region) {
 }
 
 function currentGrammar(state) {
-  return buildGrammar({
+  return buildGrammar(grammarInputs(state));
+}
+
+function grammarInputs(state) {
+  return {
     name: state.name,
     lines: state.lines,
     roles: state.roles,
@@ -1305,7 +1346,8 @@ function currentGrammar(state) {
     layout: state.layout || grammarLayout(null),
     fixedWidth: !!state.fixedWidth,
     fixedColumns: state.fixedWidth ? state.fixedColumns : null,
-  });
+    joinRepeats: !!state.joinRepeats,
+  };
 }
 
 async function rowStep(state, { openModal, existing, error }) {
@@ -1459,7 +1501,7 @@ function renderParse(parsed) {
   const nodes = [];
   const malformed = parsed.turns.filter((t) => t.malformed);
   const problems = [...parsed.unmatched, ...malformed.map((t) => ({ ...t, region: "main", malformed: true }))].sort((a, b) => a.line - b.line);
-  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length - malformed.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched · ${malformed.length} malformed row(s)`;
+  const summary = `${Object.keys(parsed.metadata).length} header field(s) · ${parsed.speakers.length} speaker(s) · ${parsed.turns.length - malformed.length} turn(s) in ${parsed.sections.length || "no"} section(s) · ${parsed.joined.length} joined row(s) · ${parsed.continuations.length} continuation line(s) · ${parsed.ignored.length} ignored · ${parsed.unmatched.length} unmatched · ${malformed.length} malformed row(s)`;
   nodes.push(element("p", { className: "tg-summary" }, [element("span", { className: problems.length ? "warn" : "ok", text: summary })]));
   for (const u of problems.slice(0, 100)) {
     const text = u.malformed ? `${u.turn}… ${u.text}   (row with no speaker)` : shown(u.text);

@@ -705,6 +705,60 @@ check("fixed width: hand-set columns are saved, and the editor-only details are 
   assert.match(parseWithGrammar(FIXED_LINES, grammar).turns[1].text, /^a reply#\s+\/$/);
 });
 
+// ---------------------------------------------------------------------------
+// Joining rows split over lines
+// ---------------------------------------------------------------------------
+
+const SPLIT_LINES = [
+  FIXED(10, false, "B", "the first half of a"),
+  FIXED(10, false, "B", "long unit#"),
+  FIXED(20, false, "A", "a reply#"),
+  FIXED(10, false, "B", "not straight after#"),
+  FIXED(30, false, "B", "one speaker"),
+  FIXED(30, false, "A", "then another#"),
+  FIXED(40, false, "B", "three"),
+  FIXED(40, true, "B", "lines"),
+  FIXED(40, false, "B", "long#"),
+];
+const splitGrammar = (joinRepeats) => buildGrammar({
+  name: "split", lines: SPLIT_LINES, roles: SPLIT_LINES.map(() => "main"), markers: SPLIT_LINES.map(() => false),
+  speakerSamples: [], turnSamples: [fixedSample()], layout: FIXED_LAYOUT, fixedWidth: true, joinRepeats,
+});
+
+check("joining: a row repeating the turn number and speaker of the row above joins it", () => {
+  const parsed = parseWithGrammar(SPLIT_LINES, splitGrammar(true));
+  assert.deepEqual(parsed.turns.map((t) => [t.line, t.turn, t.speaker, t.text]), [
+    [1, "10", "B", "the first half of a long unit#"],
+    [3, "20", "A", "a reply#"],
+    // Not straight after the first 10, so not joined to it.
+    [4, "10", "B", "not straight after#"],
+    // Same number, another speaker: two rows.
+    [5, "30", "B", "one speaker"],
+    [6, "30", "A", "then another#"],
+    // Punctuation beside the speaker doesn't make it another speaker.
+    [7, "40", "B", "three lines long#"],
+  ]);
+  assert.deepEqual(parsed.joined.map((j) => [j.line, j.into]), [[2, 1], [8, 7], [9, 7]]);
+  assert.equal(parsed.roles[1], "main:joined");
+});
+
+check("joining: off unless the grammar says so, and saved in its fingerprint", () => {
+  assert.equal(parseWithGrammar(SPLIT_LINES, splitGrammar(false)).turns.length, 9);
+  assert.equal(splitGrammar(false).turnRow.joinRepeats, undefined);
+  assert.equal(splitGrammar(true).turnRow.joinRepeats, true);
+  assert.notEqual(grammarFingerprint(splitGrammar(true)), grammarFingerprint(splitGrammar(false)));
+});
+
+check("joining: works the same for rows read by a text pattern", () => {
+  const lines = ["1\tAA:\tfirst part", "1\tAA:\tsecond part", "2\tBB:\treply"];
+  const grammar = buildGrammar({
+    name: "text", lines, roles: lines.map(() => "main"), markers: lines.map(() => false),
+    speakerSamples: [], turnSamples: [markup(lines[0], [["turn", "1"], ["speaker", "AA"], ["text", "first part"]])],
+    layout: FIXED_LAYOUT, joinRepeats: true,
+  });
+  assert.deepEqual(parseWithGrammar(lines, grammar).turns.map((t) => t.text), ["first part second part", "reply"]);
+});
+
 if (failures) {
   console.log(`\n${failures} check(s) failed.`);
   process.exit(1);

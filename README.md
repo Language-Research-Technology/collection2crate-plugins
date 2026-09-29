@@ -397,6 +397,12 @@ the transcript processing option:
   directly, with **Use the marks** to go back to what the marks give; and
   **Columns across rows** shows the columns shaded down a dozen rows of the
   sample, the ones the columns don't read first, flagged ✕.
+  With either reading, **Join a row to the one above when it repeats its turn
+  number and speaker** reads a row split over several lines (a London-Lund
+  tone unit too long for its line) as one: the text of each repeat joins the
+  row above, as long as nothing but blank, skipped or wrapped lines comes
+  between. A new grammar starts with it on when the sample has such rows; the
+  editor says how many, and saves it as `turnRow.joinRepeats`.
 - **Test a transcript grammar…** — parse another document with a saved one.
 
 A grammar is saved to `_config/transcript-grammar/<name>.json`: named-group

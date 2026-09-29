@@ -219,7 +219,8 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     report: {
       grammarLine: `Parsed with the transcript grammar "${grammarName}" (${grammarPath(grammarName)}).`,
       cleanupLine: `Cleanup: ${(grammar.ignore || []).length} line-skip rule(s) (${parsed.ignored.length} line(s) skipped), ${(grammar.strip || []).length} removal rule(s): ${(grammar.strip || []).map((r) => r.pattern).join("  ") || "none"}` +
-        `, ${(grammar.dropColumns || []).length} dropped column(s) in main rows: ${(grammar.dropColumns || []).map(describeColumnRule).join("; ") || "none"}`,
+        `, ${(grammar.dropColumns || []).length} dropped column(s) in main rows: ${(grammar.dropColumns || []).map(describeColumnRule).join("; ") || "none"}` +
+        (grammar.turnRow?.joinRepeats ? `; ${parsed.joined.length} row(s) joined to the row above for repeating its turn number and speaker` : ""),
       speakerExpected: declaresSpeakers
         ? [
           `Expected format (grammar "${grammarName}"): ${describeRow(grammar.speakerRow, SPEAKER_FIELDS)} — bracketed fields are optional.`,

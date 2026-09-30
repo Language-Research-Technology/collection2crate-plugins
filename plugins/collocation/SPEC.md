@@ -5,9 +5,6 @@ counterpart of LADAL's `CollocationCalculator` Shiny app from the
 [SLCLADAL/tools repository](https://github.com/SLCLADAL/tools), specifically
 the [CollocationCalculator section](https://github.com/SLCLADAL/tools#-collocationcalculator--collocation-association-measures).
 
-The current `index.js` is deliberately a blank, valid plugin placeholder. This
-file is the behavior contract for the implementation that replaces it.
-
 ## Plugin contract
 
 - Export `createPlugin()` from `index.js`.

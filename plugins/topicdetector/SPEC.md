@@ -2,10 +2,8 @@
 
 Implement a visualisation-only plugin named `topicdetector`. It is the
 JavaScript counterpart of LADAL's `TopicDetector` Shiny app in
-`/Users/moises/source/github/LADAL/tools/topicdetector/app.R`.
-
-The current `index.js` is deliberately a blank, valid plugin placeholder. This
-file is the behavior contract for the implementation that replaces it.
+the [SLCLADAL/tools repository](https://github.com/SLCLADAL/tools), specifically
+the [TopicDetector section](https://github.com/SLCLADAL/tools#-topicdetector--unsupervised--seeded-lda-topic-modelling).
 
 ## Plugin contract
 

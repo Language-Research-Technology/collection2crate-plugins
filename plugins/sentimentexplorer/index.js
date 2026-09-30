@@ -1,25 +1,67 @@
 // Sentiment Explorer: NRC word-emotion lexicon annotation, per section.
 // The engine is kept separate from the panel so its counting is testable.
 //
-// The NRC lexicon itself is a large word→category map, so it is not part of
-// this module's own import graph: it lives in ./lexicon.js (which statically
-// imports the bundled ./nrc-lexicon-data.json, mirroring austlang's data
-// pack), and is only dynamically imported once the panel actually renders or
-// runs an analysis (SPEC.md, "The NRC lexicon").
+// The NRC lexicon is fetched from LADAL only after the user requests it; it is
+// not redistributed with this repository because its data terms differ from
+// the software licence.
 
 import { buildCsvText, copyText, downloadCsv } from "../../src/_csv.js";
 import {
-  button, checkbox, dataTable, element, field, flashLabel,
+  attributionFooter, button, checkbox, dataTable, element, field, flashLabel,
   note, resultsBar,
 } from "../../src/_panel.js";
 
 const TOKEN = /[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu;
 const MAX_RENDERED_ROWS = 2000;
+const NRC_LEXICON_URL = "https://raw.githubusercontent.com/SLCLADAL/tools/main/sentimentexplorer/nrc_lexicon.csv";
 
 export const NRC_CATEGORIES = [
   "anger", "anticipation", "disgust", "fear", "joy",
   "sadness", "surprise", "trust", "negative", "positive",
 ];
+
+export function parseNrcLexiconCsv(csvText) {
+  const parseRow = (line, lineNumber) => {
+    const fields = [];
+    let value = "";
+    let quoted = false;
+    for (let index = 0; index < line.length; index++) {
+      const character = line[index];
+      if (quoted) {
+        if (character === '"' && line[index + 1] === '"') { value += '"'; index++; }
+        else if (character === '"') quoted = false;
+        else value += character;
+      } else if (character === '"' && value === "") quoted = true;
+      else if (character === ",") { fields.push(value); value = ""; }
+      else value += character;
+    }
+    if (quoted) throw new Error(`Unclosed quoted field on line ${lineNumber}.`);
+    fields.push(value);
+    return fields;
+  };
+
+  const lines = String(csvText || "").replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) throw new Error("The NRC lexicon file is empty.");
+  const header = parseRow(lines[0], 1).map((field) => field.trim().toLowerCase());
+  if (header[0] !== "word" || header[1] !== "sentiment") {
+    throw new Error("The file must have the NRC CSV columns 'word' and 'sentiment'.");
+  }
+
+  const lexicon = new Map();
+  const validCategories = new Set(NRC_CATEGORIES);
+  for (const [index, line] of lines.slice(1).entries()) {
+    const [rawWord, rawCategory] = parseRow(line, index + 2);
+    const word = rawWord?.trim().toLocaleLowerCase();
+    const category = rawCategory?.trim().toLocaleLowerCase();
+    if (!word || !validCategories.has(category)) {
+      throw new Error(`Invalid NRC word/category entry on line ${index + 2}.`);
+    }
+    if (!lexicon.has(word)) lexicon.set(word, new Set());
+    lexicon.get(word).add(category);
+  }
+  if (!lexicon.size) throw new Error("The NRC lexicon file contains no entries.");
+  return lexicon;
+}
 
 const CATEGORY_LABELS = {
   anger: "Anger", anticipation: "Anticipation", disgust: "Disgust", fear: "Fear",
@@ -165,14 +207,6 @@ export function documentsForSelection(documents, tables, sources, columns = []) 
     })).filter((document) => document.text.trim()));
   }
   return result;
-}
-
-let lexiconPromise = null;
-function loadLexiconModule() {
-  if (!lexiconPromise) {
-    lexiconPromise = import("./lexicon.js").then((module) => module.loadLexicon()).catch(() => null);
-  }
-  return lexiconPromise;
 }
 
 // One clearly separated heading style for every top-level section of the
@@ -342,12 +376,25 @@ export function createPlugin() {
         const count = element("span", { className: "field-hint" });
         const parametersHost = element("div");
         const citation = buildCitation();
-        const lexiconError = note(
-          "The NRC lexicon is not available, so no analysis can run. It is free for research and " +
-          "educational use; commercial use requires permission from the lexicon's author. " +
-          "See https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm."
-        );
+        let lexicon = null;
+        const lexiconError = note("The NRC lexicon could not be downloaded. Check your connection and try again.");
         lexiconError.hidden = true;
+        const lexiconSourceLink = element("a", {
+          text: "LADAL's NRC lexicon CSV",
+          attrs: { href: NRC_LEXICON_URL, target: "_blank", rel: "noopener noreferrer" },
+        });
+        const lexiconDoiLink = element("a", {
+          text: "10.1111/j.1467-8640.2012.00460.x",
+          attrs: { href: "https://doi.org/10.1111/j.1467-8640.2012.00460.x", target: "_blank", rel: "noopener noreferrer" },
+        });
+        const lexiconInfo = element("p", { className: "field-hint" }, [
+          "The NRC data has licensing terms separate from this software, so it is not bundled here. " +
+          "Click the button to load the data from ", lexiconSourceLink,
+          " into this browser session. It will not be saved to your computer or bundled with the tool. " +
+          "The lexicon was created by Saif M. Mohammad; see the publication DOI ", lexiconDoiLink, ". " +
+          "The lexicon is free for research and educational use; " +
+          "commercial use requires permission from its author.",
+        ]);
 
         // Always visible, unlike the results below: a person landing on this
         // panel with no prior context needs to be told what the Files list is
@@ -506,17 +553,39 @@ export function createPlugin() {
           renderTokenTable(categories);
         }
 
+        async function loadLexicon() {
+          loadLexiconButton.disabled = true;
+          status.textContent = "Loading the NRC lexicon from LADAL…";
+          lexiconError.hidden = true;
+          try {
+            const response = await fetch(NRC_LEXICON_URL);
+            if (!response.ok) throw new Error(`Download failed (${response.status}).`);
+            const csv = await response.text();
+            lexicon = parseNrcLexiconCsv(csv);
+            analyseButton.disabled = false;
+            status.textContent = "NRC lexicon loaded and ready for this browser session.";
+          } catch (error) {
+            lexicon = null;
+            analyseButton.disabled = true;
+            status.textContent = "The NRC lexicon could not be loaded.";
+            lexiconError.hidden = false;
+          } finally {
+            loadLexiconButton.disabled = false;
+          }
+        }
+
+        const loadLexiconButton = button("Load NRC lexicon", { primary: true, onClick: loadLexicon });
+        const analyseButton = button("Analyse", { primary: true, onClick: analyse });
+        analyseButton.disabled = true;
+        const workflowArrow = element("span", {
+          text: "\u2192",
+          attrs: { title: "Load the NRC lexicon before analysing", "aria-label": "then" },
+        });
+
         async function analyse() {
           const working = workingDocuments();
           if (!working.length) { status.textContent = "No text loaded for the selected file."; return; }
-          status.textContent = "Loading the NRC lexicon…";
-          const lexicon = await loadLexiconModule();
-          if (!lexicon) {
-            status.textContent = "";
-            resultsWrap.hidden = true;
-            lexiconError.hidden = false;
-            return;
-          }
+          if (!lexicon) return;
           lexiconError.hidden = true;
           const result = analyzeSentiment(working, lexicon, { sectionOf });
           annotated = result.annotated;
@@ -574,10 +643,19 @@ export function createPlugin() {
           columnsHost,
           sectionsHost,
           element("div", { className: "actions" }, categoryChecks.map((c) => c.node)),
-          element("div", { className: "actions" }, [button("Analyse", { primary: true, onClick: analyse })]),
+          lexiconInfo,
+          element("div", { className: "actions" }, [loadLexiconButton, workflowArrow, analyseButton]),
           lexiconError,
           status,
           resultsWrap,
+          attributionFooter({
+            logo: "https://ladal.edu.au/images/ladal_icon_white.png",
+            logoAlt: "",
+            logoBackground: "#51247a",
+            href: "https://ladal.edu.au",
+            text: "Language Technology and Data Analysis Laboratory",
+            comment: "Developed with permission from LADAL.",
+          }),
         );
         updateColumns();
         rebuildSections();

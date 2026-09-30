@@ -3,7 +3,7 @@
 
 import { buildCsvText, copyText, downloadCsv } from "../../src/_csv.js";
 import {
-  button, checkbox, dataTable, element, field, flashLabel, numberInput,
+  attributionFooter, button, checkbox, dataTable, element, field, flashLabel, numberInput,
   note, resultsBar, select,
 } from "../../src/_panel.js";
 
@@ -383,6 +383,14 @@ export function createPlugin() {
           element("div", { className: "actions" }, [ignoreCase.node, field("Left span", spanLeft), field("Right span", spanRight), field("Min. frequency", minFreq), field("Top N", topN), field("Plot measure", measure), filter]),
           status,
           resultsWrap,
+          attributionFooter({
+            logo: "https://ladal.edu.au/images/ladal_icon_white.png",
+            logoAlt: "",
+            logoBackground: "#51247a",
+            href: "https://ladal.edu.au",
+            text: "Language Technology and Data Analysis Laboratory",
+            comment: "Developed with permission from LADAL.",
+          }),
         );
         updateColumns();
         status.textContent = documents.length ? `${documents.length} text item(s) loaded.` : "No text loaded — choose an output folder.";

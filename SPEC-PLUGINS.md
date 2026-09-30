@@ -154,15 +154,17 @@ Keyword-in-context: find every match of a search term across the loaded
 documents and show it with a few words of context either side. Follows the
 [LADAL concordancing tutorial](https://ladal.edu.au/tutorials/concordancing/).
 
-**Controls.** A query box and Search button (Enter searches too), three
-checkboxes — case sensitive, whole word, regex — and a context size in words,
-1–20, default 5.
+**Controls.** The panel is titled Concordance Lines and has a Search section
+with a query box, Search button (Enter searches too), examples, a match type
+selector (Fixed, Glob, Regex), a Case sensitive checkbox, and a context window
+slider in words per side, 1–15, default 5.
 
-**Matching.** The query is escaped to a literal unless *regex* is on, wrapped
-in `\b…\b` when *whole word* is on (and not regex), and compiled with `g`, plus
-`i` unless *case sensitive*. A zero-length match advances the index by one
-rather than looping forever. An invalid pattern reports the engine's own
-message next to the query box and leaves the previous results alone.
+**Matching.** Fixed searches for the literal query, Glob treats `*` as any
+sequence and `?` as any single character, and Regex uses JavaScript regular
+expression syntax. The pattern is compiled with `g`, plus `i` unless *Case
+sensitive* is selected. A zero-length match advances the index by one rather
+than looping forever. An invalid regex reports the engine's own message next
+to the query box and leaves the previous results alone.
 
 **Context.** Take the raw text either side of the match, split on whitespace,
 and keep the last N words on the left and the first N on the right. Character
@@ -171,9 +173,9 @@ same window, far less work, and it keeps the keyword exactly as it appeared.
 
 **Results.** A table of source, speaker, left context, keyword, right context.
 Sort by left or by right context (the two orderings a concordance is read in),
-and copy or save as CSV with those five columns; the saved file is
-`concordance-<slug of query>.csv`. At most 2000 rows are rendered, with the
-count stating both numbers when it is capped — exports carry every match.
+and copy or save as CSV with those five columns. Results are vertically
+scrollable. At most 2000 rows are rendered, with the count stating both
+numbers when it is capped — exports carry every match.
 
 **Testable seam.** `search(documents, query, options) → rows`, pure and
 exported: matching, context windows, the zero-length guard and the regex

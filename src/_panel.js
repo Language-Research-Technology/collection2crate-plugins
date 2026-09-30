@@ -71,6 +71,40 @@ export function dataTable(headers) {
 
 export const note = (text) => element("p", { className: "empty-note", text });
 
+export function attributionFooter({ logo, logoAlt = "", logoBackground, href, text, comment }) {
+  const link = element("a", {
+    className: "attribution-link",
+    attrs: { href, target: "_blank", rel: "noopener noreferrer" },
+  }, [
+    element("img", {
+      attrs: {
+        src: logo,
+        alt: logoAlt,
+      },
+    }),
+    element("span", { text }),
+  ]);
+  const footer = element("footer", { className: "attribution-footer" }, [
+    link,
+    element("span", { text: comment }),
+  ]);
+  Object.assign(footer.style, {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    flexWrap: "wrap", gap: "0.75rem", marginTop: "2rem", paddingTop: "0.75rem",
+    borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: "0.8rem",
+  });
+  Object.assign(link.style, {
+    display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "inherit",
+    textDecoration: "none",
+  });
+  const icon = link.querySelector("img");
+  Object.assign(icon.style, {
+    width: "2.5rem", height: "2.5rem", objectFit: "contain", padding: "0.2rem",
+    borderRadius: "3px", background: logoBackground,
+  });
+  return footer;
+}
+
 /** A row of results actions with a shared status line. */
 export function resultsBar(countText, actions) {
   return element("div", { className: "actions" }, [

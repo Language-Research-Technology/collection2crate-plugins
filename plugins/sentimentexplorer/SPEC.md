@@ -2,10 +2,8 @@
 
 Implement a visualisation-only plugin named `sentimentexplorer`. It is the
 JavaScript counterpart of LADAL's `SentimentExplorer` Shiny app in
-`/Users/moises/source/github/LADAL/tools/sentimentexplorer/app.R`.
-
-The current `index.js` is deliberately a blank, valid plugin placeholder. This
-file is the behavior contract for the implementation that replaces it.
+the [SLCLADAL/tools repository](https://github.com/SLCLADAL/tools), specifically
+the [SentimentExplorer section](https://github.com/SLCLADAL/tools#-sentimentexplorer--nrc-word-emotion-sentiment-analysis).
 
 ## Plugin contract
 
@@ -34,28 +32,34 @@ categories — `anger`, `anticipation`, `disgust`, `fear`, `joy`, `sadness`,
 categories at once (e.g. "excellent" → `joy`, `positive`, `trust`); a word
 absent from the lexicon belongs to none.
 
-The lexicon itself is **not free to redistribute for commercial use** — the R
-app ships a `nrc_lexicon.csv` the maintainer generates separately from the
-raw NRC release, and shows an explicit error banner when it is missing rather
-than silently analysing nothing. This plugin must do the same:
+The NRC lexicon has licensing terms separate from this repository's software
+license and must not be redistributed as bundled plugin data. The panel must
+make the data download an explicit user action:
 
-- Load the lexicon from its own data file in this folder (e.g.
-  `nrc-lexicon.json`, mirroring how `austlang/austlang-data.json` is a
-  bundled, offline data pack next to its plugin's `index.js`).
-- Dynamically import that data file only when the panel actually renders or
-  runs an analysis, the way `austlang`'s matcher and data pack are imported
-  only when its option is on — so no build that never opens this panel pays
-  for the lexicon's size.
-- If the data file is missing or fails to load, render a clear error state
-  explaining that the NRC lexicon is not bundled, linking to
-  `https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm`, and noting the
-  license: free for research and educational use, commercial use requires
-  permission from the lexicon's author. Do not attempt any analysis in this
-  state.
-- Do not commit the actual lexicon data as part of implementing this spec
-  without first confirming its license permits bundling in this repository;
-  that confirmation is a prerequisite of the implementation task, not
-  something to assume.
+- Do not commit a copy or converted representation of the NRC data in this
+  repository.
+- Explain in the panel that the lexicon is kept out of the repository because
+  its data licensing terms differ from the software licence.
+- Identify Saif M. Mohammad as the lexicon's author and link the publication
+  DOI `10.1111/j.1467-8640.2012.00460.x`.
+- Provide a **Load NRC lexicon** button. When clicked, fetch `nrc_lexicon.csv`
+  from
+  `https://raw.githubusercontent.com/SLCLADAL/tools/main/sentimentexplorer/nrc_lexicon.csv`
+  and load the fetched data into memory for analysis in the current browser
+  session only. Do not trigger a file download or write the data to disk.
+- Keep the **Analyse** button disabled until the lexicon has loaded and passed
+  validation. If loading fails, keep it disabled and explain that the user
+  can retry the load action.
+- Show the required order clearly: **Load NRC lexicon** → **Analyse**.
+- The data file is a CSV with `word` and `sentiment` columns. Map each word to
+  its set of categories; a word may have multiple rows and categories.
+- If the fetch or validation fails, show an actionable error and do not analyse
+  until a valid lexicon is available. Keep a direct link to the
+  LADAL source file available as a fallback.
+- State the lexicon's terms: free for research and educational use; commercial
+  use requires permission from the lexicon's author. Link to
+  `https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm` for the lexicon
+  information and citation.
 
 ## Controls
 

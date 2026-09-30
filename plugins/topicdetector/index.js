@@ -5,7 +5,7 @@
 
 import { buildCsvText, copyText, downloadCsv } from "../../src/_csv.js";
 import {
-  button, dataTable, element, field, flashLabel,
+  attributionFooter, button, dataTable, element, field, flashLabel,
   note, resultsBar,
 } from "../../src/_panel.js";
 
@@ -871,6 +871,14 @@ export function createPlugin() {
           status,
           stage1Wrap,
           stage2Wrap,
+          attributionFooter({
+            logo: "https://ladal.edu.au/images/ladal_icon_white.png",
+            logoAlt: "",
+            logoBackground: "#51247a",
+            href: "https://ladal.edu.au",
+            text: "Language Technology and Data Analysis Laboratory",
+            comment: "Developed with permission from LADAL.",
+          }),
         );
         updateColumns();
         rebuildCorpus();

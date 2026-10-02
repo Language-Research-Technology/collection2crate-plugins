@@ -1,15 +1,10 @@
 # Visualisation plugins
 
-Three panels for collection2crate's Visualise page. 
-
-Panel one is a concordance explorer, panel two is an n-gram analyser, 
-and the third is the chart UI that lives in the host's `main.js` today, 
-moved out here to sit alongside them. 
-
-These plugins read text that a build already produced and let a person
-explore it — interactive panels on collection2crate's Visualise page, doing
-nothing until someone types in them. Everything below follows from that one
-difference.
+Visualisation panels for collection2crate's Visualise page. They read data
+that a build already produced and let a person explore it; they do not run
+during build processing. Panels receive the loaded `documents` and `tables`
+from the host, and may use the selected folder handle only through injected
+host file APIs when they need to persist per-folder settings.
 
 ## The contract
 
@@ -35,9 +30,11 @@ export function createPlugin(deps) {
   element the host owns. It is called each time the panel is shown, and may be
   called again when the loaded documents change; it must not assume it is the
   first call, and must not retain anything between calls except through `ctx`.
-- `ctx` carries `{ documents, tables, log }` — the two views of the loaded data
-  described below, and the host's logger for anything worth putting in the
-  build log.
+- `ctx` carries `{ documents, tables, dirHandle, log }` — the two views of the
+  loaded data described below, the selected folder handle for panels that keep
+  per-folder configuration, and the host's logger for anything worth putting
+  in the build log. A panel must use injected host file APIs rather than read
+  or write through `dirHandle` directly.
 
 A plugin may declare `visualisation` alongside `hooks`, or on its own. These two
 declare no hooks at all: they never run during a build, so they register

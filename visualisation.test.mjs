@@ -24,6 +24,11 @@ import {
   tokenize as tokenizeTopics,
 } from "./plugins/topicdetector/index.js";
 import { chartGeometry } from "./plugins/chart/index.js";
+import {
+  BUILDER_NAMES, createDefaultConfig, datasetsForConfig, embedOptions,
+  generatePlotSpecs, layoutSpan, mapRowsFromColumns, tableToRows, validatePlotsConfig,
+} from "./plugins/plots/model.js";
+import { projectMapPoints } from "./plugins/plots/map.js";
 import { REGISTRY } from "./index.js";
 
 let failures = 0;
@@ -449,6 +454,101 @@ check("fitSeededLDA pulls a seed-word-dominated document toward its topic, and a
 });
 
 console.log("\nchart");
+
+console.log("\nplots");
+
+check("converts table rows to unique object keys", () => {
+  assert.deepEqual(tableToRows({ header: ["name", "name", ""], rows: [["Ada", "Lovelace", "x"]] }), [
+    { name: "Ada", "name (2)": "Lovelace", "column 3": "x" },
+  ]);
+  assert.deepEqual(tableToRows({ header: ["name"], rows: [] }), []);
+});
+
+check("creates named datasets from loaded tables and validates config shape", () => {
+  const tables = [
+    { source: "_outputs/roctable/People.csv", header: ["name"], rows: [["Ada"]] },
+    { source: "_outputs/roctable/Places.csv", header: ["place"], rows: [["Sydney"]] },
+  ];
+  const config = createDefaultConfig(tables);
+  assert.deepEqual(Object.keys(config.plots.datasets), ["People", "Places"]);
+  assert.deepEqual(datasetsForConfig(tables.slice(0, 1), config).missing.map(({ name }) => name), ["Places"]);
+  config.futureOption = { preserved: true };
+  assert.deepEqual(validatePlotsConfig(config).futureOption, { preserved: true });
+});
+
+checkAsync("generates table-backed builder specs and merges plot embed options", async () => {
+  const table = { source: "people.csv", header: ["name", "group"], rows: [["Ada", "A"], ["Lin", "B"]] };
+  const config = createDefaultConfig([table]);
+  const datasetName = Object.keys(config.plots.datasets)[0];
+  config.plots.globalConfig = { actions: false, renderer: "svg" };
+  config.plots.plotList.push({
+    dataset: { name: datasetName },
+    makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group", title: "People" } },
+    generatedSpec: {}, customSpec: {}, config: { renderer: "canvas" }, plotCardSpan: 2,
+  });
+  const { plots, missing } = await generatePlotSpecs(config, [table]);
+  assert.deepEqual(missing, []);
+  assert.equal(plots[0].spec.data.values[0].name, "Ada");
+  assert.deepEqual(embedOptions(config, config.plots.plotList[0]), { actions: false, renderer: "canvas" });
+  assert.equal(layoutSpan(config.plots.plotList[0]), 2);
+});
+
+checkAsync("multiple plots can reuse one configured dataset", async () => {
+  const table = { source: "people.csv", header: ["name", "group"], rows: [["Ada", "A"], ["Lin", "B"]] };
+  const config = createDefaultConfig([table]);
+  const datasetName = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push(
+    { dataset: { name: datasetName }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group" } }, customSpec: {}, config: {} },
+    { dataset: { name: datasetName }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "name" } }, customSpec: {}, config: {} },
+  );
+  const { plots, missing } = await generatePlotSpecs(config, [table]);
+  assert.deepEqual(missing, []);
+  assert.equal(plots.length, 2);
+  assert.deepEqual(plots.map((result) => result.spec.data.values), [
+    [{ name: "Ada", group: "A" }, { name: "Lin", group: "B" }],
+    [{ name: "Ada", group: "A" }, { name: "Lin", group: "B" }],
+  ]);
+  assert.deepEqual(plots.map((result) => result.plot.dataset.name), [datasetName, datasetName]);
+});
+
+checkAsync("custom specs bind the selected in-memory dataset without mutating config", async () => {
+  const table = { source: "people.csv", header: ["name"], rows: [["Ada"]] };
+  const config = createDefaultConfig([table]);
+  const datasetName = Object.keys(config.plots.datasets)[0];
+  const customSpec = { $schema: "https://vega.github.io/schema/vega-lite/v6.json", data: { name: datasetName }, mark: "bar", encoding: { x: { field: "name", type: "nominal" } } };
+  config.plots.plotList.push({ dataset: { name: datasetName }, makeSpec: { plotFunction: "barPlotCount", args: {} }, customSpec, config: {} });
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.deepEqual(plots[0].spec.data.values, [{ name: "Ada" }]);
+  assert.deepEqual(customSpec.data, { name: datasetName });
+});
+
+checkAsync("unknown builder entries are preserved and reported per plot", async () => {
+  const table = { source: "data.csv", header: ["x"], rows: [["a"]] };
+  const config = createDefaultConfig([table]);
+  const datasetName = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push({ dataset: { name: datasetName }, makeSpec: { plotFunction: "futurePlot", args: {} } });
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.match(plots[0].error, /unavailable/);
+  assert.equal(validatePlotsConfig(config).plots.plotList[0].makeSpec.plotFunction, "futurePlot");
+  assert.ok(BUILDER_NAMES.includes("plotMapHeatmap"));
+});
+
+check("projects map coordinates to image points", () => {
+  assert.deepEqual(
+    projectMapPoints([{ lat: 0, lon: 0, weight: 3 }], 2, 1, 1, 0, 0, 256),
+    [{ x: 256, y: 256, weight: 3 }],
+  );
+});
+
+check("maps selected source columns to map coordinates and reports invalid rows", () => {
+  assert.deepEqual(mapRowsFromColumns([
+    { lat_col: "-33.8", lon_col: "151.2", count: "4" },
+    { lat_col: "unknown", lon_col: "0", count: "2" },
+  ], { latitudeField: "lat_col", longitudeField: "lon_col", weightField: "count" }), {
+    data: [{ lat: -33.8, lon: 151.2, weight: 4 }],
+    invalidCoordinates: 1,
+  });
+});
 
 const rows = [
   { name: "one", value: "10" },

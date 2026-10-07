@@ -511,6 +511,22 @@ checkAsync("multiple plots can reuse one configured dataset", async () => {
   assert.deepEqual(plots.map((result) => result.plot.dataset.name), [datasetName, datasetName]);
 });
 
+checkAsync("a value-to-color palette becomes the color scale without mutating config", async () => {
+  const table = { source: "people.csv", header: ["name", "sex"], rows: [["Ada", "Female"], ["Lin", "Male"]] };
+  const config = createDefaultConfig([table]);
+  const datasetName = Object.keys(config.plots.datasets)[0];
+  const palette = { Female: "#ff69b4", Male: "#1e90ff" };
+  config.plots.plotList.push({
+    dataset: { name: datasetName },
+    makeSpec: { plotFunction: "barPlotCount", args: { xVar: "name", colorVar: "sex", palette } },
+    customSpec: {}, config: {},
+  });
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.equal(plots[0].error, null);
+  assert.deepEqual(plots[0].spec.encoding.color.scale, { domain: ["Female", "Male"], range: ["#ff69b4", "#1e90ff"] });
+  assert.deepEqual(config.plots.plotList[0].makeSpec.args.palette, palette);
+});
+
 checkAsync("custom specs bind the selected in-memory dataset without mutating config", async () => {
   const table = { source: "people.csv", header: ["name"], rows: [["Ada"]] };
   const config = createDefaultConfig([table]);

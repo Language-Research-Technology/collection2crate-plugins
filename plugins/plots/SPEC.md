@@ -85,6 +85,17 @@ Preserve the ro-crate-plots configuration shape and all its current features:
   type. Include data-field selectors populated from the selected dataset,
   field types, axis/tooltip titles and labels, temporal units, color field and
   palette, plot title/subtitle, and histogram bin settings where applicable.
+- Palette controls offer **Default colors**, a **Named palette** selected from
+  Vega's built-in color schemes, or (for non-map builders) **Color per value**.
+  The per-value editor lets users select a distinct, non-empty value from the
+  configured color field and assign a color using a picker or a color string
+  such as `#ff69b4` or `pink`. Existing palette names not in the built-in list
+  remain selectable, and existing array-of-colors palettes are preserved as
+  **Color list (unchanged)** rather than being rewritten by the typed editor.
+  Map heatmaps support default or named palettes, but not per-value maps. For
+  non-map builders, a value-to-color object is converted to a Vega color scale
+  with the map keys as its domain and colors as its range; generation must not
+  mutate the saved config or pass the object to the upstream builder.
 - `plotMapHeatmap` must expose latitude, longitude, and optional weight column
   mappings (converted to `lat`, `lon`, and `weight` rows), bandwidth,
   contour count, opacity, palette, zoom, map provider, and target image size

@@ -94,8 +94,9 @@ export function createPlugin(deps = {}) {
           // laid out; embedding while detached makes autosize measure zero.
           await afterLayout();
           for (const { target, result } of pendingEmbeds) {
+            const options = embedOptions(config, result.plot);
             try {
-              const embedded = await embed(target, result.spec, embedOptions(config, result.plot));
+              const embedded = await embed(target, result.spec, options);
               if (typeof ResizeObserver !== "undefined" && embedded?.view) {
                 let previousWidth = target.getBoundingClientRect().width;
                 const observer = new ResizeObserver((entries) => {
@@ -107,7 +108,27 @@ export function createPlugin(deps = {}) {
                 observer.observe(target);
               }
             } catch (error) {
-              target.replaceChildren(note(`Could not render plot ${result.index + 1}: ${error.message}`));
+              if (options.actions === false || options.actions === undefined) {
+                target.replaceChildren(note(`Could not render plot ${result.index + 1}: ${error.message}`));
+                continue;
+              }
+              try {
+                const embedded = await embed(target, result.spec, { ...options, actions: false });
+                const warning = note(`Plot rendered without Vega action links: ${error.message}`);
+                target.before(warning);
+                if (typeof ResizeObserver !== "undefined" && embedded?.view) {
+                  let previousWidth = target.getBoundingClientRect().width;
+                  const observer = new ResizeObserver((entries) => {
+                    const width = entries[0]?.contentRect.width || 0;
+                    if (!width || Math.abs(width - previousWidth) < 1) return;
+                    previousWidth = width;
+                    void embedded.view.resize().runAsync();
+                  });
+                  observer.observe(target);
+                }
+              } catch (fallbackError) {
+                target.replaceChildren(note(`Could not render plot ${result.index + 1}: ${fallbackError.message} (action-link attempt: ${error.message})`));
+              }
             }
           }
           const missingNames = missing.map((item) => item.name);
@@ -147,7 +168,10 @@ export function createPlugin(deps = {}) {
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
 .plots-card h3 { margin:0 0 8px; font-size:1rem; }
-.plots-view { width:100%; min-width:0; min-height:220px; overflow:auto; }
+.plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }
+.plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
+.plots-view.vega-embed.has-actions { height:320px; }
+.plots-view.vega-embed > .chart-wrapper { width:100%; max-width:100%; }
 @media(max-width:900px) { .plots-grid-inner { grid-template-columns:repeat(2,minmax(0,1fr)); } .plots-card[style*="span 3"] { grid-column:span 2 !important; } }
 @media(max-width:600px) { .plots-grid-inner { grid-template-columns:1fr; } .plots-card { grid-column:span 1 !important; } }
 `;

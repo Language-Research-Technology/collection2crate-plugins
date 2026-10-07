@@ -136,6 +136,12 @@ export async function generatePlotSpecs(config, tables) {
       let args = clone(plot.makeSpec.args);
       let builderData = data;
       let warnings = [];
+      // ro-crate-plots' object palette branch calls palette.keys() on a plain object, so apply the map here.
+      let colorMap = null;
+      if (functionName !== "plotMapHeatmap" && isObject(args.palette)) {
+        colorMap = args.palette;
+        delete args.palette;
+      }
       if (functionName === "plotMapHeatmap") {
         ({ plotMapHeatmap: builder } = await import("./map.js"));
         const { latitudeField = "lat", longitudeField = "lon", weightField, ...mapOptions } = args;
@@ -147,6 +153,9 @@ export async function generatePlotSpecs(config, tables) {
       }
       if (typeof builder !== "function") throw new Error(`Builder '${functionName}' is unavailable in this browser.`);
       const spec = await builder({ ...args, data: builderData });
+      if (colorMap && spec.encoding?.color) {
+        spec.encoding.color.scale = { domain: Object.keys(colorMap), range: Object.values(colorMap) };
+      }
       return { index, plot, spec, warnings, error: null };
     } catch (error) {
       return { index, plot, spec: null, error: error.message || String(error) };

@@ -408,7 +408,7 @@ the transcript processing option:
   colour and is marked like the built-in fields, with either reading. A
   label some sample marks is saved in `turnRow.customFields` (`{ key, label }`,
   the key its group in the pattern), and ca-data-prep writes its values as an
-  extra CSV column after `speakerID,text,section`, headed by the label.
+  extra CSV column after `turnNumber,speakerID,text,section`, headed by the label.
   Speaker rows take labels of their own the same way ("Role", "Age"), saved in
   `speakerRow.customFields`; ca-data-prep gives each speaker's Person an
   `additionalProperty` for each non-empty one — a `PropertyValue` entity

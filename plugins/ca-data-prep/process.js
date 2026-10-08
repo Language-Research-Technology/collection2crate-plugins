@@ -604,7 +604,7 @@ export function parseRows(text, warnings = [], sectionDiagnostics = [], headerCh
       const speakerID = classified.code
         ? speakers.get(classified.code)?.optionalCode || classified.code
         : "";
-      lastRow = { speakerID, text: classified.text, section: currentSection };
+      lastRow = { turnNumber: classified.turnNumber || "", speakerID, text: classified.text, section: currentSection };
       rows.push(lastRow);
       sections[sectionName(currentSection)].rowCount += 1;
       continue;
@@ -724,17 +724,18 @@ export function stripTimecodes(text, removed = []) {
 
 /**
  * The transcript CSV. `extraColumns` are the labels of a grammar's own
- * fields, each a column after the three every transcript has, filled from
+ * fields, each a column after the four every transcript has, filled from
  * `row.extra`.
  */
 export function toCsv(rows, extraColumns = []) {
-  const output = [["speakerID", "text", "section", ...extraColumns.map(escapeCsv)].join(",")];
+  const output = [["turnNumber", "speakerID", "text", "section", ...extraColumns.map(escapeCsv)].join(",")];
   for (const row of rows) {
+    const turnNumber = escapeCsv(row.turnNumber || "");
     const speakerID = escapeCsv(row.speakerID || "");
     const text = escapeCsv(row.text || "");
     const section = escapeCsv(row.section || "MAIN");
     const extra = extraColumns.map((label) => `,${escapeCsv(row.extra?.[label] ?? "")}`).join("");
-    output.push(`${speakerID},${text},${section}${extra}`);
+    output.push(`${turnNumber},${speakerID},${text},${section}${extra}`);
   }
   return output.join("\n") + "\n";
 }
@@ -923,6 +924,7 @@ export async function processTranscriptText(text, config = {}) {
   if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
 
   rows = rows.map((row) => ({
+    turnNumber: cleanCharacterValues(row.turnNumber || ""),
     speakerID: cleanCharacterValues(row.speakerID),
     text: cleanCharacterValues(row.text),
     section: cleanCharacterValues(row.section || "MAIN"),
@@ -985,6 +987,7 @@ async function processTranscriptTextWithGrammar(text, config) {
   if (config.headerRows > 0) rows = rows.slice(config.headerRows);
   if (config.footerRows > 0) rows = rows.slice(0, Math.max(0, rows.length - config.footerRows));
   rows = rows.map((row) => ({
+    turnNumber: cleanCharacterValues(row.turnNumber || ""),
     speakerID: cleanCharacterValues(row.speakerID),
     text: cleanCharacterValues(row.text),
     section: cleanCharacterValues(row.section || "MAIN"),

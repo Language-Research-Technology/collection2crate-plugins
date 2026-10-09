@@ -35,7 +35,8 @@ rather than being one stays outside `plugins/`, in `src/`.
 
 Most plugins here tap the build pipeline: they declare `hooks`, run when a
 person presses Process or Build, and write to `ctx`. The rest declare a
-**`visualisation`** panel — `concordance`, `ngrams` and `chart` — which appears
+**`visualisation`** panel — including `concordance`, `ngrams`, `chart`,
+`sentimentexplorer`, `collocation`, `topicdetector` and `plots` — which appears
 on collection2crate's Visualise page, taps nothing, and does not run at all
 until someone opens it:
 
@@ -297,6 +298,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
 | `validate-crate` | `loadMasp` |
 | `concordance`, `ngrams`, `chart` (panels) | none — a panel receives its data in `ctx`, and never touches the folder |
+| `plots` (panel) | `readFileTextFromDirectory`, `writeFileAtPath`, `openModal` (loads and saves `_config/plots/config.json` in the selected folder) |
 | `ro-crate-json-output` | `crateToJsonString`, `writeFile`, `fileExists` |
 | `ro-crate-xlsx-output` | `crateToXlsxBytes`, `writeFile`, `fileExists` |
 | `ro-crate-html-output` | `crateToPreviewHtml`, `crateToMultiPageHtml`, `writeFile`, `writeFileAtPath`, `readJsonFromFolder`, `readFileTextFromDirectory`, `verifyPermission`, `fileExists`, `bustCacheUrl`, `buildGitHubTreeUrl`, `fetchGitHubTextFile`, `listGitHubFolder` |

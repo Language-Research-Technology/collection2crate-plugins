@@ -67,11 +67,11 @@ console.log("Parsing a layout of its own");
 
 await check("rows come out in the CSV shape, speakers resolved to their ids", () => {
   assert.deepEqual(own.rows, [
-    { speakerID: "#p001", text: "first turn", section: "OPENING" },
-    { speakerID: "#p002", text: "second turn that wraps", section: "OPENING" },
-    { speakerID: "ZZ", text: "nobody declared ZZ", section: "BODY" },
-    { speakerID: "", text: "(0.5)", section: "BODY" },
-    { speakerID: "#p001", text: "last", section: "BODY" },
+    { turnNumber: "1", speakerID: "#p001", text: "first turn", section: "OPENING" },
+    { turnNumber: "2", speakerID: "#p002", text: "second turn that wraps", section: "OPENING" },
+    { turnNumber: "3", speakerID: "ZZ", text: "nobody declared ZZ", section: "BODY" },
+    { turnNumber: "4", speakerID: "", text: "(0.5)", section: "BODY" },
+    { turnNumber: "5", speakerID: "#p001", text: "last", section: "BODY" },
   ]);
 });
 
@@ -197,8 +197,8 @@ await check("the tag is matched as written and not captured; the space after it 
   assert.match(TAG.turnRow.pattern, /^\^\[\\t \]\*<u\[\\t \]\+speaker=/);
   const { rows } = await processTranscriptText(asDocx([...TAGGED, "<x speaker=Kai> wrong tag"]), { grammar: TAG });
   assert.deepEqual(rows.slice(0, 2), [
-    { speakerID: "#Kai", text: "first line", section: "MAIN" },
-    { speakerID: "#Rin", text: "second, no space", section: "MAIN" },
+    { turnNumber: "", speakerID: "#Kai", text: "first line", section: "MAIN" },
+    { turnNumber: "", speakerID: "#Rin", text: "second, no space", section: "MAIN" },
   ]);
   assert.equal(rows.length, 3, "a different tag is not a row");
   assert.equal(rows[2].text, "ここも <x speaker=Kai> wrong tag", "…so it folds into the turn above, and is reported");
@@ -242,8 +242,8 @@ await check("turns still parse, speakers come from their codes, and no markers m
   const d = (ps) => ps.join("\n\n") + "\n\n";
   const marked = await processTranscriptText(d(["Transcript: demo", "PRELIMINARIES", "1.\tA:\thello", "MAIN", "2.\tB:\thi"]), {});
   assert.deepEqual(marked.rows, [
-    { speakerID: "#A", text: "hello", section: "PRE" },
-    { speakerID: "#B", text: "hi", section: "MAIN" },
+    { turnNumber: "1", speakerID: "#A", text: "hello", section: "PRE" },
+    { turnNumber: "2", speakerID: "#B", text: "hi", section: "MAIN" },
   ]);
   assert.deepEqual(buildSpeakerPersonEntities(marked.speakerMap).map((p) => p["@id"]), ["#A", "#B"]);
   assert.ok(marked.log.includes("no Speakers block (it is optional)"));
@@ -349,9 +349,9 @@ await check("a grammar's own labels become extra CSV columns, headed by the labe
   const result = await processTranscriptText(lines.join("\n"), { grammar, grammarName: "labels" });
   assert.deepEqual(result.extraColumns, ["Pitch level"]);
   assert.equal(toCsv(result.rows, result.extraColumns),
-    'speakerID,text,section,Pitch level\n#AA,first turn,MAIN,low\n#BB,"second, turn",MAIN,high\n');
-  // Without labels, the CSV is the three columns it always was.
-  assert.equal(toCsv(result.rows).split("\n")[0], "speakerID,text,section");
+    'turnNumber,speakerID,text,section,Pitch level\n1,#AA,first turn,MAIN,low\n2,#BB,"second, turn",MAIN,high\n');
+  // Without labels, the CSV is the four columns every transcript has.
+  assert.equal(toCsv(result.rows).split("\n")[0], "turnNumber,speakerID,text,section");
 });
 
 await check("a grammar's own speaker labels become PropertyValues of each speaker's Person", async () => {
@@ -374,7 +374,7 @@ await check("a grammar's own speaker labels become PropertyValues of each speake
   assert.deepEqual(entities.find((e) => e["@id"] === "#AA-role"), { "@id": "#AA-role", "@type": "PropertyValue", name: "Role", value: "teacher" });
   assert.equal(entities.find((e) => e["@id"] === "#BB-role").value, "student");
   // The CSV is untouched: speaker labels are about speakers, not rows.
-  assert.equal(toCsv(result.rows, result.extraColumns).split("\n")[0], "speakerID,text,section");
+  assert.equal(toCsv(result.rows, result.extraColumns).split("\n")[0], "turnNumber,speakerID,text,section");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

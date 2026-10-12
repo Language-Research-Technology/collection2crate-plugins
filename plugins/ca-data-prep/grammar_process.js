@@ -159,7 +159,7 @@ export function processWithGrammar(text, grammar, { grammarName = grammar?.name 
     if (issues.length) {
       bodyDiagnostics.push({ line: turn.line, content: lines[turn.line - 1].trim(), section: turn.section || "(no section)", code: turn.speaker || null, issues });
     }
-    const row = { speakerID: resolveSpeaker(turn.speaker), text: turn.text || "", section: sectionCode(turn.section) };
+    const row = { turnNumber: turn.turn || "", speakerID: resolveSpeaker(turn.speaker), text: turn.text || "", section: sectionCode(turn.section) };
     // A grammar's own fields ride along, by label, for the CSV's extra columns.
     if (customFields.length) row.extra = Object.fromEntries(customFields.map((f) => [f.label, turn[f.key] || ""]));
     return row;

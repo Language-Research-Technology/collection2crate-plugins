@@ -7,7 +7,7 @@
 //   node transcript.test.mjs
 import assert from "node:assert/strict";
 
-import { processTranscriptText, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities, paragraphNumbersByLine, nearMissMarker } from "./plugins/ca-data-prep/process.js";
+import { processTranscriptText, toCsv, parseRows, mergeContinuationLines, normalizeText, parseSpeakerDetails, buildSpeakerPersonEntities, paragraphNumbersByLine, nearMissMarker } from "./plugins/ca-data-prep/process.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -40,16 +40,27 @@ await check("an unnumbered transcript parses its turns and sections", async () =
   assert.deepEqual(rows.map((r) => r.speakerID), ["#charlie", "#dora", "#sona", "#sona"]);
 });
 
-await check("a leading turn-number column parses identically — the number is dropped", async () => {
+await check("a leading turn-number column parses identically, and the number is kept", async () => {
   const numbered = await processTranscriptText(NUMBERED, {});
   const plain = await processTranscriptText(UNNUMBERED, {});
   assert.deepEqual(shape(numbered), shape(plain));
+  assert.deepEqual(numbered.rows.map((r) => r.turnNumber), ["1", "4", "5", "9"]);
+  assert.deepEqual(plain.rows.map((r) => r.turnNumber), ["", "", "", ""]);
 });
 
-await check("a dotted turn-number column parses identically — the number is dropped", async () => {
+await check("a dotted turn-number column parses identically, and the number is kept without its period", async () => {
   const numbered = await processTranscriptText(NUMBERED_WITH_PERIOD, {});
   const plain = await processTranscriptText(UNNUMBERED, {});
   assert.deepEqual(shape(numbered), shape(plain));
+  assert.deepEqual(numbered.rows.map((r) => r.turnNumber), ["1", "4", "5", "9"]);
+});
+
+await check("the CSV leads with the turn number, empty where a row has none", async () => {
+  const numbered = toCsv((await processTranscriptText(NUMBERED, {})).rows).split("\n");
+  assert.equal(numbered[0], "turnNumber,speakerID,text,section");
+  assert.equal(numbered[1], "1,#charlie,can you tell me your name again?,PRE");
+  const plain = toCsv((await processTranscriptText(UNNUMBERED, {})).rows).split("\n");
+  assert.equal(plain[1], ",#charlie,can you tell me your name again?,PRE");
 });
 
 await check("a numbered transcript keeps its section markers", () => {

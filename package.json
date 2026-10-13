@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "cheerio": "^1.0.0",
+    "compromise": "14.17.0",
     "exceljs": "^4.4.0",
     "mammoth": "^1.12.0",
     "ro-crate": "^3.7.2",
@@ -21,7 +22,8 @@
     "vega-embed": "^7.3.0"
   },
   "scripts": {
-    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node publish-preview-files.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs",
+    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node publish-preview-files.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs && node name-lookup.test.mjs",
+    "test:name-lookup": "node name-lookup.test.mjs",
     "test:hooks": "node hooks.test.mjs",
     "test:publish-filter": "node publish-filter.test.mjs",
     "test:publish-preview-files": "node publish-preview-files.test.mjs",

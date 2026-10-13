@@ -141,10 +141,10 @@ Current assignments, per stage:
 | Stage | Order |
 |---|---|
 | `folder:picked` | — (the existing crate is loaded by collection2crate itself) |
-| `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 · `name-lookup` 50 |
 | `files:write` | `ca-data-prep` 10 · `chat-export` 20 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
-| `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
+| `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `name-lookup` 75 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
 | `crate:write` | `docx-input` 5 · `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
 
@@ -154,6 +154,13 @@ but writes them at `crate:write` — nothing reads them before the crate they
 belong to is written out, and the directory is wiped and rewritten in one go
 rather than accumulating stale media from renamed documents. The bytes live on
 `ctx` in between.
+
+`name-lookup` splits the same way: named entity recognition over each
+`.txt`/`.md`/`.docx` file's text (compromise, offline) runs at `files:prepare`,
+and the names it finds wait on `ctx.namesByFile` until `crate:build` at 75 —
+after `merge`, so a Person or Place merge just described under a name's `@id`
+(`#` plus the name, spaces as underscores) is the one a File is linked to as
+`custom:participant` / `custom:place`, rather than a new one being created.
 
 `ca-data-prep` and `chat-export` each split across two stages on purpose: the
 files they derive are written at `files:write`, during Process, and the
@@ -294,6 +301,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar), `mergeCrateInto` (lands the transcript crate in an existing one) |
 | `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx/.txt reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
+| `name-lookup` | `readFileBytes` (only when a file in `filesWithMeta` has no `handle`) |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
 | `validate-crate` | `loadMasp` |

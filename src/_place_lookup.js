@@ -188,6 +188,17 @@ function regionBonus(candidate, preferredRegion) {
   return candidateMatchesPreferredRegion(candidate, preferredRegion) ? 10 : 0;
 }
 
+// Where several places share a name — GA has a county, a parish and a city
+// all called "Cairns" in Queensland — the one people live in is the one a
+// text or a spreadsheet almost always means. Smaller than the region bonus,
+// so a preferred region still wins over a town somewhere else.
+const POPULATED = /\b(populated place|population centre|population center|locality|town|city|suburb|village|township)\b/i;
+
+function populatedBonus(candidate) {
+  const kinds = [candidate.category, candidate.feature, candidate.feature_type, candidate.featureType, candidate.type];
+  return kinds.some((kind) => typeof kind === "string" && POPULATED.test(kind)) ? 5 : 0;
+}
+
 function flattenCandidates(payload, out = []) {
   if (!payload) return out;
   if (Array.isArray(payload)) {
@@ -247,8 +258,9 @@ function rankCandidate(candidate, targetName, preferredRegion = "") {
   else if (candidateName.startsWith(targetName) || targetName.startsWith(candidateName)) nameRank = 3;
   else if (candidateName.includes(targetName) || targetName.includes(candidateName)) nameRank = 2;
 
-  // Keep exact name quality dominant, then bias toward preferred region for ties/near ties.
-  return (nameRank * 100) + regionBonus(candidate, preferredRegion);
+  // Keep exact name quality dominant, then bias toward preferred region for
+  // ties/near ties, then toward populated places among what is still tied.
+  return (nameRank * 100) + regionBonus(candidate, preferredRegion) + populatedBonus(candidate);
 }
 
 function pickBestRecord(payload, provider, placeName, options = {}) {

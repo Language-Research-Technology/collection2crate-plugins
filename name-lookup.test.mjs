@@ -153,8 +153,9 @@ await check("Process alone links the crate: files:prepare is the only tap", asyn
 await check("coordinates follow merge's region preference, from the folder's merge-config.json", async () => {
   // Geoscience Australia knows two exact "Cairns" and one "Yarrabah"; GHAP nothing.
   const GA = {
-    Cairns: [{ name: "Cairns", latitude: -22.6, longitude: 148.2, authority: "NSW" },
-             { name: "Cairns", latitude: -16.9, longitude: 145.7, authority: "QLD" }],
+    Cairns: [{ name: "Cairns", latitude: -22.6, longitude: 148.2, authority: "QLD", category: "ADMINISTRATIVE AREA", feature: "COUNTY" },
+             { name: "Cairns", latitude: -30.0, longitude: 150.0, authority: "NSW", category: "POPULATED PLACE", feature: "LOCALITY" },
+             { name: "Cairns", latitude: -16.9, longitude: 145.7, authority: "QLD", category: "POPULATED PLACE", feature: "POPULATION CENTRE" }],
     Yarrabah: [{ name: "Yarrabah", latitude: -17.0, longitude: 145.9, authority: "QLD" }],
   };
   const realFetch = globalThis.fetch;
@@ -181,9 +182,29 @@ await check("coordinates follow merge's region preference, from the folder's mer
 
     assert.deepEqual(ids(crate.getProperty("trip.txt", "custom:place")), ["#place-cairns", "#place-yarrabah"]);
     assert.deepEqual(ids(crate.getEntity("#place-cairns").geo), ["#location-cairns"]);
-    assert.deepEqual([].concat(crate.getEntity("#location-cairns").asWKT), ["POINT(145.7 -16.9)"], "the QLD Cairns, not the first one");
+    assert.deepEqual([].concat(crate.getEntity("#location-cairns").asWKT), ["POINT(145.7 -16.9)"], "the QLD city: not the QLD county listed first, nor the town in NSW");
     assert.deepEqual(ids(crate.getEntity("#place-yarrabah").geo), ["#yarrabah-by-hand"], "a Place's own coordinates are kept");
     assert.ok(logs.some((m) => /preferring places in QLD/.test(m)), "the log says which region it preferred");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("ties go to the region first, then to a populated place", async () => {
+  const { createPlaceLookupService } = await import("./src/_place_lookup.js");
+  const county = { name: "Cairns", latitude: -22.6, longitude: 148.2, authority: "QLD", category: "ADMINISTRATIVE AREA", feature: "COUNTY" };
+  const nswTown = { name: "Cairns", latitude: -30.0, longitude: 150.0, authority: "NSW", category: "POPULATED PLACE", feature: "LOCALITY" };
+  const realFetch = globalThis.fetch;
+  const answer = (rows) => {
+    globalThis.fetch = async (url) => new Response(
+      JSON.stringify({ features: url.toString().includes("ga.gov.au") ? rows.map((attributes) => ({ attributes })) : [] }),
+      { headers: { "content-type": "application/json" } });
+  };
+  const lookup = (region) => createPlaceLookupService({ placeMatchRegion: region, providers: ["geoscience-australia"] }).lookup("Cairns");
+  try {
+    answer([county, nswTown]);
+    assert.equal((await lookup("")).latitude, -30.0, "no region: the populated place over the county");
+    assert.equal((await lookup("QLD")).latitude, -22.6, "the preferred region outranks a town elsewhere");
   } finally {
     globalThis.fetch = realFetch;
   }

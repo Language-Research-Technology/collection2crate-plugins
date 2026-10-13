@@ -195,7 +195,7 @@ function regionBonus(candidate, preferredRegion) {
 const POPULATED = /\b(populated place|population centre|population center|locality|town|city|suburb|village|township)\b/i;
 
 function populatedBonus(candidate) {
-  const kinds = [candidate.category, candidate.feature, candidate.feature_type, candidate.featureType, candidate.type];
+  const kinds = [candidate.category, candidate.feature, candidate.feature_term, candidate.feature_type, candidate.featureType, candidate.type];
   return kinds.some((kind) => typeof kind === "string" && POPULATED.test(kind)) ? 5 : 0;
 }
 
@@ -357,13 +357,28 @@ function escapeWhereLiteral(value) {
   return String(value || "").replace(/'/g, "''");
 }
 
+// TLCMap's Gazetteer of Historical Australian Places (GHAP), through its
+// search API (https://tlcmap.org/api — docs: tlcmap-docs, developers/
+// search-api.md). /api serves the ANPS and Composite gazetteers only, never
+// user-contributed layers. Answers are GeoJSON Features whose properties carry
+// name, state and feature_term ("populated place", "county", …). Like the GA
+// lookup: an exact name first (`name` matches the title, case-insensitively),
+// then — unless exactOnly — names containing it.
 async function lookupViaGhap(placeName, options) {
-  const baseUrl = String(options?.url || "https://placenames.ghaap.org/api/placename/").trim();
+  const baseUrl = String(options?.url || "https://tlcmap.org/api").trim();
   if (!baseUrl) return null;
-  const url = new URL(baseUrl);
-  url.searchParams.set(String(options?.queryParam || "search"), placeName);
-  const payload = await fetchJson(url, options?.timeoutMs || 2500);
-  return pickBestRecord(payload, "ghap", placeName, options);
+  const search = (param) => {
+    const url = new URL(baseUrl);
+    url.searchParams.set("format", "json");
+    url.searchParams.set(param, placeName);
+    url.searchParams.set("per_page", String(options?.perPage || 50));
+    return url;
+  };
+  // TLCMap takes about 3s a request, past the 2.5s GA gets.
+  const timeoutMs = options?.timeoutMs || 10000;
+  const match = pickBestRecord(await fetchJson(search("name"), timeoutMs), "ghap", placeName, options);
+  if (match || options?.exactOnly) return match;
+  return pickBestRecord(await fetchJson(search("containsname"), timeoutMs), "ghap", placeName, options);
 }
 
 async function lookupViaGeoscienceAustralia(placeName, options) {

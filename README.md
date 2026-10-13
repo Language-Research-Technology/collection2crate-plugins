@@ -18,7 +18,7 @@ index.js                 REGISTRY — the one registry, keyed by plugin name
 plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
 src/_entity_ids.js       the @id an entity made from a name gets, shared by merge and name-lookup
-src/_place_lookup.js     GA/GHAP gazetteer lookup and the Geometry it writes, shared by merge and name-lookup
+src/_place_lookup.js     GA and GHAP (TLCMap's search API) gazetteer lookup and the Geometry it writes, shared by merge and name-lookup
 src/_merge_config.js     which merge config a run uses (uploaded, folder, bundled), shared the same way
 src/_csv.js              CSV building and download, for visualisation panels
 src/_panel.js            the DOM vocabulary those panels share

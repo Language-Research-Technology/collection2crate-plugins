@@ -203,12 +203,13 @@ const plugin = {
             const { config, source } = await resolveMergeConfig(ctx.options, ctx.dirHandle, readJsonFromFolder);
             const settings = placeLookupSettings(config);
             if (settings.placeMatchRegion) ctx.log(`Name lookup: preferring places in ${settings.placeMatchRegion} (merge config: ${source}).`, "muted");
-            // A timed-out lookup reads as "not a place", and the shared 2.5s
-            // default loses the first few requests of a cold connection.
+            // A timed-out lookup reads as "not a place", and GA's 2.5s default
+            // loses the first few requests of a cold connection. GHAP has its own,
+            // longer default.
             const service = createPlaceLookupService({
               ...settings,
               geoscienceAustralia: { exactOnly: true, timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.geoscienceAustralia },
-              ghap: { timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.ghap },
+              ghap: { exactOnly: true, ...settings.ghap },
             });
 
             const all = Object.values(namesByFile);

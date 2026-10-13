@@ -4,7 +4,10 @@
 //
 //   node place-lookup.test.mjs
 import assert from "node:assert/strict";
+import { ROCrate } from "ro-crate";
+import ExcelJS from "exceljs";
 import { createPlaceLookupService } from "./src/_place_lookup.js";
+import { REGISTRY } from "./index.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -84,5 +87,34 @@ await check("GHAP is asked only when GA has no match", () => withStubFetch(
     assert.ok(!asked.some((u) => u.hostname === "tlcmap.org"));
   },
 ));
+
+await check("exactOnly for the whole service keeps every provider to exact names", () => withStubFetch(null, async () => {
+  const match = await createPlaceLookupService({ exactOnly: true }).lookup("Murray Upp");
+  assert.equal(match, null);
+  assert.ok(!asked.some((u) => u.searchParams.has("containsname")), "no GHAP containsname search");
+  assert.ok(!asked.some((u) => /like/i.test(u.searchParams.get("where") || "")), "no GA starts-with search");
+}));
+
+// merge's "Exact place names only" (placeExactOnly), through its own Build tap.
+async function mergePlace(options) {
+  const book = new ExcelJS.Workbook();
+  book.addWorksheet("Files").addRows([["@id", ".location"], ["a.txt", "Murray Upp"]]);
+  const bytes = await book.xlsx.writeBuffer();
+  const crate = new ROCrate({ array: true, link: true });
+  crate.addEntity({ "@id": "a.txt", "@type": "File", name: "a.txt" });
+  const plugin = REGISTRY.merge({ readJsonFromFolder: async () => null, graphEntityById: (c, id) => c.getEntity(id) });
+  await plugin.hooks["crate:build"].handler({
+    crate, dirHandle: {}, log: () => {},
+    options: { merge: true, mergeUpload: { name: "m.xlsx", file: { arrayBuffer: async () => bytes } }, ...options },
+  });
+  return crate.getEntity("#place-murray-upp");
+}
+
+await check("merge: partial matches by default, exact only when placeExactOnly is on", () => withStubFetch(null, async () => {
+  const partial = await mergePlace({});
+  assert.deepEqual([].concat(partial.geo).map((g) => g["@id"]), ["#location-murray-upp"], "Murray Upper's coordinates");
+  const exact = await mergePlace({ placeExactOnly: true });
+  assert.equal([].concat(exact.geo ?? []).length, 0, "no coordinates without an exact name");
+}));
 
 if (failures) { console.log(`\n${failures} check(s) failed.`); process.exit(1); }

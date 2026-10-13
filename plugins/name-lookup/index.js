@@ -82,22 +82,25 @@ export function linkNamedEntities(crate, namesByFile, fileNames = {}) {
 }
 
 /**
- * The candidates a gazetteer knows as places. A gazetteer answers with its
- * nearest match, so only one whose name is the candidate's — or a spelling of
- * it the lookup tries itself, "Mt Isa" for "Mount Isa" — counts.
+ * The candidates a gazetteer knows as places, each marked exact or partial.
+ * Exact: the gazetteer's name is the candidate's, or a spelling of it the
+ * lookup tries itself ("Mt Isa" for "Mount Isa"). Partial: anything else it
+ * answered with — GA's names starting with the candidate, GHAP's containing it
+ * ("Murray Upper" for "Murray Upp"). Exact matches are ranked first, so a
+ * partial one only stands where the gazetteer had nothing better.
  *
  * @param {string[]} candidates
  * @param {(name: string) => Promise<{matchedName?: string}|null>} lookup
- * @returns {Promise<Set<string>>}
+ * @returns {Promise<Map<string, { exact: boolean, matchedName: string }>>}
  */
 export async function confirmPlaces(candidates, lookup) {
   const { normalizePlaceName, placeNameVariants } = await import("../../src/_place_lookup.js");
-  const confirmed = new Set();
+  const confirmed = new Map();
   for (const name of candidates) {
     const match = await lookup(name);
     if (!match) continue;
     const spellings = new Set([name, ...placeNameVariants(name)].map(normalizePlaceName));
-    if (spellings.has(normalizePlaceName(match.matchedName))) confirmed.add(name);
+    confirmed.set(name, { exact: spellings.has(normalizePlaceName(match.matchedName)), matchedName: match.matchedName || "" });
   }
   return confirmed;
 }
@@ -150,7 +153,11 @@ const plugin = {
     hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
       { key: "nameLookupGazetteer", label: "Look names up in the Australian gazetteers", default: true,
-        hint: "Uses Geoscience Australia and GHAP to treat other capitalised names that match a place exactly as places, and to give places coordinates — preferring the region set as placeMatchRegion in the merge config. Needs the network." },
+        hint: "Uses Geoscience Australia and GHAP to treat other capitalised names that match a place as places, and to give places coordinates, preferring the region set as placeMatchRegion in the merge config. Needs the network.",
+        children: [
+          { key: "nameLookupExactOnly", label: "Exact place names only", default: false,
+            hint: "Off: a name the gazetteers don't know exactly is still a place if one starts with or contains it (\"Murray Upp\" → Murray Upper), and takes its coordinates. On: only exact names count." },
+        ] },
     ],
   },
   hooks: {
@@ -206,10 +213,12 @@ const plugin = {
             // A timed-out lookup reads as "not a place", and GA's 2.5s default
             // loses the first few requests of a cold connection. GHAP has its own,
             // longer default.
+            const exactOnly = !!ctx.options.nameLookupExactOnly;
             const service = createPlaceLookupService({
               ...settings,
-              geoscienceAustralia: { exactOnly: true, timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.geoscienceAustralia },
-              ghap: { exactOnly: true, ...settings.ghap },
+              ...(exactOnly ? { exactOnly } : {}),
+              geoscienceAustralia: { timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.geoscienceAustralia },
+              ghap: { ...settings.ghap },
             });
 
             const all = Object.values(namesByFile);
@@ -218,13 +227,22 @@ const plugin = {
             await service.prefetch([...candidates, ...places], (fraction, label) => progress.report(readShare + fraction * (1 - readShare), label));
 
             const confirmed = await confirmPlaces(candidates, (name) => service.lookup(name));
+            // The lookup already asked for exact names only; this also drops a
+            // gazetteer's nearest answer to an exact query that isn't one.
+            if (exactOnly) for (const [name, m] of confirmed) if (!m.exact) confirmed.delete(name);
             for (const names of all) {
               names.places = [...names.places, ...names.candidates.filter((name) => confirmed.has(name))];
             }
             if (candidates.length) {
               ctx.log(`Name lookup: the gazetteers know ${confirmed.size} of ${candidates.length} other name(s) as places.`, confirmed.size ? "ok" : "muted");
             }
-            for (const name of [...places, ...confirmed]) {
+            // Partial matches are the ones worth a second look, so name them.
+            const partial = [...confirmed].filter(([, m]) => !m.exact);
+            if (partial.length) {
+              const shown = partial.slice(0, 10).map(([name, m]) => `${name} → ${m.matchedName}`).join("; ");
+              ctx.log(`Name lookup: ${partial.length} place(s) by partial match: ${shown}${partial.length > 10 ? "; …" : ""}.`, "muted");
+            }
+            for (const name of [...places, ...confirmed.keys()]) {
               const match = await service.lookup(name);
               if (match) coordinates.set(name, match);
             }

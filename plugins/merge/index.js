@@ -29,7 +29,11 @@ const plugin = {
       { key: "mergeMappingBuilder", type: "mappingBuilder", label: "Build mapping from spreadsheet columns…",
         hint: "Reads the column headers from the spreadsheet above and lets you set a target property (and type) for each one. You can also load an existing mapping config.json from inside that dialog." },
       { key: "doPlaceLookups", label: "Do placenames lookup", default: true,
-        hint: "When on, merged Place entities try to look up coordinates and generate linked Geometry entities." },
+        hint: "When on, merged Place entities try to look up coordinates and generate linked Geometry entities.",
+        children: [
+          { key: "placeExactOnly", label: "Exact place names only", default: false,
+            hint: "Off: a place name the gazetteers don't know exactly takes the coordinates of the closest one starting with or containing it (\"Murray Upp\" → Murray Upper). On: only an exact name gets coordinates." },
+        ] },
     ],
   },
   hooks: {
@@ -53,6 +57,7 @@ const plugin = {
           placeLookup: {
             ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}),
             enabled: options.doPlaceLookups !== false,
+            ...(options.placeExactOnly ? { exactOnly: true } : {}),
           },
         };
         if (options.doPlaceLookups === false) log("Placename lookup disabled by settings.", "muted");

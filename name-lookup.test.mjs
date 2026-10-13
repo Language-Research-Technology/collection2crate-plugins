@@ -95,11 +95,15 @@ await check("reads a PDF's text", async () => {
   assert.match(text, /Dora Leung visited Mount Isa\./);
 });
 
-await check("the gazetteer confirms only exact names, or the spellings it tries itself", async () => {
+await check("the gazetteer confirms exact names and partial ones, and says which", async () => {
   const gazetteer = { Yarrabah: "Yarrabah", Dyirbal: "Dyirbal Creek", "Mt Garnet": "Mount Garnet" };
   const lookup = async (name) => (gazetteer[name] ? { matchedName: gazetteer[name] } : null);
   const confirmed = await confirmPlaces(["Yarrabah", "Dyirbal", "Mt Garnet", "Jambun"], lookup);
-  assert.deepEqual([...confirmed], ["Yarrabah", "Mt Garnet"]);
+  assert.deepEqual([...confirmed], [
+    ["Yarrabah", { exact: true, matchedName: "Yarrabah" }],
+    ["Dyirbal", { exact: false, matchedName: "Dyirbal Creek" }],
+    ["Mt Garnet", { exact: true, matchedName: "Mount Garnet" }],
+  ]);
 });
 
 await check("reuses an existing entity, creates the rest, links each once", () => {
@@ -205,6 +209,40 @@ await check("ties go to the region first, then to a populated place", async () =
     answer([county, nswTown]);
     assert.equal((await lookup("")).latitude, -30.0, "no region: the populated place over the county");
     assert.equal((await lookup("QLD")).latitude, -22.6, "the preferred region outranks a town elsewhere");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("a partial match is a place too, named as the file has it, and logged — unless exact names only", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const where = new URL(url).searchParams.get("where") || "";
+    const rows = /like upper\('Jambun%'\)/.test(where)
+      ? [{ name: "Jambun Creek", latitude: -17.9, longitude: 145.9, authority: "QLD", category: "WATERWAY", feature: "CREEK" }]
+      : [];
+    return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const crate = new ROCrate({ array: true, link: true });
+    const plugin = REGISTRY["name-lookup"]({ readJsonFromFolder: async () => null });
+    const bytes = new TextEncoder().encode("We camped at Jambun with Chloe Grant.");
+    const logs = [];
+    await plugin.hooks["files:prepare"].handler({
+      options: { enableNameLookups: true }, crate, dirHandle: {}, log: (m) => logs.push(m),
+      filesWithMeta: [{ id: "camp.txt", relativePath: "camp.txt", fileName: "camp.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
+    });
+    assert.deepEqual(ids(crate.getProperty("camp.txt", "custom:place")), ["#place-jambun"]);
+    assert.deepEqual([].concat(crate.getEntity("#place-jambun").name), ["Jambun"], "the name as the file has it, not the gazetteer's");
+    assert.deepEqual([].concat(crate.getEntity("#location-jambun").asWKT), ["POINT(145.9 -17.9)"]);
+    assert.ok(logs.some((m) => /1 place\(s\) by partial match: Jambun → Jambun Creek/.test(m)), "the partial match is named in the log");
+
+    const exactCrate = new ROCrate({ array: true, link: true });
+    await plugin.hooks["files:prepare"].handler({
+      options: { enableNameLookups: true, nameLookupExactOnly: true }, crate: exactCrate, dirHandle: {}, log: () => {},
+      filesWithMeta: [{ id: "camp.txt", relativePath: "camp.txt", fileName: "camp.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
+    });
+    assert.equal(exactCrate.getEntity("#place-jambun"), undefined, "with exact names only, Jambun isn't a place");
   } finally {
     globalThis.fetch = realFetch;
   }

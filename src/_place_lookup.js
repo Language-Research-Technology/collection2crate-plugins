@@ -410,6 +410,10 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
   const placeMatchRegion = String(
     settings.placeMatchRegion || settings.preferredRegion || settings.region || ""
   ).trim();
+  // exactOnly: only a place whose name is the one asked for (or a spelling the
+  // lookup tries itself) — no names starting with or containing it. Applies to
+  // every provider; a provider's own exactOnly can still turn it on alone.
+  const exactOnly = settings.exactOnly === true;
   const providers = Array.isArray(settings.providers) && settings.providers.length
     ? settings.providers
     : ["geoscience-australia", "ghap"];
@@ -449,11 +453,13 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
           if (provider === "ghap") {
             match = await lookupViaGhap(variant, {
               ...(settings.ghap || {}),
+              ...(exactOnly ? { exactOnly } : {}),
               placeMatchRegion,
             });
           } else if (provider === "geoscience-australia") {
             match = await lookupViaGeoscienceAustralia(variant, {
               ...(settings.geoscienceAustralia || {}),
+              ...(exactOnly ? { exactOnly } : {}),
               placeMatchRegion,
             });
           }

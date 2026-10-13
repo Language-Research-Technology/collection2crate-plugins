@@ -167,7 +167,9 @@ shared with `merge`), and each name turned into the `@id` merge would give it
 created as a `Person` or `Place` if not. With the gazetteer on, places get
 coordinates as a linked `Geometry`, written as merge writes them and looked
 up with the merge config's `placeMatchRegion`; a Place that already has a
-`geo` keeps it. Files are linked as
+`geo` keeps it. A gazetteer name that only starts with or contains the
+file's ("Murray Upp" → Murray Upper) counts too, unless `nameLookupExactOnly`
+is on — `merge`'s `placeExactOnly` makes the same choice for merged places. Files are linked as
 `custom:participant` / `custom:place`. Build starts from the crate Process
 finished with, so the links are there without a `crate:build` tap; a File new
 to the crate is added bare, and `generic-input`'s scan fills it in.

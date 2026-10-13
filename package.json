@@ -23,9 +23,9 @@
     "vega-embed": "^7.3.0"
   },
   "scripts": {
-    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node publish-preview-files.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs && node name-lookup.test.mjs && node place-lookup.test.mjs",
+    "test": "node hooks.test.mjs && node crate-outputs.test.mjs && node publish-filter.test.mjs && node publish-preview-files.test.mjs && node visualisation.test.mjs && node transcript.test.mjs && node transcript-grammar.test.mjs && node transcript-with-grammar.test.mjs && node txt-transcripts.test.mjs && node name-lookup.test.mjs && node place-lookup.test.mjs && node merge-place-geometry.test.mjs",
     "test:name-lookup": "node name-lookup.test.mjs",
-    "test:place-lookup": "node place-lookup.test.mjs",
+    "test:place-lookup": "node place-lookup.test.mjs && node merge-place-geometry.test.mjs",
     "test:hooks": "node hooks.test.mjs",
     "test:publish-filter": "node publish-filter.test.mjs",
     "test:publish-preview-files": "node publish-preview-files.test.mjs",

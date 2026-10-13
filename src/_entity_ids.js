@@ -17,10 +17,16 @@ export function generatedEntityId(type, value) {
   return `#${slug}`;
 }
 
+// The @id of the Geometry a Place's `geo` names, if any. `geo` is an array in
+// crates built with { array: true } (as ours are), a single object otherwise.
+export function placeGeoId(placeEntity) {
+  return String([].concat(placeEntity?.geo ?? [])[0]?.["@id"] || "").trim();
+}
+
 // The Geometry holding a Place's coordinates: the one it already names, else
 // "#location-…" beside a "#place-…" @id.
 export function generatedGeometryId(placeEntity, placeName) {
-  const explicit = String(placeEntity?.geo?.["@id"] || "").trim();
+  const explicit = placeGeoId(placeEntity);
   if (explicit) return explicit;
   const placeId = String(placeEntity?.["@id"] || "").trim();
   if (placeId.startsWith("#place-")) return `#location-${placeId.slice("#place-".length)}`;

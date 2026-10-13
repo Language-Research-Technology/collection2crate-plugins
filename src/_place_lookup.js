@@ -1,7 +1,7 @@
 // Coordinates for a place name from the Geoscience Australia and GHAP
 // gazetteers. Shared: merge uses it to give merged Places coordinates,
 // name-lookup to decide whether a proper name is a place, and to place it.
-import { generatedGeometryId } from "./_entity_ids.js";
+import { generatedGeometryId, placeGeoId } from "./_entity_ids.js";
 export function normalizePlaceName(value) {
   return String(value || "")
     .trim()
@@ -544,7 +544,7 @@ export function setPlaceGeometry(crate, placeId, placeName, lookup) {
   const placeNode = crate.getEntity(placeId);
   const geometryId = generatedGeometryId(placeNode || { "@id": placeId }, placeName);
   let geometryNode = crate.getEntity(geometryId);
-  const hadGeo = !!placeNode?.geo?.["@id"];
+  const hadGeo = !!placeGeoId(placeNode);
   let createdGeometry = false;
   if (!geometryNode) {
     crate.addEntity({

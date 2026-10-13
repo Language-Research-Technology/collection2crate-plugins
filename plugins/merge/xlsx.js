@@ -8,7 +8,7 @@
 // passed in by the caller (merge/index.js's createPlugin(deps)) rather than
 // imported by relative path, per this repo's README.
 import ExcelJS from "exceljs";
-import { createPlaceLookupService } from "./place_lookup.js";
+import { createPlaceLookupService } from "../../src/_place_lookup.js";
 
 // ExcelJS cell values can be plain scalars or rich objects (formula results,
 // rich text, hyperlinks); normalise to a plain string.

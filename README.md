@@ -17,6 +17,7 @@ dependency between the two repos.
 index.js                 REGISTRY — the one registry, keyed by plugin name
 plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
+src/_place_lookup.js     GA/GHAP gazetteer lookup, shared by merge and name-lookup
 src/_csv.js              CSV building and download, for visualisation panels
 src/_panel.js            the DOM vocabulary those panels share
 src/_transcript_grammar.js  transcript grammars: generation, parsing, saved-grammar I/O
@@ -144,7 +145,7 @@ Current assignments, per stage:
 | `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 · `name-lookup` 50 |
 | `files:write` | `ca-data-prep` 10 · `chat-export` 20 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
-| `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `name-lookup` 75 · `roctable` 80 |
+| `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
 | `crate:validate` | `validate-crate` 10 |
 | `crate:write` | `docx-input` 5 · `roctable` 10 · `ro-crate-json-output` 20 · `ro-crate-xlsx-output` 30 · `ro-crate-html-output` 40 |
 
@@ -155,12 +156,16 @@ belong to is written out, and the directory is wiped and rewritten in one go
 rather than accumulating stale media from renamed documents. The bytes live on
 `ctx` in between.
 
-`name-lookup` splits the same way: named entity recognition over each
-`.txt`/`.md`/`.docx` file's text (compromise, offline) runs at `files:prepare`,
-and the names it finds wait on `ctx.namesByFile` until `crate:build` at 75 —
-after `merge`, so a Person or Place merge just described under a name's `@id`
-(`#` plus the name, spaces as underscores) is the one a File is linked to as
-`custom:participant` / `custom:place`, rather than a new one being created.
+`name-lookup` does all its work at `files:prepare`, during Process, on the
+crate the run was seeded with: named entity recognition (compromise) over each
+`.txt`/`.md`/`.docx`/`.pdf` file's text (PDFs through `unpdf`), other proper
+names checked against the GA and GHAP gazetteers (`src/_place_lookup.js`,
+shared with `merge`), and each name turned into an `@id` — `#` plus the name,
+spaces as underscores — that is reused if the crate already holds it and
+created as a `Person` or `Place` if not. Files are linked as
+`custom:participant` / `custom:place`. Build starts from the crate Process
+finished with, so the links are there without a `crate:build` tap; a File new
+to the crate is added bare, and `generic-input`'s scan fills it in.
 
 `ca-data-prep` and `chat-export` each split across two stages on purpose: the
 files they derive are written at `files:write`, during Process, and the

@@ -1,7 +1,7 @@
 // Named entity recognition over a file's text: the people's and places' names
-// it mentions. compromise (and its lexicon) is imported here, and this module
-// is itself only imported when the plugin's option is on, so neither reaches
-// the main bundle of a build that never asks for it.
+// it mentions. compromise (and its lexicon) and the PDF reader are imported
+// here, and this module is itself only imported when the plugin's option is
+// on, so none of them reaches the main bundle of a build that never asks.
 import nlp from "compromise";
 import { extractDocumentText, decodePlainText } from "../ca-data-prep/process.js";
 
@@ -9,13 +9,24 @@ import { extractDocumentText, decodePlainText } from "../ca-data-prep/process.js
 // skipped without a word — most of a language-resources folder isn't prose.
 const PLAIN_TEXT = /\.(txt|md|markdown)$/i;
 const WORD = /\.docx$/i;
+const PDF = /\.pdf$/i;
 
-export const isReadableForNames = (fileName) => PLAIN_TEXT.test(fileName) || WORD.test(fileName);
+export const isReadableForNames = (fileName) =>
+  PLAIN_TEXT.test(fileName) || WORD.test(fileName) || PDF.test(fileName);
+
+// unpdf is pdf.js built to run without a worker, so the same call works in the
+// browser and under node (the tests). Its own pdf.js build loads on first use.
+async function pdfText(bytes) {
+  const { extractText } = await import("unpdf");
+  const { text } = await extractText(new Uint8Array(bytes), { mergePages: true });
+  return text;
+}
 
 /** The text of one file, from its bytes; "" for a type this doesn't read. */
 export async function fileText(bytes, fileName) {
   if (!bytes) return "";
   if (WORD.test(fileName)) return extractDocumentText(bytes);
+  if (PDF.test(fileName)) return pdfText(bytes);
   if (PLAIN_TEXT.test(fileName)) return decodePlainText(bytes);
   return "";
 }
@@ -24,20 +35,42 @@ export async function fileText(bytes, fileName) {
 // without the possessive it reads one. A curly apostrophe is common in Word.
 const POSSESSIVE = /(\p{L})['’]s\b/gu;
 
-// The words of a match, honorifics dropped ("Mrs. Mary O'Brien" → "Mary
-// O'Brien"), each without the punctuation around it ("Palm Island." → "Palm
-// Island"), so a name is spelled the same wherever it occurs.
+// Punctuation after a word that ends a name: "George Watson, Jambun" is two.
+const BREAK_AFTER = /[,.;:!?()\[\]"“”]/;
+
+// The names in a view, honorifics dropped ("Mrs. Mary O'Brien" → "Mary
+// O'Brien"), each word without the punctuation around it ("Palm Island." →
+// "Palm Island"), so a name is spelled the same wherever it occurs. A match
+// running across a comma or full stop is split there.
 function namesOf(view) {
   const out = new Set();
-  for (const match of view.not("#Honorific").json({ terms: { text: true } })) {
-    const name = match.terms.map((term) => term.text).filter(Boolean).join(" ").trim();
-    if (name) out.add(name);
+  for (const match of view.not("#Honorific").json({ terms: { text: true, post: true } })) {
+    let words = [];
+    const flush = () => {
+      const name = words.join(" ").trim();
+      if (name) out.add(name);
+      words = [];
+    };
+    for (const term of match.terms) {
+      if (term.text) words.push(term.text);
+      if (BREAK_AFTER.test(term.post || "")) flush();
+    }
+    flush();
   }
   return [...out];
 }
 
-/** The distinct person and place names in `text`, in the order first seen. */
+/**
+ * The distinct names in `text`, in the order first seen: compromise's people
+ * and places, and every other proper-noun phrase as a `candidate` — compromise
+ * knows few places outside its lexicon (Yarrabah, Kuranda), so those are left
+ * for a gazetteer to decide.
+ */
 export function extractNames(text) {
   const doc = nlp(String(text || "").replace(POSSESSIVE, "$1"));
-  return { people: namesOf(doc.people()), places: namesOf(doc.places()) };
+  const people = namesOf(doc.people());
+  const places = namesOf(doc.places());
+  const known = new Set([...people, ...places]);
+  const candidates = namesOf(doc.match("#ProperNoun+").not("(#Person|#Place)")).filter((name) => !known.has(name));
+  return { people, places, candidates };
 }

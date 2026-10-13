@@ -19,6 +19,7 @@
     "ro-crate-plots": "github:Language-Research-Technology/ro-crate-plots#123bcc83c3b68902bfb285db204a1698dca0822f",
     "roctable": "github:ptsefton/roctable",
     "unicode-name": "^1.1.0",
+    "unpdf": "1.8.1",
     "vega-embed": "^7.3.0"
   },
   "scripts": {

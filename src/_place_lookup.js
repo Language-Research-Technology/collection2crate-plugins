@@ -1,4 +1,7 @@
-function normalizePlaceName(value) {
+// Coordinates for a place name from the Geoscience Australia and GHAP
+// gazetteers. Shared: merge uses it to give merged Places coordinates,
+// name-lookup to decide whether a proper name is a place at all.
+export function normalizePlaceName(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
@@ -21,7 +24,7 @@ function normalizeCommonPlaceTypos(value) {
     .replace(/\blslands\b/gi, "Islands");
 }
 
-function placeNameVariants(placeName) {
+export function placeNameVariants(placeName) {
   const start = titleCaseWords(normalizeCommonPlaceTypos(placeName));
   if (!start) return [];
 

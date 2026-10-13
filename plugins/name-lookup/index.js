@@ -12,6 +12,7 @@
 // Hook names are literal strings and core collection2crate functions arrive
 // via createPlugin(deps) — see this repo's README.
 import { progressFor } from "../../src/_progress.js";
+import { generatedEntityId } from "../../src/_entity_ids.js";
 
 let readFileBytes;
 
@@ -30,14 +31,6 @@ const PROPERTY_DEFINITIONS = {
   [PLACE]: { "@id": "arcp://name,custom/terms#place", "@type": "rdf:Property", name: "Place", description: "A place named in the file's contents." },
 };
 
-/**
- * A name's @id: "#" and the name, spaces as underscores — "John Smith" is
- * "#John_Smith". Deliberately the obvious spelling, so an entity someone
- * already described by hand under that @id is found and reused rather than
- * duplicated.
- */
-export const nameToId = (name) => `#${String(name).trim().replace(/\s+/g, "_")}`;
-
 const refsOf = (value) => (Array.isArray(value) ? value : value ? [value] : [])
   .filter((v) => v !== "" && v != null);
 
@@ -50,7 +43,7 @@ function link(crate, fileId, property, id) {
 
 /**
  * Link each file to the people and places found in it, reusing any entity
- * the crate already has under a name's @id and creating a Person or Place for
+ * the crate already has under a name's @id (merge's scheme, src/_entity_ids.js) and creating a Person or Place for
  * the rest. A File the crate doesn't hold yet is added, named from `fileNames`.
  *
  * @param {ROCrate} crate
@@ -70,7 +63,7 @@ export function linkNamedEntities(crate, namesByFile, fileNames = {}) {
     }
     for (const [key, type, property] of kinds) {
       for (const name of names?.[key] || []) {
-        const id = nameToId(name);
+        const id = generatedEntityId(type, name);
         if (!seen.has(id)) {
           seen.add(id);
           if (crate.getEntity(id)) counts.reused++;
@@ -128,7 +121,7 @@ const plugin = {
   name: "name-lookup",
   optionSchema: {
     key: "enableNameLookups", label: "Identify people and places named in files", default: false,
-    hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing an entity whose @id is the name with # in front and underscores for spaces.",
+    hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
       { key: "nameLookupGazetteer", label: "Check other names against the Australian gazetteers", default: true,
         hint: "Looks up each capitalised name that wasn't recognised as a person or place in the Geoscience Australia and GHAP gazetteers, and treats exact matches as places. Needs the network." },

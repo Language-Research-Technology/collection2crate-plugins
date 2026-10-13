@@ -8,7 +8,8 @@
 import assert from "node:assert/strict";
 import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
-import { nameToId, linkNamedEntities, confirmPlaces } from "./plugins/name-lookup/index.js";
+import { linkNamedEntities, confirmPlaces } from "./plugins/name-lookup/index.js";
+import { generatedEntityId } from "./src/_entity_ids.js";
 import { extractNames, fileText, isReadableForNames } from "./plugins/name-lookup/extract.js";
 
 let failures = 0;
@@ -47,9 +48,27 @@ function pdfWithText(text) {
 
 console.log("name-lookup");
 
-await check("@id is # plus the name, spaces as underscores", () => {
-  assert.equal(nameToId("John Smith"), "#John_Smith");
-  assert.equal(nameToId(" Mount  Isa "), "#Mount_Isa");
+await check("@ids follow merge's scheme", () => {
+  assert.equal(generatedEntityId("Person", "John Smith"), "#john_smith");
+  assert.equal(generatedEntityId("Person", "Mary O'Brien"), "#mary_o_brien");
+  assert.equal(generatedEntityId("Place", " Mount  Isa "), "#place-mount-isa");
+});
+
+await check("a Person merge made from a spreadsheet is the one a file links to", async () => {
+  const { mergeXlsxIntoCrate } = await import("./plugins/merge/xlsx.js");
+  const { default: ExcelJS } = await import("exceljs");
+  const book = new ExcelJS.Workbook();
+  book.addWorksheet("Sheet1").addRows([["@id", "contentPerson", "location"], ["a.txt", "Dora Leung", "Mount Isa"]]);
+  const bytes = await book.xlsx.writeBuffer();
+  const crate = new ROCrate({ array: true, link: true });
+  crate.addEntity({ "@id": "a.txt", "@type": "File", name: "a.txt" });
+  await mergeXlsxIntoCrate(crate, bytes,
+    { mapping: [{ source: "contentPerson", target: "custom:contentPerson", type: "Person" },
+                { source: "location", target: "contentLocation", type: "Place" }],
+      placeLookup: { enabled: false } },
+    () => {}, (c, id) => c.getEntity(id));
+  const counts = linkNamedEntities(crate, { "a.txt": { people: ["Dora Leung"], places: ["Mount Isa"] } });
+  assert.deepEqual(counts, { created: 0, reused: 2, links: 2 });
 });
 
 await check("finds people and places, without honorifics, possessives or trailing punctuation", () => {
@@ -86,15 +105,15 @@ await check("the gazetteer confirms only exact names, or the spellings it tries 
 await check("reuses an existing entity, creates the rest, links each once", () => {
   const crate = new ROCrate({ array: true, link: true });
   crate.addEntity({ "@id": "a.txt", "@type": "File", name: "a.txt", "custom:participant": "" });
-  crate.addEntity({ "@id": "#Dora_Leung", "@type": "Person", name: "Dora Leung", description: "Described by hand" });
+  crate.addEntity({ "@id": "#dora_leung", "@type": "Person", name: "Dora Leung", description: "Described by hand" });
   const names = { people: ["Dora Leung", "John Smith"], places: ["Mount Isa"] };
 
   const counts = linkNamedEntities(crate, { "a.txt": names });
   assert.deepEqual(counts, { created: 2, reused: 1, links: 3 });
-  assert.deepEqual(ids(crate.getProperty("a.txt", "custom:participant")), ["#Dora_Leung", "#John_Smith"]);
-  assert.deepEqual(ids(crate.getProperty("a.txt", "custom:place")), ["#Mount_Isa"]);
-  assert.deepEqual([].concat(crate.getEntity("#Dora_Leung").description), ["Described by hand"], "the existing entity is kept as it was");
-  assert.ok([].concat(crate.getEntity("#Mount_Isa")["@type"]).includes("Place"));
+  assert.deepEqual(ids(crate.getProperty("a.txt", "custom:participant")), ["#dora_leung", "#john_smith"]);
+  assert.deepEqual(ids(crate.getProperty("a.txt", "custom:place")), ["#place-mount-isa"]);
+  assert.deepEqual([].concat(crate.getEntity("#dora_leung").description), ["Described by hand"], "the existing entity is kept as it was");
+  assert.ok([].concat(crate.getEntity("#place-mount-isa")["@type"]).includes("Place"));
   assert.ok(crate.getEntity("arcp://name,custom/terms#place"), "custom:place is defined");
 
   assert.equal(linkNamedEntities(crate, { "a.txt": names }).links, 0, "a second run adds no duplicate links");
@@ -104,7 +123,7 @@ await check("a File new to the crate is added so it can be linked", () => {
   const crate = new ROCrate({ array: true, link: true });
   linkNamedEntities(crate, { "notes/new.txt": { people: ["Dora Leung"], places: [] } }, { "notes/new.txt": "new.txt" });
   assert.deepEqual([].concat(crate.getEntity("notes/new.txt").name), ["new.txt"]);
-  assert.deepEqual(ids(crate.getProperty("notes/new.txt", "custom:participant")), ["#Dora_Leung"]);
+  assert.deepEqual(ids(crate.getProperty("notes/new.txt", "custom:participant")), ["#dora_leung"]);
 });
 
 await check("Process alone links the crate: files:prepare is the only tap", async () => {
@@ -125,9 +144,9 @@ await check("Process alone links the crate: files:prepare is the only tap", asyn
     ],
   };
   await plugin.hooks["files:prepare"].handler(ctx);
-  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:participant")), ["#Dora_Leung", "#John_Smith", "#Mary_O'Brien"]);
-  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:place")), ["#Mount_Isa", "#Queensland", "#Palm_Island"], "Yarrabah needs the gazetteer, which is off");
-  assert.deepEqual(ids(crate.getProperty("scan.pdf", "custom:participant")), ["#Chloe_Grant"]);
+  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:participant")), ["#dora_leung", "#john_smith", "#mary_o_brien"]);
+  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:place")), ["#place-mount-isa", "#place-queensland", "#place-palm-island"], "Yarrabah needs the gazetteer, which is off");
+  assert.deepEqual(ids(crate.getProperty("scan.pdf", "custom:participant")), ["#chloe_grant"]);
   assert.equal(crate.getEntity("song.wav"), undefined);
 });
 

@@ -17,6 +17,7 @@ dependency between the two repos.
 index.js                 REGISTRY — the one registry, keyed by plugin name
 plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
+src/_entity_ids.js       the @id an entity made from a name gets, shared by merge and name-lookup
 src/_place_lookup.js     GA/GHAP gazetteer lookup, shared by merge and name-lookup
 src/_csv.js              CSV building and download, for visualisation panels
 src/_panel.js            the DOM vocabulary those panels share
@@ -160,8 +161,8 @@ rather than accumulating stale media from renamed documents. The bytes live on
 crate the run was seeded with: named entity recognition (compromise) over each
 `.txt`/`.md`/`.docx`/`.pdf` file's text (PDFs through `unpdf`), other proper
 names checked against the GA and GHAP gazetteers (`src/_place_lookup.js`,
-shared with `merge`), and each name turned into an `@id` — `#` plus the name,
-spaces as underscores — that is reused if the crate already holds it and
+shared with `merge`), and each name turned into the `@id` merge would give it
+(`src/_entity_ids.js`: `#john_smith`, `#place-mount-isa`) — reused if the crate already holds it and
 created as a `Person` or `Place` if not. Files are linked as
 `custom:participant` / `custom:place`. Build starts from the crate Process
 finished with, so the links are there without a `crate:build` tap; a File new

@@ -9,6 +9,7 @@
 // imported by relative path, per this repo's README.
 import ExcelJS from "exceljs";
 import { createPlaceLookupService } from "../../src/_place_lookup.js";
+import { slugifyEntityValue, generatedEntityId } from "../../src/_entity_ids.js";
 
 // ExcelJS cell values can be plain scalars or rich objects (formula results,
 // rich text, hyperlinks); normalise to a plain string.
@@ -162,20 +163,6 @@ function getExistingContextPrefixes(crate) {
   if (Array.isArray(ctx)) ctx.forEach(collect);
   else collect(ctx);
   return prefixes;
-}
-
-function slugifyEntityValue(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function generatedEntityId(type, value) {
-  const slug = slugifyEntityValue(value).replace(/-/g, "_") || "entity";
-  if (type === "Place") return `#place-${slugifyEntityValue(value) || "place"}`;
-  return `#${slug}`;
 }
 
 function splitMappingValues(value) {

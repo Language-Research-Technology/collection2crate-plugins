@@ -17,6 +17,9 @@ dependency between the two repos.
 index.js                 REGISTRY — the one registry, keyed by plugin name
 plugins/<name>/index.js  one folder per plugin; createPlugin(deps) lives here
 src/_progress.js         shared machinery, not a plugin
+src/_entity_ids.js       the @id an entity made from a name gets, shared by merge and name-lookup
+src/_place_lookup.js     GA and GHAP (TLCMap's search API) gazetteer lookup and the Geometry it writes, shared by merge and name-lookup
+src/_merge_config.js     which merge config a run uses (uploaded, folder, bundled), shared the same way
 src/_csv.js              CSV building and download, for visualisation panels
 src/_panel.js            the DOM vocabulary those panels share
 src/_transcript_grammar.js  transcript grammars: generation, parsing, saved-grammar I/O
@@ -141,7 +144,7 @@ Current assignments, per stage:
 | Stage | Order |
 |---|---|
 | `folder:picked` | — (the existing crate is loaded by collection2crate itself) |
-| `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 |
+| `files:prepare` | `generic-input` 0 · `austlang` 10 · `file-format-identify` 20 · `ca-data-prep` 30 · `chat-export` 40 · `name-lookup` 50 |
 | `files:write` | `ca-data-prep` 10 · `chat-export` 20 |
 | `crate:prepare` | `xlsx-crate-input` 10 |
 | `crate:build` | `docx-input` 5 · `generic-input` 10 · `xlsx-crate-input` 20 · `austlang` 30 · `file-format-identify` 40 · `ca-data-prep` 50 · `chat-export` 60 · `merge` 70 · `roctable` 80 |
@@ -154,6 +157,22 @@ but writes them at `crate:write` — nothing reads them before the crate they
 belong to is written out, and the directory is wiped and rewritten in one go
 rather than accumulating stale media from renamed documents. The bytes live on
 `ctx` in between.
+
+`name-lookup` does all its work at `files:prepare`, during Process, on the
+crate the run was seeded with: named entity recognition (compromise) over each
+`.txt`/`.md`/`.docx`/`.pdf` file's text (PDFs through `unpdf`), other proper
+names checked against the GA and GHAP gazetteers (`src/_place_lookup.js`,
+shared with `merge`), and each name turned into the `@id` merge would give it
+(`src/_entity_ids.js`: `#john_smith`, `#place-mount-isa`) — reused if the crate already holds it and
+created as a `Person` or `Place` if not. With the gazetteer on, places get
+coordinates as a linked `Geometry`, written as merge writes them and looked
+up with the merge config's `placeMatchRegion`; a Place that already has a
+`geo` keeps it. A gazetteer name that only starts with or contains the
+file's ("Murray Upp" → Murray Upper) counts too, unless `nameLookupExactOnly`
+is on — `merge`'s `placeExactOnly` makes the same choice for merged places. Files are linked as
+`custom:participant` / `custom:place`. Build starts from the crate Process
+finished with, so the links are there without a `crate:build` tap; a File new
+to the crate is added bare, and `generic-input`'s scan fills it in.
 
 `ca-data-prep` and `chat-export` each split across two stages on purpose: the
 files they derive are written at `files:write`, during Process, and the
@@ -294,6 +313,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar), `mergeCrateInto` (lands the transcript crate in an existing one) |
 | `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx/.txt reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
+| `name-lookup` | `readFileBytes` (only when a file in `filesWithMeta` has no `handle`), `readJsonFromFolder` (the folder's `merge-config.json`, for its place-lookup settings) |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
 | `validate-crate` | `loadMasp` |

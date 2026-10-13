@@ -18,6 +18,7 @@ import { createPlugin as createTranscriptGrammar } from "./plugins/transcript-gr
 import { createPlugin as createCaDataPrep } from "./plugins/ca-data-prep/index.js";
 import { createPlugin as createChatExport } from "./plugins/chat-export/index.js";
 import { createPlugin as createMerge } from "./plugins/merge/index.js";
+import { createPlugin as createNameLookup } from "./plugins/name-lookup/index.js";
 import { createPlugin as createRoctable } from "./plugins/roctable/index.js";
 import { createPlugin as createValidateCrate } from "./plugins/validate-crate/index.js";
 import { createPlugin as createJsonOutput } from "./plugins/ro-crate-json-output/index.js";
@@ -51,6 +52,7 @@ export const REGISTRY = {
   "ca-data-prep": createCaDataPrep,
   "chat-export": createChatExport,
   "merge": createMerge,
+  "name-lookup": createNameLookup,
   "roctable": createRoctable,
   "validate-crate": createValidateCrate,
   "ro-crate-json-output": createJsonOutput,

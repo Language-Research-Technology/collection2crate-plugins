@@ -1,4 +1,8 @@
-function normalizePlaceName(value) {
+// Coordinates for a place name from the Geoscience Australia and GHAP
+// gazetteers. Shared: merge uses it to give merged Places coordinates,
+// name-lookup to decide whether a proper name is a place, and to place it.
+import { generatedGeometryId } from "./_entity_ids.js";
+export function normalizePlaceName(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
@@ -21,7 +25,7 @@ function normalizeCommonPlaceTypos(value) {
     .replace(/\blslands\b/gi, "Islands");
 }
 
-function placeNameVariants(placeName) {
+export function placeNameVariants(placeName) {
   const start = titleCaseWords(normalizeCommonPlaceTypos(placeName));
   if (!start) return [];
 
@@ -184,6 +188,17 @@ function regionBonus(candidate, preferredRegion) {
   return candidateMatchesPreferredRegion(candidate, preferredRegion) ? 10 : 0;
 }
 
+// Where several places share a name — GA has a county, a parish and a city
+// all called "Cairns" in Queensland — the one people live in is the one a
+// text or a spreadsheet almost always means. Smaller than the region bonus,
+// so a preferred region still wins over a town somewhere else.
+const POPULATED = /\b(populated place|population centre|population center|locality|town|city|suburb|village|township)\b/i;
+
+function populatedBonus(candidate) {
+  const kinds = [candidate.category, candidate.feature, candidate.feature_term, candidate.feature_type, candidate.featureType, candidate.type];
+  return kinds.some((kind) => typeof kind === "string" && POPULATED.test(kind)) ? 5 : 0;
+}
+
 function flattenCandidates(payload, out = []) {
   if (!payload) return out;
   if (Array.isArray(payload)) {
@@ -243,8 +258,9 @@ function rankCandidate(candidate, targetName, preferredRegion = "") {
   else if (candidateName.startsWith(targetName) || targetName.startsWith(candidateName)) nameRank = 3;
   else if (candidateName.includes(targetName) || targetName.includes(candidateName)) nameRank = 2;
 
-  // Keep exact name quality dominant, then bias toward preferred region for ties/near ties.
-  return (nameRank * 100) + regionBonus(candidate, preferredRegion);
+  // Keep exact name quality dominant, then bias toward preferred region for
+  // ties/near ties, then toward populated places among what is still tied.
+  return (nameRank * 100) + regionBonus(candidate, preferredRegion) + populatedBonus(candidate);
 }
 
 function pickBestRecord(payload, provider, placeName, options = {}) {
@@ -341,13 +357,28 @@ function escapeWhereLiteral(value) {
   return String(value || "").replace(/'/g, "''");
 }
 
+// TLCMap's Gazetteer of Historical Australian Places (GHAP), through its
+// search API (https://tlcmap.org/api — docs: tlcmap-docs, developers/
+// search-api.md). /api serves the ANPS and Composite gazetteers only, never
+// user-contributed layers. Answers are GeoJSON Features whose properties carry
+// name, state and feature_term ("populated place", "county", …). Like the GA
+// lookup: an exact name first (`name` matches the title, case-insensitively),
+// then — unless exactOnly — names containing it.
 async function lookupViaGhap(placeName, options) {
-  const baseUrl = String(options?.url || "https://placenames.ghaap.org/api/placename/").trim();
+  const baseUrl = String(options?.url || "https://tlcmap.org/api").trim();
   if (!baseUrl) return null;
-  const url = new URL(baseUrl);
-  url.searchParams.set(String(options?.queryParam || "search"), placeName);
-  const payload = await fetchJson(url, options?.timeoutMs || 2500);
-  return pickBestRecord(payload, "ghap", placeName, options);
+  const search = (param) => {
+    const url = new URL(baseUrl);
+    url.searchParams.set("format", "json");
+    url.searchParams.set(param, placeName);
+    url.searchParams.set("per_page", String(options?.perPage || 50));
+    return url;
+  };
+  // TLCMap takes about 3s a request, past the 2.5s GA gets.
+  const timeoutMs = options?.timeoutMs || 10000;
+  const match = pickBestRecord(await fetchJson(search("name"), timeoutMs), "ghap", placeName, options);
+  if (match || options?.exactOnly) return match;
+  return pickBestRecord(await fetchJson(search("containsname"), timeoutMs), "ghap", placeName, options);
 }
 
 async function lookupViaGeoscienceAustralia(placeName, options) {
@@ -379,6 +410,10 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
   const placeMatchRegion = String(
     settings.placeMatchRegion || settings.preferredRegion || settings.region || ""
   ).trim();
+  // exactOnly: only a place whose name is the one asked for (or a spelling the
+  // lookup tries itself) — no names starting with or containing it. Applies to
+  // every provider; a provider's own exactOnly can still turn it on alone.
+  const exactOnly = settings.exactOnly === true;
   const providers = Array.isArray(settings.providers) && settings.providers.length
     ? settings.providers
     : ["geoscience-australia", "ghap"];
@@ -418,11 +453,13 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
           if (provider === "ghap") {
             match = await lookupViaGhap(variant, {
               ...(settings.ghap || {}),
+              ...(exactOnly ? { exactOnly } : {}),
               placeMatchRegion,
             });
           } else if (provider === "geoscience-australia") {
             match = await lookupViaGeoscienceAustralia(variant, {
               ...(settings.geoscienceAustralia || {}),
+              ...(exactOnly ? { exactOnly } : {}),
               placeMatchRegion,
             });
           }
@@ -481,4 +518,49 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
   };
 
   return service;
+}
+
+/**
+ * The lookup settings a merge config asks for: its `placeLookup` block, with
+ * a top-level `placeMatchRegion` ("QLD", "Queensland") as the region to
+ * prefer when a name matches places in more than one.
+ */
+export function placeLookupSettings(mergeConfig) {
+  const settings = { ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}) };
+  if (mergeConfig && typeof mergeConfig.placeMatchRegion === "string" && mergeConfig.placeMatchRegion.trim()) {
+    settings.placeMatchRegion = settings.placeMatchRegion || mergeConfig.placeMatchRegion.trim();
+  }
+  return settings;
+}
+
+/**
+ * Give the Place `placeId` the coordinates in `lookup` (a lookup() result),
+ * as a linked Geometry: created if missing, its values replaced if not.
+ *
+ * @returns {{ geometryId: string, createdGeometry: boolean, enriched: boolean }}
+ *   `enriched`: the Place didn't already point at a Geometry.
+ */
+export function setPlaceGeometry(crate, placeId, placeName, lookup) {
+  const placeNode = crate.getEntity(placeId);
+  const geometryId = generatedGeometryId(placeNode || { "@id": placeId }, placeName);
+  let geometryNode = crate.getEntity(geometryId);
+  const hadGeo = !!placeNode?.geo?.["@id"];
+  let createdGeometry = false;
+  if (!geometryNode) {
+    crate.addEntity({
+      "@id": geometryId,
+      "@type": "Geometry",
+      ".latitude": lookup.latitude,
+      ".longitude": lookup.longitude,
+      asWKT: lookup.asWKT,
+    });
+    createdGeometry = true;
+  } else {
+    geometryNode["@type"] = geometryNode["@type"] || "Geometry";
+    geometryNode[".latitude"] = lookup.latitude;
+    geometryNode[".longitude"] = lookup.longitude;
+    geometryNode.asWKT = lookup.asWKT;
+  }
+  if (placeNode) placeNode.geo = { "@id": geometryId };
+  return { geometryId, createdGeometry, enriched: !!placeNode && !hadGeo };
 }

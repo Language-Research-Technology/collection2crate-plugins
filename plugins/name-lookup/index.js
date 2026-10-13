@@ -14,10 +14,10 @@
 import { progressFor } from "../../src/_progress.js";
 import { generatedEntityId } from "../../src/_entity_ids.js";
 
-let readFileBytes;
+let readFileBytes, readJsonFromFolder;
 
 export function createPlugin(deps) {
-  ({ readFileBytes } = deps);
+  ({ readFileBytes, readJsonFromFolder } = deps);
   return plugin;
 }
 
@@ -102,6 +102,32 @@ export async function confirmPlaces(candidates, lookup) {
   return confirmed;
 }
 
+const hasGeometry = (place) => [].concat(place?.geo ?? []).some((ref) => ref && (ref["@id"] || typeof ref === "string"));
+
+/**
+ * Give each Place found by name the coordinates its lookup returned, as a
+ * Geometry linked the way merge links one (setPlaceGeometry). A Place that
+ * already points at a Geometry — entered by hand, or by an earlier run — is
+ * left as it is.
+ *
+ * @param {ROCrate} crate
+ * @param {Map<string, {latitude: number, longitude: number, asWKT: string}>} coordinatesByName
+ * @returns {Promise<{ placed: number, kept: number }>}
+ */
+export async function addPlaceCoordinates(crate, coordinatesByName) {
+  const { setPlaceGeometry } = await import("../../src/_place_lookup.js");
+  const counts = { placed: 0, kept: 0 };
+  for (const [name, match] of coordinatesByName) {
+    const id = generatedEntityId("Place", name);
+    const place = crate.getEntity(id);
+    if (!place) continue;
+    if (hasGeometry(place)) { counts.kept++; continue; }
+    setPlaceGeometry(crate, id, name, match);
+    counts.placed++;
+  }
+  return counts;
+}
+
 async function bytesOf(ctx, file) {
   try {
     if (file.handle?.getFile) return await (await file.handle.getFile()).arrayBuffer();
@@ -113,7 +139,7 @@ async function bytesOf(ctx, file) {
 }
 
 // Reading the files is most of the work without the gazetteer; with it, the
-// lookups — one request or two per distinct candidate — are.
+// lookups — one request or two per distinct place or candidate — are.
 const READ_SHARE = 0.5;
 const LOOKUP_TIMEOUT_MS = 8000;
 
@@ -123,8 +149,8 @@ const plugin = {
     key: "enableNameLookups", label: "Identify people and places named in files", default: false,
     hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
-      { key: "nameLookupGazetteer", label: "Check other names against the Australian gazetteers", default: true,
-        hint: "Looks up each capitalised name that wasn't recognised as a person or place in the Geoscience Australia and GHAP gazetteers, and treats exact matches as places. Needs the network." },
+      { key: "nameLookupGazetteer", label: "Look names up in the Australian gazetteers", default: true,
+        hint: "Uses Geoscience Australia and GHAP to treat other capitalised names that match a place exactly as places, and to give places coordinates — preferring the region set as placeMatchRegion in the merge config. Needs the network." },
     ],
   },
   hooks: {
@@ -170,22 +196,36 @@ const plugin = {
           }
           if (unreadable) ctx.log(`Name lookup: ${unreadable} file(s) could not be read.`, "warn");
 
+          let coordinates = new Map();
           if (gazetteer) {
-            const candidates = [...new Set(Object.values(namesByFile).flatMap((names) => names.candidates))];
+            const { createPlaceLookupService, placeLookupSettings } = await import("../../src/_place_lookup.js");
+            const { resolveMergeConfig } = await import("../../src/_merge_config.js");
+            const { config, source } = await resolveMergeConfig(ctx.options, ctx.dirHandle, readJsonFromFolder);
+            const settings = placeLookupSettings(config);
+            if (settings.placeMatchRegion) ctx.log(`Name lookup: preferring places in ${settings.placeMatchRegion} (merge config: ${source}).`, "muted");
+            // A timed-out lookup reads as "not a place", and the shared 2.5s
+            // default loses the first few requests of a cold connection.
+            const service = createPlaceLookupService({
+              ...settings,
+              geoscienceAustralia: { exactOnly: true, timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.geoscienceAustralia },
+              ghap: { timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.ghap },
+            });
+
+            const all = Object.values(namesByFile);
+            const candidates = [...new Set(all.flatMap((names) => names.candidates))];
+            const places = [...new Set(all.flatMap((names) => names.places))];
+            await service.prefetch([...candidates, ...places], (fraction, label) => progress.report(readShare + fraction * (1 - readShare), label));
+
+            const confirmed = await confirmPlaces(candidates, (name) => service.lookup(name));
+            for (const names of all) {
+              names.places = [...names.places, ...names.candidates.filter((name) => confirmed.has(name))];
+            }
             if (candidates.length) {
-              const { createPlaceLookupService } = await import("../../src/_place_lookup.js");
-              // A timed-out lookup reads as "not a place", and the shared 2.5s
-              // default loses the first few requests of a cold connection.
-              const service = createPlaceLookupService({
-                geoscienceAustralia: { exactOnly: true, timeoutMs: LOOKUP_TIMEOUT_MS },
-                ghap: { timeoutMs: LOOKUP_TIMEOUT_MS },
-              });
-              await service.prefetch(candidates, (fraction, label) => progress.report(readShare + fraction * (1 - readShare), label));
-              const confirmed = await confirmPlaces(candidates, (name) => service.lookup(name));
-              for (const names of Object.values(namesByFile)) {
-                names.places = [...names.places, ...names.candidates.filter((name) => confirmed.has(name))];
-              }
               ctx.log(`Name lookup: the gazetteers know ${confirmed.size} of ${candidates.length} other name(s) as places.`, confirmed.size ? "ok" : "muted");
+            }
+            for (const name of [...places, ...confirmed]) {
+              const match = await service.lookup(name);
+              if (match) coordinates.set(name, match);
             }
           }
 
@@ -194,6 +234,13 @@ const plugin = {
             `Name lookup: ${links} link(s) from ${files.length} file(s) — ${created} new Person/Place entity(ies), ${reused} already in the crate.`,
             links ? "ok" : "muted",
           );
+          if (coordinates.size) {
+            const { placed, kept } = await addPlaceCoordinates(ctx.crate, coordinates);
+            ctx.log(
+              `Name lookup: coordinates for ${placed} place(s)${kept ? `; ${kept} already had their own, left as they were` : ""}.`,
+              placed ? "ok" : "muted",
+            );
+          }
         } finally {
           progress.done();
         }

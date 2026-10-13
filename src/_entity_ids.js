@@ -16,3 +16,14 @@ export function generatedEntityId(type, value) {
   if (type === "Place") return `#place-${slugifyEntityValue(value) || "place"}`;
   return `#${slug}`;
 }
+
+// The Geometry holding a Place's coordinates: the one it already names, else
+// "#location-…" beside a "#place-…" @id.
+export function generatedGeometryId(placeEntity, placeName) {
+  const explicit = String(placeEntity?.geo?.["@id"] || "").trim();
+  if (explicit) return explicit;
+  const placeId = String(placeEntity?.["@id"] || "").trim();
+  if (placeId.startsWith("#place-")) return `#location-${placeId.slice("#place-".length)}`;
+  const slug = slugifyEntityValue(placeName || placeId.replace(/^#/, "")) || "place";
+  return `#location-${slug}`;
+}

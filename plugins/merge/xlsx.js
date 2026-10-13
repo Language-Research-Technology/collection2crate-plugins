@@ -8,8 +8,8 @@
 // passed in by the caller (merge/index.js's createPlugin(deps)) rather than
 // imported by relative path, per this repo's README.
 import ExcelJS from "exceljs";
-import { createPlaceLookupService } from "../../src/_place_lookup.js";
-import { slugifyEntityValue, generatedEntityId } from "../../src/_entity_ids.js";
+import { createPlaceLookupService, setPlaceGeometry, placeLookupSettings } from "../../src/_place_lookup.js";
+import { generatedEntityId } from "../../src/_entity_ids.js";
 
 // ExcelJS cell values can be plain scalars or rich objects (formula results,
 // rich text, hyperlinks); normalise to a plain string.
@@ -193,14 +193,6 @@ function normaliseMappings(mergeConfig) {
   });
 }
 
-function generatedGeometryId(placeEntity, placeName) {
-  const explicit = String(placeEntity?.geo?.["@id"] || "").trim();
-  if (explicit) return explicit;
-  const placeId = String(placeEntity?.["@id"] || "").trim();
-  if (placeId.startsWith("#place-")) return `#location-${placeId.slice("#place-".length)}`;
-  const slug = slugifyEntityValue(placeName || placeId.replace(/^#/, "")) || "place";
-  return `#location-${slug}`;
-}
 
 // Merge a spreadsheet's rows into matching crate entities (by an "@id" column),
 // applying the config's column→property mappings. Typed mappings split on comma
@@ -244,12 +236,7 @@ export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () 
   const workbookContexts = scanWorkbookContexts(wb);
   const existingPrefixes = getExistingContextPrefixes(crate);
   const addedContexts = [];
-  const placeLookupConfig = {
-    ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}),
-  };
-  if (mergeConfig && typeof mergeConfig.placeMatchRegion === "string" && mergeConfig.placeMatchRegion.trim()) {
-    placeLookupConfig.placeMatchRegion = placeLookupConfig.placeMatchRegion || mergeConfig.placeMatchRegion.trim();
-  }
+  const placeLookupConfig = placeLookupSettings(mergeConfig);
   const placeLookup = createPlaceLookupService(placeLookupConfig, log);
   requiredPrefixes.forEach((prefix) => {
     if (existingPrefixes.has(prefix)) return;
@@ -314,31 +301,9 @@ export async function mergeXlsxIntoCrate(crate, xlsxData, mergeConfig, log = () 
             const placeNode = graphEntityById(crate, id) || entityById.get(id);
             const lookup = await placeLookup.lookup(val || placeNode?.name || "");
             if (lookup) {
-              const geometryId = generatedGeometryId(placeNode || { "@id": id }, val);
-              let geometryNode = graphEntityById(crate, geometryId) || entityById.get(geometryId);
-              const hadGeo = !!placeNode?.geo?.["@id"];
-              if (!geometryNode) {
-                const geometryRecord = {
-                  "@id": geometryId,
-                  "@type": "Geometry",
-                  ".latitude": lookup.latitude,
-                  ".longitude": lookup.longitude,
-                  asWKT: lookup.asWKT,
-                };
-                crate.addEntity(geometryRecord);
-                geometryNode = graphEntityById(crate, geometryId) || geometryRecord;
-                entityById.set(geometryId, geometryNode);
-                generated++;
-              } else {
-                geometryNode["@type"] = geometryNode["@type"] || "Geometry";
-                geometryNode[".latitude"] = lookup.latitude;
-                geometryNode[".longitude"] = lookup.longitude;
-                geometryNode.asWKT = lookup.asWKT;
-              }
-              if (placeNode) {
-                placeNode.geo = { "@id": geometryId };
-                if (!hadGeo) enrichedPlaces++;
-              }
+              const result = setPlaceGeometry(crate, id, val, lookup);
+              if (result.createdGeometry) { generated++; entityById.set(result.geometryId, graphEntityById(crate, result.geometryId)); }
+              if (result.enriched) enrichedPlaces++;
             }
           }
           refs.push({ "@id": id });

@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
-import { linkNamedEntities, confirmPlaces } from "./plugins/name-lookup/index.js";
+import { linkNamedEntities, confirmPlaces, addPlaceCoordinates } from "./plugins/name-lookup/index.js";
 import { generatedEntityId } from "./src/_entity_ids.js";
 import { extractNames, fileText, isReadableForNames } from "./plugins/name-lookup/extract.js";
 
@@ -148,6 +148,51 @@ await check("Process alone links the crate: files:prepare is the only tap", asyn
   assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:place")), ["#place-mount-isa", "#place-queensland", "#place-palm-island"], "Yarrabah needs the gazetteer, which is off");
   assert.deepEqual(ids(crate.getProperty("scan.pdf", "custom:participant")), ["#chloe_grant"]);
   assert.equal(crate.getEntity("song.wav"), undefined);
+});
+
+await check("coordinates follow merge's region preference, from the folder's merge-config.json", async () => {
+  // Geoscience Australia knows two exact "Cairns" and one "Yarrabah"; GHAP nothing.
+  const GA = {
+    Cairns: [{ name: "Cairns", latitude: -22.6, longitude: 148.2, authority: "NSW" },
+             { name: "Cairns", latitude: -16.9, longitude: 145.7, authority: "QLD" }],
+    Yarrabah: [{ name: "Yarrabah", latitude: -17.0, longitude: 145.9, authority: "QLD" }],
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const where = new URL(url).searchParams.get("where") || "";
+    const name = (where.match(/upper\('(.+?)'\)\s*$/) || [])[1];
+    const rows = url.toString().includes("ga.gov.au") ? (GA[name] || []) : [];
+    return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const crate = new ROCrate({ array: true, link: true });
+    crate.addEntity({ "@id": "#place-yarrabah", "@type": "Place", name: "Yarrabah", geo: { "@id": "#yarrabah-by-hand" } });
+    crate.addEntity({ "@id": "#yarrabah-by-hand", "@type": "Geometry", asWKT: "POINT(1 2)" });
+    const plugin = REGISTRY["name-lookup"]({
+      readJsonFromFolder: async (_dir, path) => (path === "merge-config.json" ? { placeMatchRegion: "QLD" } : null),
+    });
+    const bytes = new TextEncoder().encode("We travelled from Cairns to Yarrabah with Chloe Grant.");
+    const logs = [];
+    const ctx = {
+      options: { enableNameLookups: true }, crate, dirHandle: {}, log: (m) => logs.push(m),
+      filesWithMeta: [{ id: "trip.txt", relativePath: "trip.txt", fileName: "trip.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
+    };
+    await plugin.hooks["files:prepare"].handler(ctx);
+
+    assert.deepEqual(ids(crate.getProperty("trip.txt", "custom:place")), ["#place-cairns", "#place-yarrabah"]);
+    assert.deepEqual(ids(crate.getEntity("#place-cairns").geo), ["#location-cairns"]);
+    assert.deepEqual([].concat(crate.getEntity("#location-cairns").asWKT), ["POINT(145.7 -16.9)"], "the QLD Cairns, not the first one");
+    assert.deepEqual(ids(crate.getEntity("#place-yarrabah").geo), ["#yarrabah-by-hand"], "a Place's own coordinates are kept");
+    assert.ok(logs.some((m) => /preferring places in QLD/.test(m)), "the log says which region it preferred");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("no coordinates for a place the crate doesn't hold", async () => {
+  const crate = new ROCrate({ array: true, link: true });
+  const counts = await addPlaceCoordinates(crate, new Map([["Nowhere", { latitude: 1, longitude: 2, asWKT: "POINT(2 1)" }]]));
+  assert.deepEqual(counts, { placed: 0, kept: 0 });
 });
 
 await check("off by default; the gazetteer is on once the option is", () => {

@@ -1,6 +1,7 @@
 // Coordinates for a place name from the Geoscience Australia and GHAP
 // gazetteers. Shared: merge uses it to give merged Places coordinates,
-// name-lookup to decide whether a proper name is a place at all.
+// name-lookup to decide whether a proper name is a place, and to place it.
+import { generatedGeometryId } from "./_entity_ids.js";
 export function normalizePlaceName(value) {
   return String(value || "")
     .trim()
@@ -484,4 +485,49 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
   };
 
   return service;
+}
+
+/**
+ * The lookup settings a merge config asks for: its `placeLookup` block, with
+ * a top-level `placeMatchRegion` ("QLD", "Queensland") as the region to
+ * prefer when a name matches places in more than one.
+ */
+export function placeLookupSettings(mergeConfig) {
+  const settings = { ...(mergeConfig && typeof mergeConfig.placeLookup === "object" ? mergeConfig.placeLookup : {}) };
+  if (mergeConfig && typeof mergeConfig.placeMatchRegion === "string" && mergeConfig.placeMatchRegion.trim()) {
+    settings.placeMatchRegion = settings.placeMatchRegion || mergeConfig.placeMatchRegion.trim();
+  }
+  return settings;
+}
+
+/**
+ * Give the Place `placeId` the coordinates in `lookup` (a lookup() result),
+ * as a linked Geometry: created if missing, its values replaced if not.
+ *
+ * @returns {{ geometryId: string, createdGeometry: boolean, enriched: boolean }}
+ *   `enriched`: the Place didn't already point at a Geometry.
+ */
+export function setPlaceGeometry(crate, placeId, placeName, lookup) {
+  const placeNode = crate.getEntity(placeId);
+  const geometryId = generatedGeometryId(placeNode || { "@id": placeId }, placeName);
+  let geometryNode = crate.getEntity(geometryId);
+  const hadGeo = !!placeNode?.geo?.["@id"];
+  let createdGeometry = false;
+  if (!geometryNode) {
+    crate.addEntity({
+      "@id": geometryId,
+      "@type": "Geometry",
+      ".latitude": lookup.latitude,
+      ".longitude": lookup.longitude,
+      asWKT: lookup.asWKT,
+    });
+    createdGeometry = true;
+  } else {
+    geometryNode["@type"] = geometryNode["@type"] || "Geometry";
+    geometryNode[".latitude"] = lookup.latitude;
+    geometryNode[".longitude"] = lookup.longitude;
+    geometryNode.asWKT = lookup.asWKT;
+  }
+  if (placeNode) placeNode.geo = { "@id": geometryId };
+  return { geometryId, createdGeometry, enriched: !!placeNode && !hadGeo };
 }

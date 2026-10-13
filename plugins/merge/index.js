@@ -4,7 +4,7 @@
 // that used to live inline in processFolder.
 import { mergeXlsxIntoCrate } from "./xlsx.js";
 import { progressFor } from "../../src/_progress.js";
-import MERGE_CONFIG from "./merge_config.json" with { type: "json" };
+import { resolveMergeConfig } from "../../src/_merge_config.js";
 
 // Hook names are literal strings and core collection2crate functions arrive
 // via createPlugin(deps) — see this repo's README. graphEntityById (needed
@@ -45,16 +45,7 @@ const plugin = {
           return;
         }
 
-        let mergeConfig = MERGE_CONFIG, mcSrc = "bundled default";
-        if (options.mergeConfigUpload) {
-          const mcText = await options.mergeConfigUpload.file.text();
-          try { mergeConfig = JSON.parse(mcText); }
-          catch (e) { throw new Error(`uploaded merge config "${options.mergeConfigUpload.name}" is not valid JSON: ${e.message}`); }
-          mcSrc = `uploaded (${options.mergeConfigUpload.name})`;
-        } else {
-          const folderMc = await readJsonFromFolder(dirHandle, "merge-config.json");
-          if (folderMc) { mergeConfig = folderMc; mcSrc = "merge-config.json from folder"; }
-        }
+        const { config: mergeConfig, source: mcSrc } = await resolveMergeConfig(options, dirHandle, readJsonFromFolder);
         log(`Merging ${options.mergeUpload.name} · mapping ${mcSrc}.`, "muted");
         const bytes = await options.mergeUpload.file.arrayBuffer();
         const effectiveMergeConfig = {

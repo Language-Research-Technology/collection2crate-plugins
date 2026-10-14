@@ -41,14 +41,21 @@ const BREAK_AFTER = /[,.;:!?()\[\]"“”]/;
 // The names in a view, honorifics dropped ("Mrs. Mary O'Brien" → "Mary
 // O'Brien"), each word without the punctuation around it ("Palm Island." →
 // "Palm Island"), so a name is spelled the same wherever it occurs. A match
-// running across a comma or full stop is split there.
+// running across a comma or full stop is split there, and a piece of three
+// letters or fewer is dropped.
+// One to three letters is an initial, an abbreviation or a stray fragment
+// ("M", "T", "Mt", "Dr") far more often than a name. Counted over the whole
+// name, so "M. Dixon" stays; a real three-letter place (Ayr) goes too.
+export const MIN_NAME_LETTERS = 4;
+const tooShort = (name) => (name.match(/\p{L}/gu) || []).length < MIN_NAME_LETTERS;
+
 function namesOf(view) {
   const out = new Set();
   for (const match of view.not("#Honorific").json({ terms: { text: true, post: true } })) {
     let words = [];
     const flush = () => {
       const name = words.join(" ").trim();
-      if (name) out.add(name);
+      if (name && !tooShort(name)) out.add(name);
       words = [];
     };
     for (const term of match.terms) {

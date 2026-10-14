@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
-import { linkNamedEntities, confirmPlaces, addPlaceCoordinates } from "./plugins/name-lookup/index.js";
+import { linkNamedEntities, confirmPlaces, addPlaceCoordinates, CACHE_PATH } from "./plugins/name-lookup/index.js";
 import { generatedEntityId } from "./src/_entity_ids.js";
 import { extractNames, fileText, isReadableForNames } from "./plugins/name-lookup/extract.js";
 
@@ -44,6 +44,17 @@ function pdfWithText(text) {
   out += offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
   out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return new TextEncoder().encode(out);
+}
+
+// The \`where\` of a GA query, whether sent in the URL (one name) or as a form
+// POST (a batch), and the names an exact query asks for, upper-cased.
+const gaWhere = (url, init) => new URL(url).searchParams.get("where") || new URLSearchParams(String(init?.body || "")).get("where") || "";
+function gaNamesAsked(url, init) {
+  const where = gaWhere(url, init);
+  const list = where.match(/in \((.*)\)\s*$/);
+  if (list) return [...list[1].matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1].replace(/''/g, "'"));
+  const single = where.match(/^upper\(name\) = upper\('(.+?)'\)\s*$/);
+  return single ? [single[1].toUpperCase()] : [];
 }
 
 console.log("name-lookup");
@@ -163,10 +174,10 @@ await check("coordinates follow merge's region preference, from the folder's mer
     Yarrabah: [{ name: "Yarrabah", latitude: -17.0, longitude: 145.9, authority: "QLD" }],
   };
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const where = new URL(url).searchParams.get("where") || "";
-    const name = (where.match(/upper\('(.+?)'\)\s*$/) || [])[1];
-    const rows = url.toString().includes("ga.gov.au") ? (GA[name] || []) : [];
+  globalThis.fetch = async (url, init) => {
+    const rows = url.toString().includes("ga.gov.au")
+      ? gaNamesAsked(url, init).flatMap((name) => Object.entries(GA).find(([n]) => n.toUpperCase() === name)?.[1] || [])
+      : [];
     return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
   };
   try {
@@ -216,9 +227,8 @@ await check("ties go to the region first, then to a populated place", async () =
 
 await check("a partial match is a place too, named as the file has it, and logged — unless exact names only", async () => {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const where = new URL(url).searchParams.get("where") || "";
-    const rows = /like upper\('Jambun%'\)/.test(where)
+  globalThis.fetch = async (url, init) => {
+    const rows = /like upper\('Jambun%'\)/.test(gaWhere(url, init))
       ? [{ name: "Jambun Creek", latitude: -17.9, longitude: 145.9, authority: "QLD", category: "WATERWAY", feature: "CREEK" }]
       : [];
     return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
@@ -248,6 +258,52 @@ await check("a partial match is a place too, named as the file has it, and logge
   }
 });
 
+await check("answers are kept in the folder: a second run asks nobody; GHAP only when ticked", async () => {
+  const folder = new Map(); // path → text, standing in for the picked folder
+  const deps = {
+    readJsonFromFolder: async (_dir, path) => (folder.has(path) ? JSON.parse(folder.get(path)) : null),
+    writeFileAtPath: async (_dir, path, text) => { folder.set(path, text); },
+  };
+  const requests = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push(String(url));
+    const rows = gaNamesAsked(url, init).includes("YARRABAH")
+      ? [{ name: "Yarrabah", latitude: -17.0, longitude: 145.9, authority: "QLD", category: "POPULATED PLACE" }] : [];
+    return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
+  };
+  const bytes = new TextEncoder().encode("We travelled to Yarrabah and Jambun with Chloe Grant.");
+  const run = async (options) => {
+    const crate = new ROCrate({ array: true, link: true });
+    await REGISTRY["name-lookup"](deps).hooks["files:prepare"].handler({
+      options: { enableNameLookups: true, nameLookupExactOnly: true, ...options }, crate, dirHandle: {}, log: () => {},
+      filesWithMeta: [{ id: "trip.txt", relativePath: "trip.txt", fileName: "trip.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
+    });
+    return crate;
+  };
+  try {
+    const first = await run({});
+    assert.deepEqual(ids(first.getProperty("trip.txt", "custom:place")), ["#place-yarrabah"]);
+    assert.equal(requests.length, 1, "first run: one batched GA request");
+    assert.ok(!requests.some((u) => u.includes("tlcmap.org")), "GHAP isn't asked unless ticked");
+    const saved = JSON.parse(folder.get(CACHE_PATH));
+    const names = Object.values(saved.lookups)[0].names;
+    assert.equal(names.yarrabah.latitude, -17.0);
+    assert.equal(names.jambun, null, "a definite miss is kept too");
+
+    requests.length = 0;
+    const second = await run({});
+    assert.equal(requests.length, 0, "second run: answered from the folder");
+    assert.deepEqual([].concat(second.getEntity("#location-yarrabah").asWKT), ["POINT(145.9 -17)"]);
+
+    await run({ nameLookupGhap: true });
+    assert.ok(requests.some((u) => u.includes("tlcmap.org") && u.includes("Jambun")), "with GHAP ticked, GA's misses go to GHAP");
+    assert.equal(Object.keys(JSON.parse(folder.get(CACHE_PATH)).lookups).length, 2, "kept apart from the GA-only answers");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 await check("no coordinates for a place the crate doesn't hold", async () => {
   const crate = new ROCrate({ array: true, link: true });
   const counts = await addPlaceCoordinates(crate, new Map([["Nowhere", { latitude: 1, longitude: 2, asWKT: "POINT(2 1)" }]]));
@@ -257,7 +313,9 @@ await check("no coordinates for a place the crate doesn't hold", async () => {
 await check("off by default; the gazetteer is on once the option is", () => {
   const plugin = REGISTRY["name-lookup"]({});
   assert.equal(plugin.optionSchema.default, false);
-  assert.equal(plugin.optionSchema.children.find((c) => c.key === "nameLookupGazetteer").default, true);
+  const gazetteer = plugin.optionSchema.children.find((c) => c.key === "nameLookupGazetteer");
+  assert.equal(gazetteer.default, true);
+  assert.equal(gazetteer.children.find((c) => c.key === "nameLookupGhap").default, false, "GHAP, the slow part, is opt-in");
   assert.equal(plugin.hooks["files:prepare"].activeWhen({ options: {} }), false);
 });
 

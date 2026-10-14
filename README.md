@@ -167,7 +167,13 @@ shared with `merge`), and each name turned into the `@id` merge would give it
 created as a `Person` or `Place` if not. With the gazetteer on, places get
 coordinates as a linked `Geometry`, written as merge writes them and looked
 up with the merge config's `placeMatchRegion`; a Place that already has a
-`geo` keeps it. A gazetteer name that only starts with or contains the
+`geo` keeps it. Geoscience Australia is asked a hundred names per request
+(`upper(name) in (…)`); only its misses cost a request each, and only when
+"Exact place names only" is off or "Also check GHAP" is on — TLCMap's list
+parameters don't work, so GHAP is one name per request. Answers are kept in
+`_config/name-lookup/gazetteer-cache.json`, filed under the lookup settings,
+so a later run only asks about new names; a lookup that got no reply isn't
+kept. A gazetteer name that only starts with or contains the
 file's ("Murray Upp" → Murray Upper) counts too, unless `nameLookupExactOnly`
 is on — `merge`'s `placeExactOnly` makes the same choice for merged places. Files are linked as
 `custom:participant` / `custom:place`. Build starts from the crate Process
@@ -313,7 +319,7 @@ handlers close over. Call it once, before the plugin's hooks can fire.
 | `ca-data-prep` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (reads the chosen transcript grammar), `mergeCrateInto` (lands the transcript crate in an existing one) |
 | `chat-export` | `writeFileAtPath`, `fileExists`, `readFileTextFromDirectory` (the chosen transcript grammar; its .docx/.txt reading goes through `ca-data-prep`'s own exports rather than `deps`) |
 | `merge` | `readJsonFromFolder`, `graphEntityById` |
-| `name-lookup` | `readFileBytes` (only when a file in `filesWithMeta` has no `handle`), `readJsonFromFolder` (the folder's `merge-config.json`, for its place-lookup settings) |
+| `name-lookup` | `readFileBytes` (only when a file in `filesWithMeta` has no `handle`), `readJsonFromFolder` (the folder's `merge-config.json`, for its place-lookup settings, and the gazetteer cache), `writeFileAtPath` (the gazetteer cache, `_config/name-lookup/`) |
 | `roctable` | `readJsonFromFolder`, `writeFileAtPath`, `getFileHandleAtPath`, `readFileTextFromDirectory`, `loadCrateFromJson` (lets "Configure tables…" inspect the folder's crate without a build running), `openModal` (the table-selection tree, `config-tree-ui.js`) |
 | `transcript-grammar` | `writeFileAtPath`, `readFileTextFromDirectory`, `openModal` (the three-step grammar editor and the tester, `ui.js`); its `.docx` reading goes through `ca-data-prep`'s `extractDocumentText`, imported on demand |
 | `validate-crate` | `loadMasp` |

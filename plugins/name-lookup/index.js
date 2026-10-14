@@ -14,10 +14,10 @@
 import { progressFor } from "../../src/_progress.js";
 import { generatedEntityId } from "../../src/_entity_ids.js";
 
-let readFileBytes, readJsonFromFolder;
+let readFileBytes, readJsonFromFolder, writeFileAtPath;
 
 export function createPlugin(deps) {
-  ({ readFileBytes, readJsonFromFolder } = deps);
+  ({ readFileBytes, readJsonFromFolder, writeFileAtPath } = deps);
   return plugin;
 }
 
@@ -120,15 +120,46 @@ const hasGeometry = (place) => [].concat(place?.geo ?? []).some((ref) => ref && 
 export async function addPlaceCoordinates(crate, coordinatesByName) {
   const { setPlaceGeometry } = await import("../../src/_place_lookup.js");
   const counts = { placed: 0, kept: 0 };
+  const done = new Set(); // "Cairns" and "CAIRNS" are one Place
   for (const [name, match] of coordinatesByName) {
     const id = generatedEntityId("Place", name);
     const place = crate.getEntity(id);
-    if (!place) continue;
+    if (!place || done.has(id)) continue;
+    done.add(id);
     if (hasGeometry(place)) { counts.kept++; continue; }
     setPlaceGeometry(crate, id, name, match);
     counts.placed++;
   }
   return counts;
+}
+
+// What the gazetteers said, kept in the folder so the next Process run only
+// asks about names it hasn't seen. Standing data rather than output, so under
+// _config/ (kept by "Delete plugin output before rebuilding"). Answers are
+// filed under the settings that produced them — a different region,
+// provider list or exact/partial choice gives different answers — and a
+// lookup that got no reply is never kept (the service's settled()).
+export const CACHE_DIR = "_config/name-lookup";
+export const CACHE_PATH = `${CACHE_DIR}/gazetteer-cache.json`;
+
+/** A short, stable key for the lookup settings that decide an answer. */
+export function cacheKeyFor(settings) {
+  const text = JSON.stringify({
+    providers: settings.providers || [],
+    exactOnly: !!settings.exactOnly,
+    placeMatchRegion: settings.placeMatchRegion || "",
+    records: settings.records || settings.cache || null,
+    geoscienceAustralia: settings.geoscienceAustralia?.url || "",
+    ghap: settings.ghap?.url || "",
+  });
+  let hash = 0x811c9dc5; // FNV-1a
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+  return hash.toString(16).padStart(8, "0");
+}
+
+async function loadCache(dirHandle) {
+  const cache = dirHandle ? await readJsonFromFolder(dirHandle, CACHE_PATH) : null;
+  return cache && typeof cache.lookups === "object" ? cache : { version: 1, lookups: {} };
 }
 
 async function bytesOf(ctx, file) {
@@ -153,13 +184,16 @@ const plugin = {
     hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
       { key: "nameLookupGazetteer", label: "Look names up in the Australian gazetteers", default: true,
-        hint: "Uses Geoscience Australia and GHAP to treat other capitalised names that match a place as places, and to give places coordinates, preferring the region set as placeMatchRegion in the merge config. Needs the network.",
+        hint: "Uses Geoscience Australia to treat other capitalised names that match a place as places, and to give places coordinates, preferring the region set as placeMatchRegion in the merge config. Needs the network. Answers are kept in _config/name-lookup/ so a later run only looks up new names.",
         children: [
-          { key: "nameLookupExactOnly", label: "Exact place names only", default: false,
-            hint: "Off: a name the gazetteers don't know exactly is still a place if one starts with or contains it (\"Murray Upp\" → Murray Upper), and takes its coordinates. On: only exact names count." },
+          { key: "nameLookupExactOnly", label: "Exact place names only", default: true,
+            hint: "On: only exact names count, which Geoscience Australia answers a hundred at a time. Off: a name it doesn't know exactly is still a place if one starts with it (\"Murray Upp\" → Murray Upper) — one request per name, so slower." },
+          { key: "nameLookupGhap", label: "Also check GHAP", default: false,
+            hint: "Asks TLCMap's Gazetteer of Historical Australian Places about every name Geoscience Australia doesn't know — historical and Aboriginal place names it lacks. One request per name at about 3 seconds each, so a folder with thousands of names takes a long time on its first run." },
         ] },
     ],
   },
+  outputPaths: [{ path: CACHE_DIR, kind: "dir" }],
   hooks: {
     "files:prepare": {
       priority: 50,
@@ -205,7 +239,7 @@ const plugin = {
 
           let coordinates = new Map();
           if (gazetteer) {
-            const { createPlaceLookupService, placeLookupSettings } = await import("../../src/_place_lookup.js");
+            const { createPlaceLookupService, placeLookupSettings, normalizePlaceName } = await import("../../src/_place_lookup.js");
             const { resolveMergeConfig } = await import("../../src/_merge_config.js");
             const { config, source } = await resolveMergeConfig(ctx.options, ctx.dirHandle, readJsonFromFolder);
             const settings = placeLookupSettings(config);
@@ -214,17 +248,30 @@ const plugin = {
             // loses the first few requests of a cold connection. GHAP has its own,
             // longer default.
             const exactOnly = !!ctx.options.nameLookupExactOnly;
-            const service = createPlaceLookupService({
+            const providers = (settings.providers?.length ? settings.providers : ["geoscience-australia", "ghap"])
+              .filter((provider) => provider !== "ghap" || ctx.options.nameLookupGhap);
+            const serviceSettings = {
               ...settings,
+              providers,
               ...(exactOnly ? { exactOnly } : {}),
               geoscienceAustralia: { timeoutMs: LOOKUP_TIMEOUT_MS, ...settings.geoscienceAustralia },
               ghap: { ...settings.ghap },
-            });
+            };
+            const service = createPlaceLookupService(serviceSettings);
 
             const all = Object.values(namesByFile);
             const candidates = [...new Set(all.flatMap((names) => names.candidates))];
             const places = [...new Set(all.flatMap((names) => names.places))];
-            await service.prefetch([...candidates, ...places], (fraction, label) => progress.report(readShare + fraction * (1 - readShare), label));
+
+            const cacheKey = cacheKeyFor(serviceSettings);
+            const cache = await loadCache(ctx.dirHandle).catch(() => ({ version: 1, lookups: {} }));
+            const remembered = cache.lookups[cacheKey]?.names || {};
+            service.seed(remembered);
+            const asked = [...candidates, ...places];
+            const fromCache = asked.filter((name) => Object.hasOwn(remembered, normalizePlaceName(name))).length;
+            if (fromCache) ctx.log(`Name lookup: ${fromCache} of ${asked.length} name(s) answered from ${CACHE_PATH}.`, "muted");
+
+            await service.prefetch(asked, (fraction, label) => progress.report(readShare + fraction * (1 - readShare), label));
 
             const confirmed = await confirmPlaces(candidates, (name) => service.lookup(name));
             // The lookup already asked for exact names only; this also drops a
@@ -245,6 +292,18 @@ const plugin = {
             for (const name of [...places, ...confirmed.keys()]) {
               const match = await service.lookup(name);
               if (match) coordinates.set(name, match);
+            }
+
+            if (ctx.dirHandle && asked.length > fromCache) {
+              cache.lookups[cacheKey] = {
+                settings: { providers, exactOnly, placeMatchRegion: settings.placeMatchRegion || "" },
+                names: { ...remembered, ...service.settled() },
+              };
+              try {
+                await writeFileAtPath(ctx.dirHandle, CACHE_PATH, `${JSON.stringify(cache, null, 2)}\n`);
+              } catch (e) {
+                ctx.log(`Name lookup: couldn't save ${CACHE_PATH}: ${e.message}`, "warn");
+              }
             }
           }
 

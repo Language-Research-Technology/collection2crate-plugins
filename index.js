@@ -30,6 +30,7 @@ import { createPlugin as createCollocation } from "./plugins/collocation/index.j
 import { createPlugin as createSentimentExplorer } from "./plugins/sentimentexplorer/index.js";
 import { createPlugin as createTopicDetector } from "./plugins/topicdetector/index.js";
 import { createPlugin as createPlots } from "./plugins/plots/index.js";
+import { createPlugin as createTextClassifier } from "./plugins/textclassifier/index.js";
 import { createPlugin as createHtmlOutput } from "./plugins/ro-crate-html-output/index.js";
 
 // Order here doubles as the default hook-execution order for plugins sharing
@@ -66,5 +67,6 @@ export const REGISTRY = {
   "collocation": createCollocation,
   "topicdetector": createTopicDetector,
   "plots": createPlots,
+  "textclassifier": createTextClassifier,
 };
 

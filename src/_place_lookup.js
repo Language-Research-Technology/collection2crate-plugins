@@ -331,22 +331,28 @@ function buildManualRecords(rawRecords) {
   return out;
 }
 
-async function fetchJson(url, timeoutMs) {
-  if (typeof fetch !== "function") return null;
+// `onFailure` is called when no answer came back (network error, timeout, a
+// non-2xx status, a body that isn't JSON) — as opposed to an answer with no
+// places in it. A caller that keeps answers beyond this run must not keep
+// those. `body` makes it a form POST, for queries too long for a URL.
+async function fetchJson(url, timeoutMs, { body, onFailure } = {}) {
+  if (typeof fetch !== "function") { onFailure?.(); return null; }
   const { signal, cancel } = createTimeoutSignal(timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { Accept: "application/json, application/geo+json" },
       cache: "no-store",
       signal,
+      ...(body ? { method: "POST", body } : {}),
     });
-    if (!res.ok) return null;
+    if (!res.ok) { onFailure?.(); return null; }
     const contentType = String(res.headers.get("content-type") || "").toLowerCase();
     if (contentType.includes("json")) return await res.json();
     const text = await res.text();
-    if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) return null;
+    if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) { onFailure?.(); return null; }
     return JSON.parse(text);
   } catch {
+    onFailure?.();
     return null;
   } finally {
     cancel();
@@ -376,32 +382,89 @@ async function lookupViaGhap(placeName, options) {
   };
   // TLCMap takes about 3s a request, past the 2.5s GA gets.
   const timeoutMs = options?.timeoutMs || 10000;
-  const match = pickBestRecord(await fetchJson(search("name"), timeoutMs), "ghap", placeName, options);
+  const fetchOptions = { onFailure: options?.onFailure };
+  const match = pickBestRecord(await fetchJson(search("name"), timeoutMs, fetchOptions), "ghap", placeName, options);
   if (match || options?.exactOnly) return match;
-  return pickBestRecord(await fetchJson(search("containsname"), timeoutMs), "ghap", placeName, options);
+  return pickBestRecord(await fetchJson(search("containsname"), timeoutMs, fetchOptions), "ghap", placeName, options);
 }
 
+const GA_QUERY_URL = "https://services.ga.gov.au/gis/rest/services/Composite_Gazetteer_of_Australia/MapServer/0/query";
+const GA_OUT_FIELDS = "id,name,feature,category,theme,latitude,longitude,authority";
+
+// `exactRows`: the rows a batched exact query (lookupManyViaGeoscienceAustralia)
+// already returned for this name — an empty array is a definite "no exact
+// match" — so the exact request is skipped.
 async function lookupViaGeoscienceAustralia(placeName, options) {
-  const baseUrl = String(
-    options?.url || "https://services.ga.gov.au/gis/rest/services/Composite_Gazetteer_of_Australia/MapServer/0/query"
-  ).trim();
+  const baseUrl = String(options?.url || GA_QUERY_URL).trim();
   if (!baseUrl) return null;
-  const exactUrl = new URL(baseUrl);
-  exactUrl.searchParams.set("where", `upper(name) = upper('${escapeWhereLiteral(placeName)}')`);
-  exactUrl.searchParams.set("outFields", String(options?.outFields || "id,name,feature,category,theme,latitude,longitude,authority"));
-  exactUrl.searchParams.set("returnGeometry", String(options?.returnGeometry || "false"));
-  exactUrl.searchParams.set("f", String(options?.format || "pjson"));
-  const exactPayload = await fetchJson(exactUrl, options?.timeoutMs || 2500);
-  let match = pickBestRecord(exactPayload, "geoscience-australia", placeName, options);
+  const fetchOptions = { onFailure: options?.onFailure };
+  let match;
+  if (Array.isArray(options?.exactRows)) {
+    match = pickBestRecord({ features: options.exactRows.map((attributes) => ({ attributes })) }, "geoscience-australia", placeName, options);
+  } else {
+    const exactUrl = new URL(baseUrl);
+    exactUrl.searchParams.set("where", `upper(name) = upper('${escapeWhereLiteral(placeName)}')`);
+    exactUrl.searchParams.set("outFields", String(options?.outFields || GA_OUT_FIELDS));
+    exactUrl.searchParams.set("returnGeometry", String(options?.returnGeometry || "false"));
+    exactUrl.searchParams.set("f", String(options?.format || "pjson"));
+    const exactPayload = await fetchJson(exactUrl, options?.timeoutMs || 2500, fetchOptions);
+    match = pickBestRecord(exactPayload, "geoscience-australia", placeName, options);
+  }
   if (match || options?.exactOnly) return match;
 
   const fuzzyUrl = new URL(baseUrl);
   fuzzyUrl.searchParams.set("where", `upper(name) like upper('${escapeWhereLiteral(placeName)}%')`);
-  fuzzyUrl.searchParams.set("outFields", String(options?.outFields || "id,name,feature,category,theme,latitude,longitude,authority"));
+  fuzzyUrl.searchParams.set("outFields", String(options?.outFields || GA_OUT_FIELDS));
   fuzzyUrl.searchParams.set("returnGeometry", String(options?.returnGeometry || "false"));
   fuzzyUrl.searchParams.set("f", String(options?.format || "pjson"));
-  const payload = await fetchJson(fuzzyUrl, options?.timeoutMs || 2500);
+  const payload = await fetchJson(fuzzyUrl, options?.timeoutMs || 2500, fetchOptions);
   return pickBestRecord(payload, "geoscience-australia", placeName, options);
+}
+
+// GA's query service takes a whole list of names in one `in (…)` clause: a
+// hundred names come back in about the time one does. Returns a Map from each
+// name's normalised form to its rows ([] for none) — only for names whose
+// batch was answered; a batch that failed is simply absent, and those names
+// get their own requests later. A batch GA cut short (exceededTransferLimit:
+// a name like "Spring Creek" has hundreds of rows) is split and asked again,
+// so a name is never wrongly reported as missing.
+export const GA_BATCH_SIZE = 100;
+
+async function lookupManyViaGeoscienceAustralia(names, options = {}, report = () => {}) {
+  const baseUrl = String(options.url || GA_QUERY_URL).trim();
+  const found = new Map();
+  if (!baseUrl || !names.length) return found;
+  const timeoutMs = Math.max(options.timeoutMs || 2500, 15000);
+  let done = 0;
+
+  const ask = async (batch) => {
+    const literals = batch.map((name) => `'${escapeWhereLiteral(name.toUpperCase())}'`).join(",");
+    const body = new URLSearchParams({
+      where: `upper(name) in (${literals})`,
+      outFields: String(options.outFields || GA_OUT_FIELDS),
+      returnGeometry: "false",
+      f: "json",
+    });
+    const payload = await fetchJson(baseUrl, timeoutMs, { body });
+    if (payload?.exceededTransferLimit && batch.length > 1) {
+      const half = Math.ceil(batch.length / 2);
+      await ask(batch.slice(0, half));
+      await ask(batch.slice(half));
+      return;
+    }
+    if (payload && Array.isArray(payload.features)) {
+      for (const name of batch) found.set(normalizePlaceName(name), []);
+      for (const feature of payload.features) {
+        const rows = found.get(normalizePlaceName(feature?.attributes?.name));
+        if (rows) rows.push(feature.attributes);
+      }
+    }
+    done += batch.length;
+    report(done / names.length);
+  };
+
+  for (let i = 0; i < names.length; i += GA_BATCH_SIZE) await ask(names.slice(i, i + GA_BATCH_SIZE));
+  return found;
 }
 
 export function createPlaceLookupService(options = {}, log = () => {}) {
@@ -419,6 +482,11 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
     : ["geoscience-australia", "ghap"];
   const manualRecords = buildManualRecords(settings.records || settings.cache);
   const resultCache = new Map();
+  // Keys whose answer rests on a request that got no reply: right for this run
+  // (nothing better is coming), but not to be kept beyond it — see settled().
+  const uncertain = new Set();
+  // GA's exact rows per normalised spelling, from prefetch's batched queries.
+  const gaExactRows = new Map();
   let hasLoggedConfig = false;
   const PREFETCH_CONCURRENCY = 5;
 
@@ -448,6 +516,8 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
       }
 
       let match = null;
+      let failed = false;
+      const onFailure = () => { failed = true; };
       for (const variant of variants) {
         for (const provider of providers) {
           if (provider === "ghap") {
@@ -455,12 +525,15 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
               ...(settings.ghap || {}),
               ...(exactOnly ? { exactOnly } : {}),
               placeMatchRegion,
+              onFailure,
             });
           } else if (provider === "geoscience-australia") {
             match = await lookupViaGeoscienceAustralia(variant, {
               ...(settings.geoscienceAustralia || {}),
               ...(exactOnly ? { exactOnly } : {}),
+              exactRows: gaExactRows.get(normalizePlaceName(variant)),
               placeMatchRegion,
+              onFailure,
             });
           }
           if (match) break;
@@ -489,20 +562,62 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
         );
       }
       resultCache.set(key, match);
+      if (failed && !match) uncertain.add(key);
       return match;
     },
 
-    // Resolves every name in `placeNames` up front, `PREFETCH_CONCURRENCY` at
-    // a time, reporting a fraction as each one finishes — so a merge with many
-    // distinct Place values doesn't look frozen while lookups run one after
-    // another. `report(fraction, label)` is the progress channel (see
-    // src/_progress.js); it is deliberately not `log`, which is the transcript.
+    // Answers from an earlier run (name-lookup's folder cache), keyed by
+    // normalizePlaceName: a record, or null for "no such place". They are
+    // taken as they are — no request is made for those names.
+    seed(entries) {
+      for (const [key, record] of Object.entries(entries || {})) {
+        if (key && !resultCache.has(key)) resultCache.set(key, record ?? null);
+      }
+    },
+
+    // Every answer worth keeping beyond this run: everything looked up, minus
+    // the misses that rest on a request that got no reply.
+    settled() {
+      const out = {};
+      for (const [key, record] of resultCache) if (!uncertain.has(key)) out[key] = record;
+      return out;
+    },
+
+    // Resolves every name in `placeNames` up front, reporting a fraction as it
+    // goes — so a merge with many distinct Place values doesn't look frozen.
+    // GA is asked first in batches (lookupManyViaGeoscienceAustralia), every
+    // spelling of every name at once; that settles any name GA knows exactly,
+    // and any name it doesn't when nothing else would be asked. The rest are
+    // looked up one at a time, `PREFETCH_CONCURRENCY` at once. `report(fraction,
+    // label)` is the progress channel (see src/_progress.js); it is
+    // deliberately not `log`, which is the transcript.
     async prefetch(placeNames, report = () => {}) {
       if (!enabled) return;
       const names = [...new Set(placeNames)].filter((n) => normalizePlaceName(n) && !resultCache.has(normalizePlaceName(n)));
       const total = names.length;
       if (!total) return;
       log(`Place lookup: resolving ${total} place name(s)…`, "muted");
+      // A name the config gives coordinates for (manual records) never needs
+      // a gazetteer, so it stays out of the batches — lookup() settles it
+      // before asking anyone.
+      const hasManual = (name) => placeNameVariants(name).some((variant) => manualLookup(manualRecords, variant));
+
+      const askGa = providers.includes("geoscience-australia");
+      const batchShare = askGa ? 0.3 : 0;
+      if (askGa) {
+        const spellings = new Map();
+        for (const name of names) {
+          if (hasManual(name)) continue;
+          for (const variant of placeNameVariants(name)) {
+            const key = normalizePlaceName(variant);
+            if (key && !gaExactRows.has(key) && !spellings.has(key)) spellings.set(key, variant);
+          }
+        }
+        const rows = !spellings.size ? new Map() : await lookupManyViaGeoscienceAustralia([...spellings.values()], settings.geoscienceAustralia || {},
+          (fraction) => report(fraction * batchShare, `Place lookup: checked ${Math.round(fraction * spellings.size)}/${spellings.size} spelling(s) with Geoscience Australia…`));
+        for (const [key, found] of rows) gaExactRows.set(key, found);
+      }
+
       let done = 0;
       let next = 0;
       const worker = async () => {
@@ -510,7 +625,7 @@ export function createPlaceLookupService(options = {}, log = () => {}) {
           const name = names[next++];
           await service.lookup(name);
           done++;
-          report(done / total, `Place lookup: resolved ${done}/${total} place name(s)…`);
+          report(batchShare + (done / total) * (1 - batchShare), `Place lookup: resolved ${done}/${total} place name(s)…`);
         }
       };
       await Promise.all(Array.from({ length: Math.min(PREFETCH_CONCURRENCY, total) }, worker));

@@ -117,4 +117,60 @@ await check("merge: partial matches by default, exact only when placeExactOnly i
   assert.equal([].concat(exact.geo ?? []).length, 0, "no coordinates without an exact name");
 }));
 
+await check("prefetch asks GA about a hundred names in one request, and settles misses without more", async () => {
+  const realFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), body: String(init?.body || "") });
+    const where = new URLSearchParams(String(init?.body || "")).get("where") || "";
+    const rows = /'CAIRNS'/.test(where) ? [{ name: "Cairns", latitude: -16.9, longitude: 145.7, authority: "QLD", category: "POPULATED PLACE" }] : [];
+    return new Response(JSON.stringify({ features: rows.map((attributes) => ({ attributes })) }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const service = createPlaceLookupService({ providers: ["geoscience-australia"], exactOnly: true });
+    const names = ["Cairns", ...Array.from({ length: 80 }, (_, i) => `Nowhere ${i}`)];
+    await service.prefetch(names);
+    assert.equal(requests.length, 1, "one batched request");
+    assert.match(new URLSearchParams(requests[0].body).get("where"), /^upper\(name\) in \(/);
+    assert.equal((await service.lookup("Cairns")).latitude, -16.9);
+    assert.equal(await service.lookup("Nowhere 3"), null);
+    assert.equal(requests.length, 1, "lookups after the batch make no requests");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("a batch GA cuts short is split and asked again", async () => {
+  const realFetch = globalThis.fetch;
+  const sizes = [];
+  globalThis.fetch = async (url, init) => {
+    const asked = (new URLSearchParams(String(init?.body || "")).get("where").match(/'/g) || []).length / 2;
+    sizes.push(asked);
+    const body = asked > 2 ? { features: [], exceededTransferLimit: true } : { features: [] };
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    await createPlaceLookupService({ providers: ["geoscience-australia"], exactOnly: true }).prefetch(["Aa", "Bb", "Cc", "Dd"]);
+    assert.deepEqual(sizes, [4, 2, 2]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("settled() leaves out a miss whose request got no reply", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (/Timeout/.test(String(init?.body || "") + url)) throw new Error("timed out");
+    return new Response(JSON.stringify({ features: [] }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const service = createPlaceLookupService({ providers: ["geoscience-australia"], exactOnly: true });
+    await service.lookup("Nowhere");
+    await service.lookup("Timeout Creek");
+    assert.deepEqual(service.settled(), { nowhere: null });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 if (failures) { console.log(`\n${failures} check(s) failed.`); process.exit(1); }

@@ -79,7 +79,8 @@ await check("a Person merge made from a spreadsheet is the one a file links to",
       placeLookup: { enabled: false } },
     () => {}, (c, id) => c.getEntity(id));
   const counts = linkNamedEntities(crate, { "a.txt": { people: ["Dora Leung"], places: ["Mount Isa"] } });
-  assert.deepEqual(counts, { created: 0, reused: 2, links: 2 });
+  assert.deepEqual(counts, { created: 0, reused: 2, links: 1 }, "merge already linked Mount Isa by contentLocation; only Dora Leung is new");
+  assert.deepEqual(ids(crate.getProperty("a.txt", "contentLocation")), ["#place-mount-isa"], "one link, not two");
 });
 
 await check("finds people and places, without honorifics, possessives or trailing punctuation", () => {
@@ -93,6 +94,14 @@ await check("a name running across a comma is two", () => {
   const { people, candidates } = extractNames("Notes by George Watson, Jambun.");
   assert.deepEqual(people, ["George Watson"]);
   assert.deepEqual(candidates, ["Jambun"]);
+});
+
+await check("names of three letters or fewer are dropped", () => {
+  const { people, places, candidates } = extractNames("M Dixon met T and Dr Watson at Mt Garnet, then Ayr, Mt and Bulgun.");
+  const all = [...people, ...places, ...candidates];
+  for (const junk of ["M", "T", "Mt", "Ayr"]) assert.ok(!all.includes(junk), `"${junk}" is dropped`);
+  assert.ok(all.includes("Bulgun"), "four letters stay");
+  assert.ok(all.some((name) => name.includes("Dixon")), "a name with an initial stays");
 });
 
 await check("reads .txt, .md, .docx and .pdf only", async () => {
@@ -126,10 +135,10 @@ await check("reuses an existing entity, creates the rest, links each once", () =
   const counts = linkNamedEntities(crate, { "a.txt": names });
   assert.deepEqual(counts, { created: 2, reused: 1, links: 3 });
   assert.deepEqual(ids(crate.getProperty("a.txt", "custom:participant")), ["#dora_leung", "#john_smith"]);
-  assert.deepEqual(ids(crate.getProperty("a.txt", "custom:place")), ["#place-mount-isa"]);
+  assert.deepEqual(ids(crate.getProperty("a.txt", "contentLocation")), ["#place-mount-isa"]);
   assert.deepEqual([].concat(crate.getEntity("#dora_leung").description), ["Described by hand"], "the existing entity is kept as it was");
   assert.ok([].concat(crate.getEntity("#place-mount-isa")["@type"]).includes("Place"));
-  assert.ok(crate.getEntity("arcp://name,custom/terms#place"), "custom:place is defined");
+  assert.equal(crate.getEntity("arcp://name,custom/terms#place"), undefined, "contentLocation is schema.org's: no definition added");
 
   assert.equal(linkNamedEntities(crate, { "a.txt": names }).links, 0, "a second run adds no duplicate links");
 });
@@ -160,7 +169,7 @@ await check("Process alone links the crate: files:prepare is the only tap", asyn
   };
   await plugin.hooks["files:prepare"].handler(ctx);
   assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:participant")), ["#dora_leung", "#john_smith", "#mary_o_brien"]);
-  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:place")), ["#place-mount-isa", "#place-queensland", "#place-palm-island"], "Yarrabah needs the gazetteer, which is off");
+  assert.deepEqual(ids(crate.getProperty("notes.txt", "contentLocation")), ["#place-mount-isa", "#place-queensland", "#place-palm-island"], "Yarrabah needs the gazetteer, which is off");
   assert.deepEqual(ids(crate.getProperty("scan.pdf", "custom:participant")), ["#chloe_grant"]);
   assert.equal(crate.getEntity("song.wav"), undefined);
 });
@@ -195,7 +204,7 @@ await check("coordinates follow merge's region preference, from the folder's mer
     };
     await plugin.hooks["files:prepare"].handler(ctx);
 
-    assert.deepEqual(ids(crate.getProperty("trip.txt", "custom:place")), ["#place-cairns", "#place-yarrabah"]);
+    assert.deepEqual(ids(crate.getProperty("trip.txt", "contentLocation")), ["#place-cairns", "#place-yarrabah"]);
     assert.deepEqual(ids(crate.getEntity("#place-cairns").geo), ["#location-cairns"]);
     assert.deepEqual([].concat(crate.getEntity("#location-cairns").asWKT), ["POINT(145.7 -16.9)"], "the QLD city: not the QLD county listed first, nor the town in NSW");
     assert.deepEqual(ids(crate.getEntity("#place-yarrabah").geo), ["#yarrabah-by-hand"], "a Place's own coordinates are kept");
@@ -242,7 +251,7 @@ await check("a partial match is a place too, named as the file has it, and logge
       options: { enableNameLookups: true }, crate, dirHandle: {}, log: (m) => logs.push(m),
       filesWithMeta: [{ id: "camp.txt", relativePath: "camp.txt", fileName: "camp.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
     });
-    assert.deepEqual(ids(crate.getProperty("camp.txt", "custom:place")), ["#place-jambun"]);
+    assert.deepEqual(ids(crate.getProperty("camp.txt", "contentLocation")), ["#place-jambun"]);
     assert.deepEqual([].concat(crate.getEntity("#place-jambun").name), ["Jambun"], "the name as the file has it, not the gazetteer's");
     assert.deepEqual([].concat(crate.getEntity("#location-jambun").asWKT), ["POINT(145.9 -17.9)"]);
     assert.ok(logs.some((m) => /1 place\(s\) by partial match: Jambun → Jambun Creek/.test(m)), "the partial match is named in the log");
@@ -283,7 +292,7 @@ await check("answers are kept in the folder: a second run asks nobody; GHAP only
   };
   try {
     const first = await run({});
-    assert.deepEqual(ids(first.getProperty("trip.txt", "custom:place")), ["#place-yarrabah"]);
+    assert.deepEqual(ids(first.getProperty("trip.txt", "contentLocation")), ["#place-yarrabah"]);
     assert.equal(requests.length, 1, "first run: one batched GA request");
     assert.ok(!requests.some((u) => u.includes("tlcmap.org")), "GHAP isn't asked unless ticked");
     const saved = JSON.parse(folder.get(CACHE_PATH));

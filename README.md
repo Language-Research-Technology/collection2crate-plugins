@@ -176,7 +176,9 @@ so a later run only asks about new names; a lookup that got no reply isn't
 kept. A gazetteer name that only starts with or contains the
 file's ("Murray Upp" → Murray Upper) counts too, unless `nameLookupExactOnly`
 is on — `merge`'s `placeExactOnly` makes the same choice for merged places. Files are linked as
-`custom:participant` / `custom:place`. Build starts from the crate Process
+`custom:participant` (people) and schema.org's `contentLocation` (places, as merge
+links them, so the HTML preview's map can follow a File to a Place's
+coordinates). Names of three letters or fewer ("M", "Mt") are dropped. Build starts from the crate Process
 finished with, so the links are there without a `crate:build` tap; a File new
 to the crate is added bare, and `generic-input`'s scan fills it in.
 

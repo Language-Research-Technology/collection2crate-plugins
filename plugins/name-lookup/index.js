@@ -1,6 +1,6 @@
 // Finds the people and places a folder's files talk about, by named entity
 // recognition over each file's text, and links them into the crate: the File
-// gets custom:participant → Person and custom:place → Place.
+// gets custom:participant → Person and contentLocation → Place.
 //
 // All of it happens at files:prepare, during Process, on the crate the run was
 // seeded with — so the people and places are already in the crate Process
@@ -22,13 +22,16 @@ export function createPlugin(deps) {
 }
 
 const PARTICIPANT = "custom:participant";
-const PLACE = "custom:place";
+// schema.org's own property for "the location depicted or described in the
+// content" — what merge links places with too, and what the HTML preview's
+// map follows from a File to a Place's coordinates.
+const PLACE = "contentLocation";
 
 // Added only when a file was actually linked through one, like austlang's.
-// custom:participant usually arrives with the profile's fileProperties already.
+// custom:participant usually arrives with the profile's fileProperties already;
+// contentLocation is schema.org's and needs no definition.
 const PROPERTY_DEFINITIONS = {
   [PARTICIPANT]: { "@id": "arcp://name,custom/terms#participant", "@type": "rdf:Property", name: "Participant", description: "A participant associated with the file." },
-  [PLACE]: { "@id": "arcp://name,custom/terms#place", "@type": "rdf:Property", name: "Place", description: "A place named in the file's contents." },
 };
 
 const refsOf = (value) => (Array.isArray(value) ? value : value ? [value] : [])
@@ -76,7 +79,7 @@ export function linkNamedEntities(crate, namesByFile, fileNames = {}) {
 
   for (const property of used) {
     const definition = PROPERTY_DEFINITIONS[property];
-    if (!crate.getEntity(definition["@id"])) crate.addEntity(definition);
+    if (definition && !crate.getEntity(definition["@id"])) crate.addEntity(definition);
   }
   return counts;
 }
@@ -181,7 +184,7 @@ const plugin = {
   name: "name-lookup",
   optionSchema: {
     key: "enableNameLookups", label: "Identify people and places named in files", default: false,
-    hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Links each file to a Person (as participant) or Place, reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
+    hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Names of three letters or fewer are left out. Links each file to a Person (as participant) or Place (as contentLocation), reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
       { key: "nameLookupGazetteer", label: "Look names up in the Australian gazetteers", default: true,
         hint: "Uses Geoscience Australia to treat other capitalised names that match a place as places, and to give places coordinates, preferring the region set as placeMatchRegion in the merge config. Needs the network. Answers are kept in _config/name-lookup/ so a later run only looks up new names.",

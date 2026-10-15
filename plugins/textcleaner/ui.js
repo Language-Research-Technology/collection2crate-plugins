@@ -46,6 +46,11 @@ function ensureStyle() {
 .tc-prebuilt-item { display: flex; flex-direction: column; padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-2); }
 .tc-prebuilt-item .field { margin: 0; }
 .tc-prebuilt-desc { font-size: 11px; color: var(--muted); margin: 2px 0 0 24px; line-height: 1.3; }
+.tc-prebuilt-how { margin: 3px 0 0 24px; font-size: 11px; }
+.tc-prebuilt-how summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.tc-prebuilt-how p { margin: 4px 0 0; color: var(--muted); }
+.tc-prebuilt-how ol { margin: 3px 0 0; padding-left: 18px; color: var(--muted); }
+.tc-prebuilt-how code { display: block; margin-top: 3px; padding: 3px 5px; font-family: var(--mono); font-size: 11px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: pre-wrap; word-break: break-all; }
 .tc-textarea { font-family: var(--mono); font-size: 12px; width: 100%; box-sizing: border-box; min-height: 65px; resize: vertical; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
 .tc-rules-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
 .tc-rules-table th, .tc-rules-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
@@ -623,9 +628,22 @@ export async function openCleanerModal({
           else state.prebuilt.delete(id);
           void triggerPreview();
         });
+        const howBody = rule.pattern
+          ? [
+            element("p", { text: "Uses this regex:" }),
+            element("code", { text: `/${rule.pattern.source}/${rule.pattern.flags}` }),
+          ]
+          : [
+            element("p", { text: rule.howIntro || "Steps:" }),
+            element("ol", {}, (rule.steps || []).map((step) => element("li", { text: step }))),
+          ];
         const box = element("div", { className: "tc-prebuilt-item" }, [
           cb.node,
           element("span", { className: "tc-prebuilt-desc", text: rule.description }),
+          element("details", { className: "tc-prebuilt-how" }, [
+            element("summary", { text: "How it works" }),
+            ...howBody,
+          ]),
         ]);
         prebuiltsWrap.append(box);
       }

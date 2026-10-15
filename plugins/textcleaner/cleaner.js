@@ -59,6 +59,12 @@ export const PREBUILT_RULES = {
     id: "whitespace",
     label: "Extra whitespace",
     description: "Collapses consecutive spaces/tabs to a single space, reduces 3+ line breaks to 2, and trims each line.",
+    howIntro: "Takes three steps:",
+    steps: [
+      "Replaces each run of spaces or tabs ([ \\t]+) with a single space.",
+      "Replaces three or more line breaks (\\n{3,}) with two.",
+      "Trims whitespace from the start and end of every line.",
+    ],
   },
 };
 

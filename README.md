@@ -178,7 +178,12 @@ file's ("Murray Upp" → Murray Upper) counts too, unless `nameLookupExactOnly`
 is on — `merge`'s `placeExactOnly` makes the same choice for merged places. Files are linked as
 `custom:participant` (people) and schema.org's `contentLocation` (places, as merge
 links them, so the HTML preview's map can follow a File to a Place's
-coordinates). Names of three letters or fewer ("M", "Mt") are dropped. Build starts from the crate Process
+coordinates). Names of three letters or fewer ("M", "Mt") are dropped. An uploaded people list
+(`nameLookupPeopleFile`: a `.txt`, one name per line) replaces NER's guesses
+about who is a person: the people are then the listed names a file mentions —
+whole names, any case, any whitespace between words — in the list's spelling,
+and a listed name is never taken for a place. Places still come from NER and
+the gazetteers. Build starts from the crate Process
 finished with, so the links are there without a `crate:build` tap; a File new
 to the crate is added bare, and `generic-input`'s scan fills it in.
 

@@ -10,7 +10,7 @@ import { ROCrate } from "ro-crate";
 import { REGISTRY } from "./index.js";
 import { linkNamedEntities, confirmPlaces, addPlaceCoordinates, CACHE_PATH } from "./plugins/name-lookup/index.js";
 import { generatedEntityId } from "./src/_entity_ids.js";
-import { extractNames, fileText, isReadableForNames } from "./plugins/name-lookup/extract.js";
+import { extractNames, fileText, isReadableForNames, parseNameList, createNameMatcher } from "./plugins/name-lookup/extract.js";
 
 let failures = 0;
 const check = async (label, fn) => {
@@ -102,6 +102,31 @@ await check("names of three letters or fewer are dropped", () => {
   for (const junk of ["M", "T", "Mt", "Ayr"]) assert.ok(!all.includes(junk), `"${junk}" is dropped`);
   assert.ok(all.includes("Bulgun"), "four letters stay");
   assert.ok(all.some((name) => name.includes("Dixon")), "a name with an initial stays");
+});
+
+await check("a people list: one name per line, comments and blanks skipped, each name once", () => {
+  assert.deepEqual(
+    parseNameList("﻿# consultants\r\nMary O’Brien\n\n  Chloe   Grant \nchloe grant\nAnn\n"),
+    ["Mary O’Brien", "Chloe Grant", "Ann"],
+  );
+});
+
+await check("listed names match whole, in any case, across line breaks, longest first, in the list's spelling", () => {
+  const find = createNameMatcher(["Mary O’Brien", "Mary", "Chloe Grant", "Ann", "Jo"]);
+  assert.deepEqual(
+    find("Met MARY o'brien and Chloe\nGrant in Annerley; Ann's notes. Mary later. Jordan wrote."),
+    ["Mary O’Brien", "Chloe Grant", "Ann", "Mary"],
+  );
+  assert.deepEqual(createNameMatcher([])("Anyone"), []);
+});
+
+await check("with a people list, people come from the list, not NER, and a listed name is never a place", () => {
+  const findPeople = createNameMatcher(["Chloe Grant", "Tully"]);
+  const { people, places, candidates } = extractNames("Dora Leung met Chloe Grant at Mount Isa, Tully and Yarrabah.", { findPeople });
+  assert.deepEqual(people, ["Chloe Grant", "Tully"], "Dora Leung, NER's guess, is not a person");
+  assert.ok(places.includes("Mount Isa"));
+  assert.ok(![...places, ...candidates].includes("Tully"), "listed, so not a place");
+  assert.ok(![...places, ...candidates].includes("Dora Leung"), "nor are NER's people places");
 });
 
 await check("reads .txt, .md, .docx and .pdf only", async () => {
@@ -311,6 +336,25 @@ await check("answers are kept in the folder: a second run asks nobody; GHAP only
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+await check("Process with an uploaded people list links the listed people only", async () => {
+  const crate = new ROCrate({ array: true, link: true });
+  const bytes = new TextEncoder().encode("Dora Leung recorded Chloe Grant and Ann Smith at Mount Isa.");
+  const logs = [];
+  await REGISTRY["name-lookup"]({}).hooks["files:prepare"].handler({
+    options: {
+      enableNameLookups: true, nameLookupGazetteer: false,
+      nameLookupPeopleFile: "people.txt",
+      nameLookupPeopleUpload: { name: "people.txt", file: { text: async () => "Chloe Grant\nAnn Smith\nNobody Here\n" } },
+    },
+    crate, log: (m) => logs.push(m),
+    filesWithMeta: [{ id: "notes.txt", relativePath: "notes.txt", fileName: "notes.txt", handle: { getFile: async () => ({ arrayBuffer: async () => bytes.buffer }) } }],
+  });
+  assert.deepEqual(ids(crate.getProperty("notes.txt", "custom:participant")), ["#chloe_grant", "#ann_smith"]);
+  assert.equal(crate.getEntity("#dora_leung"), undefined, "NER's person is not used");
+  assert.deepEqual(ids(crate.getProperty("notes.txt", "contentLocation")), ["#place-mount-isa"], "places still come from NER");
+  assert.ok(logs.some((m) => /3 name\(s\) in people\.txt/.test(m)), "the log says the list is in use");
 });
 
 await check("no coordinates for a place the crate doesn't hold", async () => {

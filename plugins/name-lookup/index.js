@@ -186,6 +186,9 @@ const plugin = {
     key: "enableNameLookups", label: "Identify people and places named in files", default: false,
     hint: "Reads each .txt, .md, .docx and .pdf file and finds people's and places' names with named entity recognition. Names of three letters or fewer are left out. Links each file to a Person (as participant) or Place (as contentLocation), reusing one already in the crate under the @id merge would give it (#john_smith, #place-mount-isa).",
     children: [
+      { key: "nameLookupPeopleFile", type: "file", label: "People list (TXT)",
+        accept: ".txt,text/plain",
+        hint: "Optional — one name per line. When given, people are the names on this list that a file mentions (whole names, any case), instead of the people named entity recognition guesses. A listed name is never taken for a place." },
       { key: "nameLookupGazetteer", label: "Look names up in the Australian gazetteers", default: true,
         hint: "Uses Geoscience Australia to treat other capitalised names that match a place as places, and to give places coordinates, preferring the region set as placeMatchRegion in the merge config. Needs the network. Answers are kept in _config/name-lookup/ so a later run only looks up new names.",
         children: [
@@ -208,11 +211,25 @@ const plugin = {
           ctx.log("Name lookup: this host gives Process no crate to add people and places to — skipped.", "warn");
           return;
         }
-        const { isReadableForNames, fileText, extractNames } = await import("./extract.js");
+        const { isReadableForNames, fileText, extractNames, parseNameList, createNameMatcher } = await import("./extract.js");
         const files = (ctx.filesWithMeta || []).filter((file) => isReadableForNames(file.fileName || file.name || ""));
         if (!files.length) {
           ctx.log("Name lookup: no .txt, .md, .docx or .pdf files to read.", "muted");
           return;
+        }
+
+        // A people list replaces NER's guesses about who is a person.
+        let findPeople = null;
+        const peopleUpload = ctx.options.nameLookupPeopleUpload;
+        if (peopleUpload?.file) {
+          const listed = parseNameList(await peopleUpload.file.text());
+          findPeople = createNameMatcher(listed);
+          ctx.log(
+            listed.length
+              ? `Name lookup: people are the ${listed.length} name(s) in ${peopleUpload.name}, not named entity recognition's guesses.`
+              : `Name lookup: ${peopleUpload.name} lists no names, so no people will be found.`,
+            listed.length ? "muted" : "warn",
+          );
         }
 
         const gazetteer = ctx.options.nameLookupGazetteer !== false;
@@ -230,7 +247,7 @@ const plugin = {
             if (!bytes) unreadable++;
             else {
               try {
-                namesByFile[file.id] = extractNames(await fileText(bytes, fileName));
+                namesByFile[file.id] = extractNames(await fileText(bytes, fileName), { findPeople });
                 fileNames[file.id] = fileName;
               } catch (e) {
                 ctx.log(`Name lookup: couldn't read ${file.relativePath}: ${e.message}`, "warn");

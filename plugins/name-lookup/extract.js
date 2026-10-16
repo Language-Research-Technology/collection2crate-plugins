@@ -67,17 +67,85 @@ function namesOf(view) {
   return [...out];
 }
 
+// ---------------------------------------------------------------------------
+// A people list: names someone typed out, one per line, used instead of NER's
+// guesses about who is a person.
+// ---------------------------------------------------------------------------
+
+// One spelling of a name for comparing: case, runs of whitespace and curly
+// apostrophes don't make two names different.
+const nameKey = (name) => String(name).toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
+
+/**
+ * The names in a people list's text: one per line, blank lines and lines
+ * starting with # skipped, each name once (the first spelling kept).
+ */
+export function parseNameList(text) {
+  const seen = new Map();
+  for (const line of String(text || "").replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
+    const name = line.replace(/\s+/g, " ").trim();
+    if (!name || name.startsWith("#")) continue;
+    if (!seen.has(nameKey(name))) seen.set(nameKey(name), name);
+  }
+  return [...seen.values()];
+}
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A function finding which of `names` a text mentions, returned in the list's
+ * own spelling. A name matches whole — not "Ann" inside "Annerley" — in any
+ * case, with any whitespace between its words (a PDF line break included) and
+ * either apostrophe; where two overlap, the longer wins ("Mary O'Brien" over
+ * "Mary"). The list is taken as it is: the short-name filter NER's names go
+ * through doesn't apply.
+ */
+export function createNameMatcher(names) {
+  const byKey = new Map(names.map((name) => [nameKey(name), name]));
+  if (!byKey.size) return () => [];
+  // One pattern over thousands of names tests every one at every position, so
+  // each text gets a pattern of only the names whose every word it contains —
+  // a name can't match without them — and a file mentioning a few names costs
+  // a few. A name's words are its runs of letters and digits, the same runs
+  // the text is split into.
+  const runsOf = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  const listed = [...byKey.values()].map((name) => ({ name, runs: runsOf(name) }));
+  const patternFor = (name) => name.split(" ").map((word) => escapeRegExp(word).replace(/['’‘]/g, "['’‘]")).join("\\s+");
+  return (text) => {
+    const source = String(text || "");
+    const runs = new Set(runsOf(source));
+    const present = listed.filter(({ runs: words }) => words.every((word) => runs.has(word))).map(({ name }) => name);
+    if (!present.length) return [];
+    const patterns = present.sort((a, b) => b.length - a.length).map(patternFor);
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])(?:${patterns.join("|")})(?![\\p{L}\\p{N}])`, "giu");
+    const found = new Set();
+    for (const match of source.matchAll(pattern)) {
+      const name = byKey.get(nameKey(match[0]));
+      if (name) found.add(name);
+    }
+    // In the order the text first mentions them.
+    return [...found];
+  };
+}
+
 /**
  * The distinct names in `text`, in the order first seen: compromise's people
  * and places, and every other proper-noun phrase as a `candidate` — compromise
  * knows few places outside its lexicon (Yarrabah, Kuranda), so those are left
  * for a gazetteer to decide.
+ *
+ * With `findPeople` (createNameMatcher over a people list), the people are the
+ * listed names the text mentions, and NER's own idea of who is a person is
+ * set aside — those names are neither people nor, since compromise judged
+ * them to be people, places. A listed name is never a place.
  */
-export function extractNames(text) {
+export function extractNames(text, { findPeople = null } = {}) {
   const doc = nlp(String(text || "").replace(POSSESSIVE, "$1"));
-  const people = namesOf(doc.people());
-  const places = namesOf(doc.places());
+  const people = findPeople ? findPeople(text) : namesOf(doc.people());
+  const listed = new Set(findPeople ? people.map(nameKey) : []);
+  const places = namesOf(doc.places()).filter((name) => !listed.has(nameKey(name)));
   const known = new Set([...people, ...places]);
-  const candidates = namesOf(doc.match("#ProperNoun+").not("(#Person|#Place)")).filter((name) => !known.has(name));
+  const candidates = namesOf(doc.match("#ProperNoun+").not("(#Person|#Place)"))
+    .filter((name) => !known.has(name) && !listed.has(nameKey(name)));
   return { people, places, candidates };
 }

@@ -241,66 +241,165 @@ function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
-/** Ordered values shown first on a category axis; values left out keep their default order after them. */
+/**
+ * Ordered values shown first on a category axis, as draggable chips; values left
+ * out keep their default order after them. Keyboard: Enter or Space places an
+ * unordered value, arrow keys move an ordered one, Delete or Backspace unplaces it.
+ */
 function orderEditor({ values, getValues, onChange }) {
   const entries = Array.isArray(values) ? values.map(String) : [];
-  const rows = element("div");
-  const picker = element("select", { attrs: { "aria-label": "Choose a value to place next" } });
-  function refreshPicker() {
-    const placed = new Set(entries);
-    const available = getValues().filter((value) => !placed.has(value));
-    picker.replaceChildren(
-      element("option", { text: available.length ? "Choose a value…" : "No more values", attrs: { value: "" } }),
-      ...available.map((value) => element("option", { text: value, attrs: { value } })),
-    );
-    add.disabled = !available.length;
-    addRest.disabled = !available.length;
+  const ordered = element("div", { className: "plots-editor-chips plots-editor-chips-ordered", attrs: { role: "list", "aria-label": "Values in order" } });
+  const rest = element("div", { className: "plots-editor-chips plots-editor-chips-rest", attrs: { role: "list", "aria-label": "Other values, in default order" } });
+  let dragged = null;
+  let focusAfterRender = null;
+  let knownValues = "";
+
+  function commit(focusValue) {
+    focusAfterRender = focusValue;
+    onChange([...entries]);
+    render();
   }
-  function renderRows() {
-    rows.replaceChildren(...entries.map((value, index) => {
-      const move = (amount) => {
-        const target = index + amount;
-        if (target < 0 || target >= entries.length) return;
-        [entries[index], entries[target]] = [entries[target], entries[index]];
-        onChange([...entries]);
-        renderRows();
+  /** Put value at index in the order, moving it if it is already placed. */
+  function place(value, index) {
+    const current = entries.indexOf(value);
+    if (current >= 0) {
+      entries.splice(current, 1);
+      if (current < index) index--;
+    }
+    entries.splice(Math.max(0, Math.min(index, entries.length)), 0, value);
+    commit(value);
+  }
+  function unplace(value) {
+    const current = entries.indexOf(value);
+    if (current < 0) return;
+    entries.splice(current, 1);
+    commit(value);
+  }
+  function clearDropMarks() {
+    for (const node of ordered.querySelectorAll(".drop-before, .drop-after")) node.classList.remove("drop-before", "drop-after");
+    ordered.classList.remove("drop-target");
+    rest.classList.remove("drop-target");
+  }
+
+  function chip(value, index, available) {
+    const placed = index >= 0;
+    const node = element("span", {
+      className: `plots-editor-chip${placed ? " placed" : ""}${placed && !available.has(value) ? " missing" : ""}`,
+      attrs: {
+        role: "listitem", tabindex: "0", draggable: "true", "data-value": value,
+        title: placed
+          ? `${available.has(value) ? "" : "Not in the current data. "}Drag to reorder, or back to Other values to remove`
+          : "Drag into the order, or click to place it next",
+        "aria-label": placed
+          ? `${value}, position ${index + 1} of ${entries.length}. Arrow keys move it; Delete removes it from the order.`
+          : `${value}, not ordered. Enter places it next.`,
+      },
+    }, [
+      ...(placed ? [element("span", { className: "plots-editor-chip-position", text: String(index + 1), attrs: { "aria-hidden": "true" } })] : []),
+      element("span", { text: value }),
+    ]);
+    node.addEventListener("dragstart", (event) => {
+      dragged = value;
+      event.dataTransfer?.setData("text/plain", value);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      node.classList.add("dragging");
+    });
+    node.addEventListener("dragend", () => { dragged = null; node.classList.remove("dragging"); clearDropMarks(); });
+    if (placed) {
+      const before = (event) => {
+        const rect = node.getBoundingClientRect?.();
+        return !rect || !rect.width || event.clientX < rect.left + rect.width / 2;
       };
-      const up = button("Up", { title: `Move ${value} earlier`, onClick: () => move(-1) });
-      const down = button("Down", { title: `Move ${value} later`, onClick: () => move(1) });
-      const remove = button("Remove", { onClick: () => { entries.splice(index, 1); onChange([...entries]); renderRows(); } });
-      up.disabled = index === 0;
-      down.disabled = index === entries.length - 1;
-      return element("div", { className: "plots-editor-order-row" }, [
-        element("span", { text: `${index + 1}. ${value}` }), up, down, remove,
-      ]);
-    }));
-    refreshPicker();
+      node.addEventListener("dragover", (event) => {
+        if (dragged === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        clearDropMarks();
+        node.classList.add(before(event) ? "drop-before" : "drop-after");
+      });
+      node.addEventListener("drop", (event) => {
+        if (dragged === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const value = dragged;
+        clearDropMarks();
+        place(value, before(event) ? index : index + 1);
+      });
+      node.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); if (index > 0) place(value, index - 1); }
+        else if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); if (index < entries.length - 1) place(value, index + 2); }
+        else if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); unplace(value); }
+      });
+    } else {
+      node.addEventListener("click", () => place(value, entries.length));
+      node.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); place(value, entries.length); }
+      });
+    }
+    return node;
   }
-  const add = button("+", {
-    title: "Place the chosen value next",
-    onClick: () => {
-      if (!picker.value) return;
-      entries.push(picker.value);
-      onChange([...entries]);
-      renderRows();
-    },
+
+  function render() {
+    const all = getValues();
+    knownValues = all.join("\u0000");
+    const available = new Set(all);
+    const placed = new Set(entries);
+    ordered.replaceChildren(...(entries.length
+      ? entries.map((value, index) => chip(value, index, available))
+      : [element("span", { className: "plots-editor-chips-empty", text: "Drag values here to put them first" })]));
+    const others = all.filter((value) => !placed.has(value));
+    rest.replaceChildren(...(others.length
+      ? others.map((value) => chip(value, -1, available))
+      : [element("span", { className: "plots-editor-chips-empty", text: all.length ? "Every value is ordered" : "Choose a field to see its values" })]));
+    orderAll.disabled = !others.length;
+    clear.disabled = !entries.length;
+    if (focusAfterRender !== null && focusAfterRender !== undefined) {
+      const target = [...ordered.children, ...rest.children].find((node) => node.dataset?.value === focusAfterRender);
+      focusAfterRender = null;
+      target?.focus();
+    }
+  }
+
+  // Dropping on the order area's free space appends; dropping on Other values unplaces.
+  ordered.addEventListener("dragover", (event) => { if (dragged === null) return; event.preventDefault(); ordered.classList.add("drop-target"); });
+  ordered.addEventListener("dragleave", (event) => { if (!ordered.contains(event.relatedTarget)) ordered.classList.remove("drop-target"); });
+  ordered.addEventListener("drop", (event) => {
+    if (dragged === null) return;
+    event.preventDefault();
+    const value = dragged;
+    clearDropMarks();
+    place(value, entries.length);
   });
-  const addRest = button("Add the rest", {
-    title: "Place every remaining value in its current order",
+  rest.addEventListener("dragover", (event) => { if (dragged === null || !entries.includes(dragged)) return; event.preventDefault(); rest.classList.add("drop-target"); });
+  rest.addEventListener("dragleave", (event) => { if (!rest.contains(event.relatedTarget)) rest.classList.remove("drop-target"); });
+  rest.addEventListener("drop", (event) => {
+    if (dragged === null) return;
+    event.preventDefault();
+    const value = dragged;
+    clearDropMarks();
+    unplace(value);
+  });
+
+  const orderAll = button("Order all", {
+    title: "Add every remaining value to the end of the order",
     onClick: () => {
       const placed = new Set(entries);
       entries.push(...getValues().filter((value) => !placed.has(value)));
-      onChange([...entries]);
-      renderRows();
+      commit(null);
     },
   });
-  picker.addEventListener("focus", refreshPicker);
-  picker.addEventListener("pointerdown", refreshPicker);
-  const wrap = element("div", {}, [
-    element("p", { className: "field-hint", text: "Listed values come first, in this order; any others follow in their default order." }),
-    rows, element("div", { className: "actions" }, [picker, add, addRest]),
+  const clear = button("Clear", { title: "Return every value to the default order", onClick: () => { entries.length = 0; commit(null); } });
+  const wrap = element("div", { className: "plots-editor-order" }, [
+    element("p", { className: "field-hint", text: "Drag values into the order; values left out follow in their default order. Click a value to add it at the end." }),
+    element("span", { className: "plots-editor-chips-caption", text: "Order" }), ordered,
+    element("span", { className: "plots-editor-chips-caption", text: "Other values" }), rest,
+    element("div", { className: "actions" }, [orderAll, clear]),
   ]);
-  renderRows();
+  // The field may change while the editor is open; pick up its values when the user returns here.
+  const refreshIfChanged = () => { if (dragged === null && getValues().join("\u0000") !== knownValues) render(); };
+  wrap.addEventListener("pointerenter", refreshIfChanged);
+  wrap.addEventListener("focusin", refreshIfChanged);
+  render();
   return wrap;
 }
 
@@ -480,7 +579,20 @@ function ensureStyle() {
 .plots-editor-labels .field-hint { font-size: 12px; margin: 0 0 6px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
-.plots-editor-order-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin: 4px 0; }
+.plots-editor-chips-caption { display: block; margin: 6px 0 3px; font-size: 12px; color: var(--muted); }
+.plots-editor-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 2.2rem; align-items: center; padding: 6px; border-radius: var(--radius-sm); border: 1px dashed transparent; }
+.plots-editor-chips-ordered { border-color: var(--border); background: var(--panel); }
+.plots-editor-chips.drop-target { border-color: var(--plot-hue, var(--accent)); border-style: solid; }
+.plots-editor-chips-empty { font-size: 12px; color: var(--muted); font-style: italic; }
+.plots-editor-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 13px; cursor: grab; user-select: none; }
+.plots-editor-chip:hover { border-color: var(--plot-hue, var(--accent)); color: var(--text); }
+.plots-editor-chip.placed { border: 1px solid var(--plot-hue, var(--accent)); color: var(--text); padding-left: 4px; }
+.plots-editor-chip.missing { border-style: dashed; opacity: .7; }
+.plots-editor-chip-position { min-width: 1.4em; padding: 0 5px; border-radius: 999px; background: var(--plot-hue, var(--accent)); color: #fff; font-size: 11px; font-weight: 700; text-align: center; }
+.plots-editor-chip.dragging { opacity: .4; }
+.plots-editor-chip.drop-before { box-shadow: -4px 0 0 -1px var(--plot-hue, var(--accent)); }
+.plots-editor-chip.drop-after { box-shadow: 4px 0 0 -1px var(--plot-hue, var(--accent)); }
+.plots-editor-chip:focus-visible { outline: 2px solid var(--plot-hue, var(--accent)); outline-offset: 2px; }
 .plots-editor-color-control { display: flex; gap: 6px; align-items: center; }
 .plots-editor-color-control input[type="color"] { width: 2.5rem; padding: 0; flex: none; }
 .plots-editor-error { color: var(--err); min-height: 1.2em; }

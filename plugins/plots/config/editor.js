@@ -90,6 +90,13 @@ function groupedLabel(label, group) {
   return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
+/** Readable names for the builders; the config keeps the function names. */
+const PLOT_TYPE_LABELS = {
+  barPlotCount: "Bar plot (counts)", scatterPlot: "Scatter plot", boxPlot: "Box plot",
+  histogramPlot: "Histogram", plotMapHeatmap: "Map heatmap",
+};
+const plotTypeOption = (name) => element("option", { text: PLOT_TYPE_LABELS[name] || name, attrs: { value: name } });
+
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
 const INVALID_VALUE_CHOICES = [
   { value: "show", label: "Show and flag them" },
@@ -567,6 +574,15 @@ function ensureStyle() {
 .plots-editor-setup .field-label { font-size: 12px; }
 .plots-editor-plots { margin-top: 18px; }
 .plots-editor-plots > h3 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+/* The Add a plot panel echoes a plot card's outline, dashed, as a placeholder for the next one. */
+.plots-editor-add { margin: 16px 0 4px; padding: 10px 12px 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm); transition: border-color .15s ease; }
+.plots-editor-add:hover, .plots-editor-add:focus-within { border-color: var(--accent); }
+.plots-editor-add-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.plots-editor-add-row { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto; gap: 10px; align-items: end; }
+.plots-editor-add-row > .field { margin-bottom: 0; min-width: 0; }
+.plots-editor-add-row > .field > select { width: 100%; box-sizing: border-box; }
+.plots-editor-add .field-hint { margin: 8px 0 0; }
+@media (max-width: 600px) { .plots-editor-add-row { grid-template-columns: 1fr; } }
 .plots-editor-plots-count:not(:empty) { padding: 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); font-size: 12px; font-weight: 600; }
 .plots-editor-plot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 8px 0; }
 .plots-editor-dataset { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr) auto; gap: 8px; align-items: end; padding: 2px 0; }
@@ -787,7 +803,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             datasetSelect.value = card.name;
             const builderSelect = element("select", { attrs: { "aria-label": `Builder for plot ${index + 1}` } });
             builderSelect.append(
-              ...BUILDER_NAMES.map((name) => element("option", { text: name, attrs: { value: name } })),
+              ...BUILDER_NAMES.map(plotTypeOption),
               element("option", { text: "Custom Vega / Vega-Lite spec", attrs: { value: "custom" } }),
             );
             if (card.mode === "builder" && !BUILDER_NAMES.includes(card.builder)) {
@@ -1051,13 +1067,15 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             }
           });
 
-          const addType = element("select", { attrs: { "aria-label": "New plot type" } }, BUILDER_NAMES.map((name) => element("option", { text: name, attrs: { value: name } })));
+          const addType = element("select", { attrs: { "aria-label": "New plot type" } }, BUILDER_NAMES.map(plotTypeOption));
+          const lastBuilder = [...state.cards].reverse().find((card) => card.mode === "builder" && BUILDER_NAMES.includes(card.builder))?.builder;
+          if (lastBuilder) addType.value = lastBuilder;
           const addDatasetSelect = element("select", { attrs: { "aria-label": "Dataset for new plot" } }, state.datasets.map((dataset) => element("option", {
             text: dataset.name,
             attrs: { value: dataset.name },
           })));
           addDatasetSelect.value = state.cards.at(-1)?.name || state.datasets[0]?.name || "";
-          const addPlotButton = button("Add plot", {
+          const addPlotButton = button("＋ Add plot", {
             primary: true,
             onClick: () => {
               const dataset = addDatasetSelect.value;
@@ -1076,10 +1094,14 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             },
           });
           addPlotButton.disabled = !state.datasets.length;
-          plots.append(element("div", { className: "actions" }, [
-            field("New plot type", addType),
-            field("Use dataset", addDatasetSelect),
-            addPlotButton,
+          plots.append(element("section", { className: "plots-editor-add", attrs: { "aria-label": "Add a plot" } }, [
+            element("h4", { className: "plots-editor-add-title", text: "Add a plot" }),
+            element("div", { className: "plots-editor-add-row" }, [
+              field("Plot type", addType),
+              field("Dataset", addDatasetSelect),
+              addPlotButton,
+            ]),
+            ...(state.datasets.length ? [] : [element("p", { className: "field-hint", text: "Add a dataset above first." })]),
           ]));
         }
 

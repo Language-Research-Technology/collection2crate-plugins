@@ -28,14 +28,16 @@ const colorFields = [
   ["colorTitle", "Color legend title", "text"], ["colorLabels", "Color labels (JSON)", "json"],
   ["colorTooltipTitle", "Color tooltip title", "text"], ["palette", "Palette (name or JSON)", "json-or-text"],
 ];
+// Only scatterPlot takes Y time units; boxPlot and histogramPlot ignore them.
+const yFieldsWithoutTimeUnits = yFields.filter(([key]) => key !== "yTimeUnit" && key !== "yTooltipTimeUnit");
 const invalidValuesField = ["invalidValues", "Missing or invalid values", "invalid-values"];
 const BUILDER_FIELDS = {
   barPlotCount: [...xFields.filter(([key]) => key !== "xType"), ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"], ["yTooltipTitle", "Y tooltip title", "text"], ["sort", "Bar order", "sort-count"], ...colorFields, invalidValuesField, ...commonFields],
   scatterPlot: [...xFields, ...yFields, ...colorFields, invalidValuesField, ...commonFields],
-  boxPlot: [...xFields, ...yFields, ["sort", "Category order", "sort-order"], ...colorFields, invalidValuesField, ...commonFields],
+  boxPlot: [...xFields, ...yFieldsWithoutTimeUnits, ["sort", "Category order", "sort-order"], ...colorFields, invalidValuesField, ...commonFields],
   histogramPlot: [
     ...xFields,
-    ...yFields.filter(([key]) => key !== "yVar" && key !== "yType"),
+    ...yFieldsWithoutTimeUnits.filter(([key]) => key !== "yVar" && key !== "yType"),
     ["maxbins", "Maximum bins", "number"], ["minstep", "Minimum bin step", "number"],
     ["step", "Bin step", "number"], ["nice", "Use nice bin boundaries", "boolean"],
     ...colorFields, invalidValuesField, ...commonFields,
@@ -49,6 +51,44 @@ const BUILDER_FIELDS = {
     ...commonFields,
   ],
 };
+
+/** The section of a plot card a builder argument belongs to, so each variable's controls sit together. */
+function argumentGroup(builder, key) {
+  if (builder === "plotMapHeatmap") {
+    if (["latitudeField", "longitudeField", "weightField"].includes(key)) return "Location columns";
+    if (["bandwidth", "nContours", "opacity", "palette"].includes(key)) return "Heatmap";
+    if (["zoom", "targetSizePx", "provider"].includes(key)) return "Base map";
+    return "Other";
+  }
+  if (key === "sort") return builder === "barPlotCount" ? "X axis" : "Other";
+  if (/^x[A-Z]/.test(key)) return "X axis";
+  if (/^y[A-Z]/.test(key)) return "Y axis";
+  if (/^color[A-Z]/.test(key) || key === "palette") return "Color";
+  if (["maxbins", "minstep", "step", "nice"].includes(key)) return "Bins";
+  return "Other";
+}
+
+const GROUP_SYMBOLS = {
+  "X axis": "↔", "Y axis": "↕", Color: "●", Bins: "▥", Other: "⋯",
+  "Location columns": "⌖", Heatmap: "◍", "Base map": "▦", "Vega Embed options for this plot": "⚙",
+};
+
+/** A section heading with a small symbol to scan by; the symbol is hidden from screen readers. */
+function groupLegend(name) {
+  const symbol = GROUP_SYMBOLS[name];
+  return element("legend", {}, [
+    ...(symbol ? [element("span", { className: "plots-editor-group-symbol", text: symbol, attrs: { "aria-hidden": "true" } })] : []),
+    element("span", { text: name }),
+  ]);
+}
+
+/** "X-axis title" reads as "Axis title" once it sits under an X axis heading. */
+function groupedLabel(label, group) {
+  const prefix = { "X axis": /^X[ -]/, "Y axis": /^Y[ -]/, Color: /^Color /i }[group];
+  if (!prefix || !prefix.test(label)) return label;
+  const rest = label.replace(prefix, "");
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
 
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
 const INVALID_VALUE_CHOICES = [
@@ -90,6 +130,20 @@ function defaultPlaceholders(builder, args) {
     yType: builder === "scatterPlot" ? "quantitative" : "",
     invalidValues: "show",
   };
+}
+
+const TIME_UNIT_AXES = { xTimeUnit: "x", xTooltipTimeUnit: "x", yTimeUnit: "y", yTooltipTimeUnit: "y" };
+
+/** Time units only mean something on a temporal axis; one already set stays visible so it can be cleared. */
+function showTimeUnit(builder, args, key) {
+  const axis = TIME_UNIT_AXES[key];
+  if (!axis) return true;
+  if (args[key] !== undefined && args[key] !== "") return true;
+  // barPlotCount takes no xType and always draws its X field as nominal.
+  const type = builder === "barPlotCount" && axis === "x"
+    ? "nominal"
+    : args[`${axis}Type`] || defaultPlaceholders(builder, args)[`${axis}Type`];
+  return type === "temporal";
 }
 
 /** The categorical field a box plot sorts, mirroring boxPlot's choice of which axis is nominal. */
@@ -378,6 +432,16 @@ function createEditorState(config) {
   };
 }
 
+// Distinct hues, readable with white text in light and dark themes, to tell plot cards apart at a glance.
+const PLOT_HUES = ["#2563eb", "#0f766e", "#c2410c", "#7c3aed", "#be123c", "#4d7c0f", "#a16207", "#0e7490"];
+const plotHues = new WeakMap();
+let nextPlotHue = 0;
+/** A card keeps its hue when reordered, so a moved plot is still recognisable. */
+function hueFor(card) {
+  if (!plotHues.has(card)) plotHues.set(card, PLOT_HUES[nextPlotHue++ % PLOT_HUES.length]);
+  return plotHues.get(card);
+}
+
 function ensureStyle() {
   if (document.getElementById("plots-editor-style")) return;
   const style = element("style", { attrs: { id: "plots-editor-style" } });
@@ -388,11 +452,32 @@ function ensureStyle() {
 .plots-editor-section > h3 { margin: 0 0 8px; font-size: 15px; }
 .plots-editor-dataset, .plots-editor-plot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 8px 0; }
 .plots-editor-dataset { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr) auto; gap: 8px; align-items: end; }
-.plots-editor-plot-head { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto auto auto; gap: 8px; align-items: end; }
+.plots-editor-plot { padding: 0 10px 10px; overflow: hidden; margin: 18px 0; border-left: 6px solid var(--plot-hue, var(--accent)); box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); }
+.plots-editor-plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 -10px 10px; padding: 8px 10px; background: var(--accent-soft); background: color-mix(in srgb, var(--plot-hue) 14%, var(--panel)); border-bottom: 2px solid var(--plot-hue); }
+.plots-editor-plot-number { min-width: 1.9em; padding: 1px 7px; border-radius: 999px; background: var(--plot-hue); color: #fff; font-size: 13px; font-weight: 700; text-align: center; }
+.plots-editor-plot-toolbar > .plots-editor-plot-title { flex: 1 1 12rem; margin: 0; font-size: 15px; }
+.plots-editor-plot-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.plots-editor-plot-buttons > .button { padding: 5px 12px; font-weight: 600; }
+.plots-editor-plot-buttons > .button.danger:hover:not(:disabled) { border-color: var(--err); background: var(--err); color: #fff; }
+[data-theme="dark"] .plots-editor-plot-buttons > .button.danger:hover:not(:disabled) { color: #101319; }
+.plots-editor-plot-head { display: grid; grid-template-columns: minmax(10rem, 2fr) minmax(10rem, 1fr) minmax(10rem, 1fr) auto; gap: 8px; align-items: end; }
 .plots-editor-json { width: 100%; min-height: 8rem; font: 12px/1.4 var(--mono); }
 .plots-editor-plot-title { margin: 0 0 8px; font-size: 14px; }
 .plots-editor-advanced { margin: 8px 0; }
 .plots-editor-advanced > summary { cursor: pointer; font-size: 13px; }
+/* Sections are shaded panels, not outlined boxes, so they stand apart without adding lines. */
+.plots-editor-group { border: 0; border-radius: var(--radius-sm); margin: 8px 0; padding: 8px 10px; min-width: 0; background: var(--accent-soft); background: color-mix(in srgb, var(--text) 5%, var(--panel)); }
+/* Floating the legend keeps it inside the panel instead of on its top edge. */
+.plots-editor-group > legend { float: left; width: 100%; padding: 0; margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+.plots-editor-group > legend + * { clear: both; }
+.plots-editor-group-symbol { display: inline-block; width: 1.3em; margin-right: 4px; text-align: center; color: var(--plot-hue, var(--muted)); font-size: 14px; letter-spacing: 0; }
+.plots-editor-group-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 8px; align-items: end; }
+.plots-editor-group-inputs > .field { min-width: 0; margin-bottom: 0; }
+.plots-editor-group-inputs > .field > :is(input, select) { width: 100%; box-sizing: border-box; }
+/* Sub-editors (value labels, palette, order) rank below their section's legend and above field labels. */
+.plots-editor-group .plots-editor-labels { margin: 10px 0 2px; padding-left: 10px; border-left: 2px solid var(--border); }
+.plots-editor-labels > strong { display: block; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.plots-editor-labels .field-hint { font-size: 12px; margin: 0 0 6px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
 .plots-editor-order-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin: 4px 0; }
@@ -407,6 +492,7 @@ function ensureStyle() {
 /** Edit a plots config; null means the modal was cancelled. */
 export async function openPlotsConfigEditor({ config, tables, openModal }) {
   ensureStyle();
+  nextPlotHue = 0; // each opening colours plots by their saved order
   const state = createEditorState(config);
   const tableSources = [...new Set((tables || []).map((table) => table.source))];
 
@@ -547,6 +633,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
           plots.replaceChildren(element("h3", { text: "Plots" }));
           state.cards.forEach((card, index) => {
             const cardNode = element("article", { className: "plots-editor-plot" });
+            cardNode.style.setProperty("--plot-hue", hueFor(card));
             const titleInput = element("input", { attrs: { type: "text", value: card.title, placeholder: "No title", "aria-label": `Plot ${index + 1} title` } });
             const datasetSelect = element("select", { attrs: { "aria-label": `Dataset for plot ${index + 1}` } });
             datasetSelect.append(...state.datasets.map((dataset) => element("option", { text: dataset.name, attrs: { value: dataset.name } })));
@@ -577,15 +664,22 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             });
             spanSelect.addEventListener("change", () => { card.span = Number(spanSelect.value); });
 
-            const moveUp = button("Move up", { title: "Move plot up", onClick: () => movePlot(index, -1) });
-            const moveDown = button("Move down", { title: "Move plot down", onClick: () => movePlot(index, 1) });
-            const remove = button("Remove plot", { title: "Remove plot", onClick: () => { state.cards.splice(index, 1); renderPlots(); } });
+            const moveUp = button("↑ Move up", { title: "Move this plot earlier in the panel", onClick: () => movePlot(index, -1) });
+            const moveDown = button("↓ Move down", { title: "Move this plot later in the panel", onClick: () => movePlot(index, 1) });
+            const remove = button("✕ Remove plot", { title: "Remove this plot (Cancel discards all unsaved edits)", onClick: () => { state.cards.splice(index, 1); renderPlots(); } });
+            remove.classList.add("danger");
+            moveUp.disabled = index === 0;
+            moveDown.disabled = index === state.cards.length - 1;
+            const toolbar = element("div", { className: "plots-editor-plot-toolbar" }, [
+              element("span", { className: "plots-editor-plot-number", text: String(index + 1), attrs: { title: `Plot ${index + 1} of ${state.cards.length}`, "aria-label": `Plot ${index + 1} of ${state.cards.length}` } }),
+              heading,
+              element("div", { className: "plots-editor-plot-buttons", attrs: { role: "group", "aria-label": `Plot ${index + 1} actions` } }, [moveUp, moveDown, remove]),
+            ]);
             const head = element("div", { className: "plots-editor-plot-head" }, [
               field("Title", titleInput), field("Dataset", datasetSelect),
               field("Plot type", builderSelect), field("Card width", spanSelect),
-              element("div", { className: "actions" }, [moveUp, moveDown, remove]),
             ]);
-            cardNode.append(heading, head);
+            cardNode.append(toolbar, head);
 
             if (card.mode === "custom") {
               const customText = element("textarea", { className: "plots-editor-json", attrs: { "aria-label": `Custom spec JSON for plot ${index + 1}`, spellcheck: "false" } });
@@ -595,8 +689,17 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             } else {
               const argsText = element("textarea", { className: "plots-editor-json", attrs: { "aria-label": `Builder arguments JSON for plot ${index + 1}`, spellcheck: "false" } });
               argsText.value = card.argsText;
-              const typedFields = element("div", { className: "actions" });
-              const labelFields = element("div");
+              const groups = new Map();
+              function groupFor(key) {
+                const name = argumentGroup(card.builder, key);
+                if (!groups.has(name)) {
+                  const inputs = element("div", { className: "plots-editor-group-inputs" });
+                  const editors = element("div");
+                  const node = element("fieldset", { className: "plots-editor-group" }, [groupLegend(name), inputs, editors]);
+                  groups.set(name, { name, node, inputs, editors });
+                }
+                return groups.get(name);
+              }
               function currentArgs() {
                 const parsed = parseJson(card.argsText, `Plot ${index + 1} builder arguments`);
                 return parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed : {};
@@ -653,9 +756,18 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 card.argsText = jsonText(args);
                 argsText.value = card.argsText;
                 refreshPlaceholders();
+                refreshTimeUnits();
               }
               const args = currentArgs();
               const placeholderInputs = new Map();
+              const timeUnitFields = new Map();
+              function refreshTimeUnits() {
+                let current;
+                try { current = currentArgs(); }
+                catch { return; }
+                // style, not the hidden attribute: the host's .field rule sets display and would override it.
+                for (const [key, node] of timeUnitFields) node.style.display = showTimeUnit(card.builder, current, key) ? "" : "none";
+              }
               function refreshPlaceholders() {
                 let current;
                 try { current = currentArgs(); }
@@ -665,8 +777,10 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               }
               for (const [key, label, kind] of BUILDER_FIELDS[card.builder] || []) {
                 if (key === "title") continue;
+                const group = groupFor(key);
+                const shortLabel = groupedLabel(label, group.name);
                 if (key === "palette") {
-                  labelFields.append(paletteEditor({
+                  group.editors.append(paletteEditor({
                     palette: args.palette,
                     allowCustom: card.builder !== "plotMapHeatmap",
                     getValues: () => { try { return distinctValues(currentArgs().colorVar); } catch { return []; } },
@@ -679,7 +793,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                     const current = currentArgs();
                     return card.builder === "boxPlot" ? boxPlotCategoryField(current) : current.xVar;
                   };
-                  labelFields.append(sortEditor({
+                  group.editors.append(sortEditor({
                     label,
                     sort: args.sort,
                     byCount: kind === "sort-count",
@@ -689,8 +803,8 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   continue;
                 }
                 if (LABEL_SOURCES[key]) {
-                  labelFields.append(labelsEditor({
-                    label: label.replace(" (JSON)", ""),
+                  group.editors.append(labelsEditor({
+                    label: shortLabel.replace(" (JSON)", ""),
                     labels: args[key],
                     getValues: () => { try { return distinctValues(currentArgs()[LABEL_SOURCES[key]]); } catch { return []; } },
                     onChange: (labels) => setLabels(key, labels),
@@ -727,15 +841,20 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   placeholderInputs.set(key, control);
                 }
                 control.addEventListener("change", () => updateArgument(key, kind, control.value));
-                typedFields.append(field(label, control));
+                const fieldNode = field(shortLabel, control);
+                if (TIME_UNIT_AXES[key]) timeUnitFields.set(key, fieldNode);
+                group.inputs.append(fieldNode);
               }
               refreshPlaceholders();
+              refreshTimeUnits();
               argsText.addEventListener("change", () => {
                 card.argsText = argsText.value;
                 try { parseJson(card.argsText, `Plot ${index + 1} builder arguments`); renderPlots(); }
                 catch (error) { state.error = error.message; }
               });
-              cardNode.append(typedFields, labelFields, advanced("All builder arguments (JSON)", argsText));
+              // "Other" holds plot-wide settings, so it closes the card's sections whatever order they were met in.
+              const ordered = [...groups.values()].sort((a, b) => (a.name === "Other") - (b.name === "Other"));
+              cardNode.append(...ordered.map((group) => group.node), advanced("All builder arguments (JSON)", argsText));
             }
             const embedJson = element("textarea", { className: "plots-editor-json", attrs: { "aria-label": `Vega Embed options JSON for plot ${index + 1}`, spellcheck: "false" } });
             embedJson.value = jsonText(card.embed);
@@ -749,11 +868,11 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 state.error = error.message;
               }
             });
-            cardNode.append(
-              element("strong", { text: "Vega Embed options for this plot" }),
-              element("div", { className: "actions" }, embedControls(card, () => { embedJson.value = jsonText(card.embed); })),
+            cardNode.append(element("fieldset", { className: "plots-editor-group" }, [
+              groupLegend("Vega Embed options for this plot"),
+              element("div", { className: "plots-editor-group-inputs" }, embedControls(card, () => { embedJson.value = jsonText(card.embed); })),
               advanced("Vega Embed options (JSON)", embedJson),
-            );
+            ]));
             plots.append(cardNode);
           });
 

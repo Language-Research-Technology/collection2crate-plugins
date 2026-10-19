@@ -521,6 +521,7 @@ function createEditorState(config) {
         ? plot.makeSpec.args.title
         : typeof plot.customSpec?.title === "string" ? plot.customSpec.title : "",
       titleEdited: false,
+      collapsed: true, // saved plots start collapsed so Add plot stays within reach
       span: Number(plot.plotCardSpan ?? plot.span ?? 1),
       argsText: jsonText(plot.makeSpec?.args),
       customText: jsonText(plot.customSpec),
@@ -573,6 +574,16 @@ function ensureStyle() {
 .plots-editor-plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 -10px 10px; padding: 8px 10px; background: var(--accent-soft); background: color-mix(in srgb, var(--plot-hue) 14%, var(--panel)); border-bottom: 2px solid var(--plot-hue); }
 .plots-editor-plot-number { min-width: 1.9em; padding: 1px 7px; border-radius: 999px; background: var(--plot-hue); color: #fff; font-size: 13px; font-weight: 700; text-align: center; }
 .plots-editor-plot-toolbar > .plots-editor-plot-title { flex: 1 1 12rem; margin: 0; font-size: 15px; }
+.plots-editor-plot-toolbar { cursor: pointer; }
+.plots-editor-plot-toolbar .button { cursor: pointer; }
+/* Chevron toggle, matching the setup panels: right when collapsed, down when open. */
+.plots-editor-plot-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.plots-editor-plot-toggle::before { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--text); border-bottom: 2px solid var(--text); transform: rotate(45deg); margin-top: -4px; transition: transform .15s ease, margin .15s ease; }
+.plots-editor-plot.collapsed .plots-editor-plot-toggle::before { transform: rotate(-45deg); margin: 0 0 0 -3px; }
+.plots-editor-plot-toggle:hover { border-color: var(--plot-hue); background: var(--panel); }
+.plots-editor-plot.collapsed { padding-bottom: 0; }
+.plots-editor-plot.collapsed > .plots-editor-plot-toolbar { margin-bottom: 0; border-bottom-color: transparent; }
+.plots-editor-plot.collapsed > .plots-editor-plot-body { display: none; }
 .plots-editor-plot-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .plots-editor-plot-buttons > .button { padding: 5px 12px; font-weight: 600; }
 .plots-editor-plot-buttons > .button.danger:hover:not(:disabled) { border-color: var(--err); background: var(--err); color: #fff; }
@@ -806,7 +817,21 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             remove.classList.add("danger");
             moveUp.disabled = index === 0;
             moveDown.disabled = index === state.cards.length - 1;
+            const bodyId = `plots-editor-plot-body-${index}`;
+            const toggle = element("button", {
+              className: "plots-editor-plot-toggle",
+              attrs: { type: "button", "aria-controls": bodyId },
+            });
+            const setCollapsed = (collapsed) => {
+              card.collapsed = collapsed;
+              cardNode.classList.toggle("collapsed", collapsed);
+              toggle.setAttribute("aria-expanded", String(!collapsed));
+              toggle.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} plot ${index + 1} settings`);
+              toggle.title = collapsed ? "Show this plot's settings" : "Hide this plot's settings";
+            };
+            toggle.addEventListener("click", () => setCollapsed(!card.collapsed));
             const toolbar = element("div", { className: "plots-editor-plot-toolbar" }, [
+              toggle,
               element("span", { className: "plots-editor-plot-number", text: String(index + 1), attrs: { title: `Plot ${index + 1} of ${state.cards.length}`, "aria-label": `Plot ${index + 1} of ${state.cards.length}` } }),
               heading,
               element("div", { className: "plots-editor-plot-buttons", attrs: { role: "group", "aria-label": `Plot ${index + 1} actions` } }, [moveUp, moveDown, remove]),
@@ -815,6 +840,11 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               field("Title", titleInput), field("Dataset", datasetSelect),
               field("Plot type", builderSelect), field("Card width", spanSelect),
             ]);
+            // Clicking the bar itself (not its buttons) also expands or collapses the card.
+            toolbar.addEventListener("click", (event) => {
+              if (event.target.closest?.("button")) return;
+              setCollapsed(!card.collapsed);
+            });
             cardNode.append(toolbar, head);
 
             if (card.mode === "custom") {
@@ -1009,7 +1039,16 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               element("div", { className: "plots-editor-group-inputs" }, embedControls(card, () => { embedJson.value = jsonText(card.embed); })),
               advanced("Vega Embed options (JSON)", embedJson),
             ]));
+            // Everything below the header bar is the collapsible body.
+            const cardBody = element("div", { className: "plots-editor-plot-body", attrs: { id: bodyId } });
+            cardBody.append(...[...cardNode.childNodes].filter((node) => node !== toolbar));
+            cardNode.append(cardBody);
+            setCollapsed(Boolean(card.collapsed));
             plots.append(cardNode);
+            if (card.scrollIntoView) {
+              delete card.scrollIntoView;
+              queueMicrotask(() => cardNode.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+            }
           });
 
           const addType = element("select", { attrs: { "aria-label": "New plot type" } }, BUILDER_NAMES.map((name) => element("option", { text: name, attrs: { value: name } })));
@@ -1031,6 +1070,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 original: { dataset: { name: dataset }, makeSpec: { plotFunction: addType.value, args: {} }, generatedSpec: {}, customSpec: {}, config: {}, plotCardSpan: 1 },
                 mode: "builder", builder: addType.value, name: dataset, title: "", span: 1,
                 titleEdited: false, argsText: "{}", customText: "{}", embed: {},
+                collapsed: false, scrollIntoView: true,
               });
               renderPlots();
             },

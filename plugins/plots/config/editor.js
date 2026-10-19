@@ -549,8 +549,26 @@ function ensureStyle() {
 .plots-editor-scroll { max-height: min(70vh, 760px); overflow: auto; padding-right: 4px; }
 .plots-editor-section { margin: 0 0 18px; }
 .plots-editor-section > h3 { margin: 0 0 8px; font-size: 15px; }
-.plots-editor-dataset, .plots-editor-plot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 8px 0; }
-.plots-editor-dataset { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr) auto; gap: 8px; align-items: end; }
+.plots-editor-intro { margin: 0 0 10px; }
+/* Setup rows: quiet, one line each until opened. */
+.plots-editor-setup { margin: 0 0 8px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--accent-soft); background: color-mix(in srgb, var(--text) 4%, var(--panel)); font-size: 13px; }
+.plots-editor-setup > summary { display: flex; gap: 8px; align-items: center; margin: 0 -12px; padding: 8px 12px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }
+.plots-editor-setup > summary::-webkit-details-marker { display: none; }
+/* A chevron that turns down when open shows the panel can be collapsed and expanded. */
+.plots-editor-setup > summary::before { content: ""; flex: none; width: 7px; height: 7px; margin: 0 3px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .15s ease; }
+.plots-editor-setup[open] > summary::before { transform: rotate(45deg); }
+.plots-editor-setup > summary:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.plots-editor-setup > summary:hover::before { border-color: var(--text); }
+.plots-editor-setup-title { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.plots-editor-setup[open] > summary { padding-bottom: 4px; }
+.plots-editor-setup[open] { padding-bottom: 10px; }
+.plots-editor-setup .field { margin-bottom: 6px; }
+.plots-editor-setup .field-label { font-size: 12px; }
+.plots-editor-plots { margin-top: 18px; }
+.plots-editor-plots > h3 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+.plots-editor-plots-count:not(:empty) { padding: 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); font-size: 12px; font-weight: 600; }
+.plots-editor-plot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 8px 0; }
+.plots-editor-dataset { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr) auto; gap: 8px; align-items: end; padding: 2px 0; }
 .plots-editor-plot { padding: 0 10px 10px; overflow: hidden; margin: 18px 0; border-left: 6px solid var(--plot-hue, var(--accent)); box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); }
 .plots-editor-plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 -10px 10px; padding: 8px 10px; background: var(--accent-soft); background: color-mix(in srgb, var(--plot-hue) 14%, var(--panel)); border-bottom: 2px solid var(--plot-hue); }
 .plots-editor-plot-number { min-width: 1.9em; padding: 1px 7px; border-radius: 999px; background: var(--plot-hue); color: #fff; font-size: 13px; font-weight: 700; text-align: center; }
@@ -615,16 +633,20 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
       modalClassName: "plots-config-modal",
       onMount(body) {
         const scroll = element("div", { className: "plots-editor-scroll" });
-        const intro = element("p", { text: "Bind loaded tables to dataset names, then add and order plots. Open the advanced sections to edit every builder argument and Vega option as JSON." });
+        const intro = element("p", { className: "field-hint plots-editor-intro", text: "Bind loaded tables to dataset names, then add and order plots. Open the advanced sections to edit every builder argument and Vega option as JSON." });
         const error = element("p", { className: "plots-editor-error", attrs: { role: "alert" }, text: state.error });
         const sections = element("div");
-        const globalSection = element("section", { className: "plots-editor-section" });
-        const datasets = element("section", { className: "plots-editor-section" });
-        const plots = element("section", { className: "plots-editor-section" });
+        // Setup sections are collapsible panels, so the plots stay the focus.
+        const setupSection = (title) => element("details", { className: "plots-editor-setup" }, [
+          element("summary", {}, [element("span", { className: "plots-editor-setup-title", text: title })]),
+        ]);
+        const globalSection = setupSection("Global Vega Embed options");
+        const datasets = setupSection("Datasets");
+        datasets.open = true;
+        const plots = element("section", { className: "plots-editor-section plots-editor-plots" });
         scroll.append(intro, error, sections);
         body.append(scroll);
 
-        const globalTitle = element("h3", { text: "Global Vega Embed options" });
         const originalActions = state.globalOptions.actions;
         const actionOptions = originalActions && typeof originalActions === "object" ? originalActions : {};
         const exportOptions = actionOptions.export && typeof actionOptions.export === "object"
@@ -672,7 +694,6 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
         exportEnabled.input.addEventListener("change", updateActionAvailability);
         updateActionAvailability();
         globalSection.append(
-          globalTitle,
           element("div", { className: "actions" }, [
             field("Renderer", rendererSelect),
             field("Tooltips", tooltipSelect),
@@ -683,9 +704,8 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
           actionDetails,
         );
 
-        const datasetHeading = element("h3", { text: "Datasets" });
         const datasetList = element("div");
-        datasets.append(datasetHeading, datasetList);
+        datasets.append(datasetList);
 
         function renderDatasets() {
           datasetList.replaceChildren();
@@ -705,8 +725,8 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               renderPlots();
             });
             sourceSelect.addEventListener("change", () => { dataset.source = sourceSelect.value; renderPlots(); });
-            const remove = button("Remove dataset", {
-              title: "Remove dataset",
+            const remove = button("Remove", {
+              title: `Remove dataset ${dataset.name}`,
               onClick: () => {
                 if (state.cards.some((card) => card.name === dataset.name)) {
                   state.error = `Remove plots using '${dataset.name}' before removing this dataset.`;
@@ -718,6 +738,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 renderPlots();
               },
             });
+            remove.classList.add("subtle");
             datasetList.append(element("div", { className: "plots-editor-dataset" }, [
               field("Dataset name", nameInput), field("Loaded table", sourceSelect), remove,
             ]));
@@ -742,7 +763,10 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
         }
 
         function renderPlots() {
-          plots.replaceChildren(element("h3", { text: "Plots" }));
+          plots.replaceChildren(element("h3", {}, [
+            element("span", { text: "Plots" }),
+            element("span", { className: "plots-editor-plots-count", text: state.cards.length ? String(state.cards.length) : "" }),
+          ]));
           state.cards.forEach((card, index) => {
             const cardNode = element("article", { className: "plots-editor-plot" });
             cardNode.style.setProperty("--plot-hue", hueFor(card));

@@ -16,7 +16,7 @@
     "mammoth": "^1.12.0",
     "ro-crate": "^3.7.2",
     "ro-crate-excel": "^1.2.1",
-    "ro-crate-plots": "github:Language-Research-Technology/ro-crate-plots#123bcc83c3b68902bfb285db204a1698dca0822f",
+    "ro-crate-plots": "github:Language-Research-Technology/ro-crate-plots#d53c3e0bdafdb7ce5eaead455f01a8bd0e5bfe3c",
     "roctable": "github:ptsefton/roctable",
     "unicode-name": "^1.1.0",
     "unpdf": "1.8.1",

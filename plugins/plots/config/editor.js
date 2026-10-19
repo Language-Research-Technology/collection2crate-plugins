@@ -15,7 +15,7 @@ const xFields = [
   ["xVar", "X field", "column"], ["xType", "X field type", "field-type"],
   ["xTitle", "X-axis title", "text"], ["xLabels", "X-axis labels (JSON)", "json"],
   ["xTimeUnit", "X-axis time unit", "text"], ["xTooltipTitle", "X tooltip title", "text"],
-  ["xTooltipTimeUnit", "X tooltip time unit", "text"], ["yTitle", "Y-axis title", "text"],
+  ["xTooltipTimeUnit", "X tooltip time unit", "text"],
 ];
 const yFields = [
   ["yVar", "Y field", "column"], ["yType", "Y field type", "field-type"],
@@ -28,16 +28,17 @@ const colorFields = [
   ["colorTitle", "Color legend title", "text"], ["colorLabels", "Color labels (JSON)", "json"],
   ["colorTooltipTitle", "Color tooltip title", "text"], ["palette", "Palette (name or JSON)", "json-or-text"],
 ];
+const invalidValuesField = ["invalidValues", "Missing or invalid values", "invalid-values"];
 const BUILDER_FIELDS = {
-  barPlotCount: [...xFields.filter(([key]) => key !== "xType"), ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"], ["yTooltipTitle", "Y tooltip title", "text"], ...colorFields, ...commonFields],
-  scatterPlot: [...xFields, ...yFields, ...colorFields, ...commonFields],
-  boxPlot: [...xFields, ...yFields, ...colorFields, ...commonFields],
+  barPlotCount: [...xFields.filter(([key]) => key !== "xType"), ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"], ["yTooltipTitle", "Y tooltip title", "text"], ["sort", "Bar order", "sort-count"], ...colorFields, invalidValuesField, ...commonFields],
+  scatterPlot: [...xFields, ...yFields, ...colorFields, invalidValuesField, ...commonFields],
+  boxPlot: [...xFields, ...yFields, ["sort", "Category order", "sort-order"], ...colorFields, invalidValuesField, ...commonFields],
   histogramPlot: [
     ...xFields,
     ...yFields.filter(([key]) => key !== "yVar" && key !== "yType"),
     ["maxbins", "Maximum bins", "number"], ["minstep", "Minimum bin step", "number"],
     ["step", "Bin step", "number"], ["nice", "Use nice bin boundaries", "boolean"],
-    ...colorFields, ...commonFields,
+    ...colorFields, invalidValuesField, ...commonFields,
   ],
   plotMapHeatmap: [
     ["latitudeField", "Latitude column", "column"], ["longitudeField", "Longitude column", "column"],
@@ -50,6 +51,10 @@ const BUILDER_FIELDS = {
 };
 
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
+const INVALID_VALUE_CHOICES = [
+  { value: "show", label: "Show and flag them" },
+  { value: "hide", label: "Hide them" },
+];
 const TRI_STATE = [{ value: "", label: "Inherit global" }, { value: "true", label: "On" }, { value: "false", label: "Off" }];
 const EMBED_CONTROLS = [
   ["renderer", "Renderer", [{ value: "", label: "Inherit global" }, { value: "svg", label: "SVG" }, { value: "canvas", label: "Canvas" }]],
@@ -81,7 +86,20 @@ function defaultPlaceholders(builder, args) {
     maxbins: "Auto", minstep: "Auto", step: "Auto",
     bandwidth: "Auto (-1)", nContours: "10", opacity: "0.5", zoom: "Auto", targetSizePx: "300",
     provider: "OpenStreetMap (default)",
+    xType: builder === "scatterPlot" ? "quantitative" : "",
+    yType: builder === "scatterPlot" ? "quantitative" : "",
+    invalidValues: "show",
   };
+}
+
+/** The categorical field a box plot sorts, mirroring boxPlot's choice of which axis is nominal. */
+function boxPlotCategoryField(args) {
+  const continuous = (type) => type === "quantitative" || type === "temporal";
+  if (continuous(args.xType)) return args.yVar;
+  if (continuous(args.yType)) return args.xVar;
+  if (args.xType === "nominal") return args.xVar;
+  if (args.yType === "nominal") return args.yVar;
+  return undefined;
 }
 
 const advanced = (summary, control) => element("details", { className: "plots-editor-advanced" }, [
@@ -168,6 +186,103 @@ function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
 }
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+/** Ordered values shown first on a category axis; values left out keep their default order after them. */
+function orderEditor({ values, getValues, onChange }) {
+  const entries = Array.isArray(values) ? values.map(String) : [];
+  const rows = element("div");
+  const picker = element("select", { attrs: { "aria-label": "Choose a value to place next" } });
+  function refreshPicker() {
+    const placed = new Set(entries);
+    const available = getValues().filter((value) => !placed.has(value));
+    picker.replaceChildren(
+      element("option", { text: available.length ? "Choose a value…" : "No more values", attrs: { value: "" } }),
+      ...available.map((value) => element("option", { text: value, attrs: { value } })),
+    );
+    add.disabled = !available.length;
+    addRest.disabled = !available.length;
+  }
+  function renderRows() {
+    rows.replaceChildren(...entries.map((value, index) => {
+      const move = (amount) => {
+        const target = index + amount;
+        if (target < 0 || target >= entries.length) return;
+        [entries[index], entries[target]] = [entries[target], entries[index]];
+        onChange([...entries]);
+        renderRows();
+      };
+      const up = button("Up", { title: `Move ${value} earlier`, onClick: () => move(-1) });
+      const down = button("Down", { title: `Move ${value} later`, onClick: () => move(1) });
+      const remove = button("Remove", { onClick: () => { entries.splice(index, 1); onChange([...entries]); renderRows(); } });
+      up.disabled = index === 0;
+      down.disabled = index === entries.length - 1;
+      return element("div", { className: "plots-editor-order-row" }, [
+        element("span", { text: `${index + 1}. ${value}` }), up, down, remove,
+      ]);
+    }));
+    refreshPicker();
+  }
+  const add = button("+", {
+    title: "Place the chosen value next",
+    onClick: () => {
+      if (!picker.value) return;
+      entries.push(picker.value);
+      onChange([...entries]);
+      renderRows();
+    },
+  });
+  const addRest = button("Add the rest", {
+    title: "Place every remaining value in its current order",
+    onClick: () => {
+      const placed = new Set(entries);
+      entries.push(...getValues().filter((value) => !placed.has(value)));
+      onChange([...entries]);
+      renderRows();
+    },
+  });
+  picker.addEventListener("focus", refreshPicker);
+  picker.addEventListener("pointerdown", refreshPicker);
+  const wrap = element("div", {}, [
+    element("p", { className: "field-hint", text: "Listed values come first, in this order; any others follow in their default order." }),
+    rows, element("div", { className: "actions" }, [picker, add, addRest]),
+  ]);
+  renderRows();
+  return wrap;
+}
+
+/** Category order: library default, by count (bar plots only), or an explicit list. */
+function sortEditor({ label, sort, byCount, getValues, onChange }) {
+  const startMode = Array.isArray(sort) ? "custom"
+    : byCount && (sort === "descending" || sort === "ascending") ? sort
+      : sort === undefined ? "default" : "keep";
+  const modes = [
+    { value: "default", label: "Default order" },
+    ...(byCount ? [
+      { value: "descending", label: "Most frequent first" },
+      { value: "ascending", label: "Least frequent first" },
+    ] : []),
+    { value: "custom", label: "Custom order" },
+    ...(startMode === "keep" ? [{ value: "keep", label: "Custom (unchanged)" }] : []),
+  ];
+  const modeSelect = select(modes, { value: startMode });
+  const body = element("div");
+  const renderBody = (mode) => {
+    body.replaceChildren(...(mode === "custom"
+      ? [orderEditor({ values: Array.isArray(sort) ? sort : [], getValues, onChange: (values) => onChange(values.length ? values : undefined) })]
+      : []));
+  };
+  modeSelect.addEventListener("change", () => {
+    const mode = modeSelect.value;
+    if (mode === "keep") return;
+    sort = mode === "descending" || mode === "ascending" ? mode : undefined;
+    onChange(sort);
+    renderBody(mode);
+  });
+  renderBody(startMode);
+  return element("div", { className: "plots-editor-labels" }, [
+    element("strong", { text: label }), field("Order", modeSelect), body,
+  ]);
+}
 
 // Named color schemes built into Vega, grouped as in its documentation.
 const VEGA_SCHEMES = [
@@ -280,6 +395,7 @@ function ensureStyle() {
 .plots-editor-advanced > summary { cursor: pointer; font-size: 13px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
+.plots-editor-order-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; margin: 4px 0; }
 .plots-editor-color-control { display: flex; gap: 6px; align-items: center; }
 .plots-editor-color-control input[type="color"] { width: 2.5rem; padding: 0; flex: none; }
 .plots-editor-error { color: var(--err); min-height: 1.2em; }
@@ -558,6 +674,20 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   }));
                   continue;
                 }
+                if (key === "sort") {
+                  const categoryField = () => {
+                    const current = currentArgs();
+                    return card.builder === "boxPlot" ? boxPlotCategoryField(current) : current.xVar;
+                  };
+                  labelFields.append(sortEditor({
+                    label,
+                    sort: args.sort,
+                    byCount: kind === "sort-count",
+                    getValues: () => { try { return distinctValues(categoryField()); } catch { return []; } },
+                    onChange: (value) => setArgValue("sort", value),
+                  }));
+                  continue;
+                }
                 if (LABEL_SOURCES[key]) {
                   labelFields.append(labelsEditor({
                     label: label.replace(" (JSON)", ""),
@@ -571,10 +701,20 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 const raw = args[key] === undefined ? "" : typeof args[key] === "object" ? jsonText(args[key]) : String(args[key]);
                 if (kind === "column" || kind === "field-type") {
                   control = element("select", { attrs: { "aria-label": label } });
-                  control.append(element("option", { text: "(not set)", attrs: { value: "" } }));
+                  const fallback = defaultPlaceholders(card.builder, args)[key];
+                  control.append(element("option", { text: fallback ? `Default (${fallback})` : "(not set)", attrs: { value: "" } }));
                   const values = kind === "column" ? fieldChoices() : ["quantitative", "temporal", "ordinal", "nominal"];
                   control.append(...values.map((value) => element("option", { text: value, attrs: { value } })));
                   control.value = raw;
+                } else if (kind === "invalid-values") {
+                  const known = INVALID_VALUE_CHOICES.some((choice) => choice.value === raw);
+                  control = select([
+                    { value: "", label: "Default (show and flag them)" },
+                    ...INVALID_VALUE_CHOICES,
+                    ...(raw && !known ? [{ value: raw, label: `${raw} (not recognised)` }] : []),
+                  ], { value: raw });
+                  control.setAttribute("aria-label", label);
+                  control.title = "Rows with blank or unparseable values in the plotted fields. A warning above the plot counts them either way.";
                 } else if (kind === "boolean") {
                   control = element("select", { attrs: { "aria-label": label } }, [
                     element("option", { text: "Default", attrs: { value: "" } }),

@@ -18,10 +18,16 @@ function uniqueHeaderNames(header) {
   });
 }
 
+/** Blank cells become null, which ro-crate-plots counts as missing when warning about or hiding invalid values. */
+function cellValue(value) {
+  if (value === undefined || value === null) return null;
+  return typeof value === "string" && !value.trim() ? null : value;
+}
+
 export function tableToRows(table) {
   const names = uniqueHeaderNames(table?.header);
   return (table?.rows || []).map((row) => Object.fromEntries(
-    names.map((name, index) => [name, row?.[index] ?? ""]),
+    names.map((name, index) => [name, cellValue(row?.[index])]),
   ));
 }
 
@@ -95,9 +101,11 @@ export function mapRowsFromColumns(rows, {
   latitudeField = "lat", longitudeField = "lon", weightField,
 } = {}) {
   let invalidCoordinates = 0;
+  // Number(null) and Number("") are 0, which would place blank coordinates at 0,0.
+  const coordinate = (value) => (value === null || value === undefined || value === "" ? NaN : Number(value));
   const data = (rows || []).flatMap((row) => {
-    const lat = Number(row[latitudeField]);
-    const lon = Number(row[longitudeField]);
+    const lat = coordinate(row[latitudeField]);
+    const lon = coordinate(row[longitudeField]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) { invalidCoordinates++; return []; }
     return [{ lat, lon, ...(weightField ? { weight: Number(row[weightField]) || 1 } : {}) }];
   });
@@ -119,6 +127,11 @@ function bindCustomData(inputSpec, data, datasetName) {
     }
   }
   return spec;
+}
+
+/** The layer holding the plotted marks; ro-crate-plots builders put warnings in sibling layers. */
+export function dataLayer(spec) {
+  return spec?.layer?.find((layer) => layer.description === "_data_layer") || spec;
 }
 
 export async function generatePlotSpecs(config, tables) {
@@ -153,8 +166,9 @@ export async function generatePlotSpecs(config, tables) {
       }
       if (typeof builder !== "function") throw new Error(`Builder '${functionName}' is unavailable in this browser.`);
       const spec = await builder({ ...args, data: builderData });
-      if (colorMap && spec.encoding?.color) {
-        spec.encoding.color.scale = { domain: Object.keys(colorMap), range: Object.values(colorMap) };
+      const encoding = dataLayer(spec)?.encoding;
+      if (colorMap && encoding?.color) {
+        encoding.color.scale = { domain: Object.keys(colorMap), range: Object.values(colorMap) };
       }
       return { index, plot, spec, warnings, error: null };
     } catch (error) {

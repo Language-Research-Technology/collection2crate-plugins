@@ -2,8 +2,16 @@ import embed from "vega-embed";
 import { button, element, note } from "../../src/_panel.js";
 import { createDefaultConfig, embedOptions, generatePlotSpecs, layoutSpan, validatePlotsConfig } from "./model.js";
 import { openPlotsConfigEditor } from "./config/editor.js";
+import PACKAGE from "../../package.json" with { type: "json" };
 
 export const CONFIG_PATH = "_config/plots/config.json";
+
+/** The pinned ro-crate-plots commit, shortened, e.g. "github:org/ro-crate-plots#d53c3e0…" -> "d53c3e0". */
+export function libraryPin(spec = PACKAGE.dependencies?.["ro-crate-plots"]) {
+  if (!spec) return "unknown";
+  const ref = String(spec).split("#")[1];
+  return ref ? (/^[0-9a-f]{40}$/i.test(ref) ? ref.slice(0, 7) : ref) : spec;
+}
 
 function afterLayout() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -25,12 +33,18 @@ export function createPlugin(deps = {}) {
         const topbar = element("div", { className: "actions" }, [configure]);
         const empty = note("No plots configured yet. Choose Configure plots… to add a plot.");
         const loading = note("Loading plots configuration…");
+        const pin = element("p", {
+          className: "field-hint plots-library-pin",
+          text: `ro-crate-plots @ ${libraryPin()}`,
+          attrs: { title: `Pinned in collection2crate-plugins/package.json: ${PACKAGE.dependencies?.["ro-crate-plots"] || "not declared"}` },
+        });
 
         function show() {
           container.replaceChildren(
             element("h2", { text: "Plots" }),
             note("Create interactive Vega and Vega-Lite visualisations from tables loaded from this folder."),
             topbar,
+            pin,
             status,
             plotHost,
           );
@@ -166,6 +180,7 @@ export function createPlugin(deps = {}) {
         const style = element("style", { attrs: { id: "plots-panel-style" } });
         style.textContent = `
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.plots-library-pin { margin:4px 0; font:11px var(--mono); opacity:0.7; }
 .plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
 .plots-card h3 { margin:0 0 8px; font-size:1rem; }
 .plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }

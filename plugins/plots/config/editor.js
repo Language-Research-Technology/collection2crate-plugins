@@ -14,14 +14,14 @@ const commonFields = [
 const xFields = [
   ["xVar", "X field", "column"], ["xType", "X field type", "field-type"],
   ["xTitle", "X-axis title", "text"], ["xLabels", "X-axis labels (JSON)", "json"],
-  ["xTimeUnit", "X-axis time unit", "text"], ["xTooltipTitle", "X tooltip title", "text"],
-  ["xTooltipTimeUnit", "X tooltip time unit", "text"],
+  ["xTimeUnit", "X-axis time unit", "time-unit"], ["xTooltipTitle", "X tooltip title", "text"],
+  ["xTooltipTimeUnit", "X tooltip time unit", "time-unit"],
 ];
 const yFields = [
   ["yVar", "Y field", "column"], ["yType", "Y field type", "field-type"],
   ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"],
-  ["yTimeUnit", "Y-axis time unit", "text"], ["yTooltipTitle", "Y tooltip title", "text"],
-  ["yTooltipTimeUnit", "Y tooltip time unit", "text"],
+  ["yTimeUnit", "Y-axis time unit", "time-unit"], ["yTooltipTitle", "Y tooltip title", "text"],
+  ["yTooltipTimeUnit", "Y tooltip time unit", "time-unit"],
 ];
 const colorFields = [
   ["colorVar", "Color field", "column"], ["colorType", "Color field type", "field-type"],
@@ -96,6 +96,176 @@ const PLOT_TYPE_LABELS = {
   histogramPlot: "Histogram", plotMapHeatmap: "Map heatmap",
 };
 const plotTypeOption = (name) => element("option", { text: PLOT_TYPE_LABELS[name] || name, attrs: { value: name } });
+
+// Time units Vega-Lite 6 accepts (vega-lite/src/timeunit.ts, https://vega.github.io/vega-lite/docs/timeunit.html).
+// The "binned…" units, for data binned before plotting, are left out; a saved one is kept as Custom.
+const TIME_UNIT_PARTS = ["year", "quarter", "month", "week", "dayofyear", "day", "date", "hours", "minutes", "seconds", "milliseconds"];
+const TIME_UNIT_PART_LABELS = {
+  year: "year", quarter: "quarter", month: "month", week: "week", day: "day of week", dayofyear: "day of year",
+  date: "day of month", hours: "hours", minutes: "minutes", seconds: "seconds", milliseconds: "milliseconds",
+};
+const SINGLE_TIME_UNITS = ["year", "quarter", "month", "week", "day", "dayofyear", "date", "hours", "minutes", "seconds", "milliseconds"];
+const MULTI_TIME_UNITS = [
+  "yearquarter", "yearquartermonth", "yearmonth", "yearmonthdate", "yearmonthdatehours", "yearmonthdatehoursminutes",
+  "yearmonthdatehoursminutesseconds", "yearweek", "yearweekday", "yearweekdayhours", "yearweekdayhoursminutes",
+  "yearweekdayhoursminutesseconds", "yeardayofyear", "quartermonth", "monthdate", "monthdatehours", "monthdatehoursminutes",
+  "monthdatehoursminutesseconds", "weekday", "weekdayhours", "weekdayhoursminutes", "weekdayhoursminutesseconds",
+  "dayhours", "dayhoursminutes", "dayhoursminutesseconds", "hoursminutes", "hoursminutesseconds", "minutesseconds",
+  "secondsmilliseconds",
+];
+const LOCAL_TIME_UNITS = [...SINGLE_TIME_UNITS, ...MULTI_TIME_UNITS];
+const TIME_UNITS = new Set([...LOCAL_TIME_UNITS, ...LOCAL_TIME_UNITS.map((unit) => `utc${unit}`)]);
+// Parts in the order Vega-Lite joins them into a unit name, e.g. year + dayofyear -> "yeardayofyear".
+const TIME_UNIT_ORDER = ["year", "quarter", "month", "week", "day", "dayofyear", "date", "hours", "minutes", "seconds", "milliseconds"];
+const LOCAL_UNIT_PARTS = LOCAL_TIME_UNITS.map((unit) => new Set(timeUnitParts(unit)));
+
+/** "yearmonthdate" -> ["year", "month", "date"]; null for a name that is not made of parts. */
+function timeUnitParts(unit) {
+  let rest = String(unit).replace(/^utc/, "");
+  const parts = [];
+  while (rest) {
+    const part = TIME_UNIT_PARTS.find((name) => rest.startsWith(name));
+    if (!part) return null;
+    parts.push(part);
+    rest = rest.slice(part.length);
+  }
+  return parts;
+}
+
+/** "yearmonthdate" -> "Year + month + day of month"; utc units add "(UTC)". */
+function timeUnitLabel(unit) {
+  const parts = timeUnitParts(unit);
+  if (!parts) return String(unit);
+  const text = parts.map((part) => TIME_UNIT_PART_LABELS[part]).join(" + ");
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}${String(unit).startsWith("utc") ? " (UTC)" : ""}`;
+}
+
+let timeUnitOutsideClick = false;
+/**
+ * A dropdown of time-unit parts as checkboxes; ticking parts builds a Vega-Lite unit
+ * such as "yearmonth". Parts that cannot lead to a valid unit are disabled, and an
+ * incomplete combination is reported but not saved. A value outside the list (an
+ * object, or a "binned…" unit) is kept until a part is ticked.
+ */
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function timeUnitPicker({ label, value, defaultLabel, onChange, inherit }) {
+  if (!timeUnitOutsideClick) {
+    timeUnitOutsideClick = true;
+    document.addEventListener("pointerdown", (event) => {
+      for (const open of document.querySelectorAll(".plots-editor-timeunit[open]")) {
+        if (!open.contains(event.target)) open.open = false;
+      }
+    });
+  }
+  const custom = value !== undefined && value !== "" && !(typeof value === "string" && TIME_UNITS.has(value));
+  const parts = new Set(custom || !value ? [] : timeUnitParts(value));
+  let utc = typeof value === "string" && value.startsWith("utc");
+  let keepCustom = custom;
+  let saved = custom || !value ? "" : value;
+  const originalValue = value;
+  // A tooltip picker with no unit of its own follows the axis unit (ro-crate-plots falls back to it),
+  // and shows the axis unit's parts ticked so what you see is what the tooltip uses.
+  let inheriting = Boolean(inherit) && !custom && !value;
+  const inheritedUnit = () => {
+    const unit = inherit?.();
+    return typeof unit === "string" && TIME_UNITS.has(unit) ? unit : "";
+  };
+  const shown = () => {
+    if (!inheriting) return { parts, utc };
+    const unit = inheritedUnit();
+    return { parts: new Set(unit ? timeUnitParts(unit) : []), utc: unit.startsWith("utc") };
+  };
+
+  const unitFor = () => (parts.size ? `${utc ? "utc" : ""}${TIME_UNIT_ORDER.filter((part) => parts.has(part)).join("")}` : "");
+  const reachable = (candidate) => LOCAL_UNIT_PARTS.some((unit) => [...candidate].every((part) => unit.has(part)));
+  const summaryText = element("span", { className: "plots-editor-timeunit-value" });
+  const status = element("p", { className: "plots-editor-timeunit-status", attrs: { role: "status" } });
+  /** Leave the axis unit behind: start this picker's own unit from what was shown. */
+  function stopInheriting() {
+    if (!inheriting) return;
+    const current = shown();
+    parts.clear();
+    for (const part of current.parts) parts.add(part);
+    utc = current.utc;
+    inheriting = false;
+  }
+  /** Back to following the axis once this unit is empty or the same as the axis one. */
+  function maybeInherit() {
+    if (!inherit || keepCustom) return;
+    if (!parts.size || unitFor() === inheritedUnit()) {
+      parts.clear();
+      inheriting = true;
+    }
+  }
+  const boxes = TIME_UNIT_ORDER.map((part) => {
+    const box = checkbox(capitalize(TIME_UNIT_PART_LABELS[part]));
+    box.input.addEventListener("change", () => {
+      stopInheriting();
+      if (box.input.checked) parts.add(part); else parts.delete(part);
+      update(true);
+    });
+    return { part, box };
+  });
+  const utcBox = checkbox("UTC (ignore the viewer's time zone)", { checked: utc });
+  utcBox.input.addEventListener("change", () => { stopInheriting(); utc = utcBox.input.checked; update(true); });
+  const clear = button(inherit ? "Same as axis" : "Clear", {
+    title: inherit ? "Use the axis time unit in the tooltip" : "Untick every part",
+    onClick: () => { parts.clear(); update(true); },
+  });
+  clear.classList.add("plots-editor-timeunit-clear");
+
+  function update(changed) {
+    if (changed) keepCustom = false;
+    const unit = unitFor();
+    const complete = !parts.size || TIME_UNITS.has(unit);
+    if (changed && complete) maybeInherit();
+    const nextValue = inheriting ? "" : unitFor();
+    if (changed && complete && nextValue !== saved) {
+      saved = nextValue;
+      onChange(nextValue);
+    }
+    const display = shown();
+    for (const { part, box } of boxes) {
+      box.input.checked = display.parts.has(part);
+      box.input.disabled = !display.parts.has(part) && !reachable(new Set([...display.parts, part]));
+    }
+    utcBox.input.checked = display.utc;
+    clear.disabled = inherit ? inheriting : !parts.size;
+    node.classList.toggle("inheriting", inheriting);
+    if (keepCustom) {
+      summaryText.textContent = `Custom: ${typeof originalValue === "string" ? originalValue : JSON.stringify(originalValue)}`;
+      status.textContent = "Kept unchanged. Tick parts to replace it.";
+    } else if (inheriting) {
+      summaryText.textContent = defaultLabel();
+      status.textContent = "Same as the axis time unit. Tick or untick parts to use a different one in the tooltip.";
+    } else if (!parts.size) {
+      summaryText.textContent = defaultLabel();
+      status.textContent = "Tick one part, or several to combine them.";
+    } else if (complete) {
+      summaryText.textContent = timeUnitLabel(unit);
+      status.textContent = `Vega-Lite unit: ${unit}`;
+    } else {
+      // The smallest valid unit containing the ticked parts says what is missing.
+      const target = LOCAL_UNIT_PARTS.filter((candidate) => [...parts].every((part) => candidate.has(part)))
+        .sort((a, b) => a.size - b.size)[0];
+      const missing = target ? TIME_UNIT_ORDER.filter((part) => target.has(part) && !parts.has(part)).map((part) => capitalize(TIME_UNIT_PART_LABELS[part])) : [];
+      summaryText.textContent = `${capitalize(TIME_UNIT_ORDER.filter((part) => parts.has(part)).map((part) => TIME_UNIT_PART_LABELS[part]).join(" + "))} (incomplete)`;
+      status.textContent = `Not a Vega-Lite unit yet${missing.length ? `: also tick ${missing.join(" + ")}` : ""}. The plot keeps ${saved ? timeUnitLabel(saved) : inherit ? "the axis unit" : "no time unit"} until then.`;
+    }
+    node.classList.toggle("incomplete", !keepCustom && !complete);
+  }
+
+  const node = element("details", { className: "plots-editor-timeunit" }, [
+    element("summary", { attrs: { "aria-label": `${label}: choose time unit parts` } }, [summaryText]),
+    element("div", { className: "plots-editor-timeunit-panel" }, [
+      element("div", { className: "plots-editor-timeunit-parts" }, boxes.map(({ box }) => box.node)),
+      utcBox.node, status, element("div", { className: "actions" }, [clear]),
+    ]),
+  ]);
+  update(false);
+  return { node, refresh: () => update(false) };
+}
 
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
 const INVALID_VALUE_CHOICES = [
@@ -586,11 +756,13 @@ function ensureStyle() {
 .plots-editor-plots-count:not(:empty) { padding: 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); font-size: 12px; font-weight: 600; }
 .plots-editor-plot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 8px 0; }
 .plots-editor-dataset { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr) auto; gap: 8px; align-items: end; padding: 2px 0; }
-.plots-editor-plot { padding: 0 10px 10px; overflow: hidden; margin: 18px 0; border-left: 6px solid var(--plot-hue, var(--accent)); box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); }
+.plots-editor-plot { padding: 0 10px 10px; margin: 18px 0; border-left: 6px solid var(--plot-hue, var(--accent)); box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); }
 .plots-editor-plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 -10px 10px; padding: 8px 10px; background: var(--accent-soft); background: color-mix(in srgb, var(--plot-hue) 14%, var(--panel)); border-bottom: 2px solid var(--plot-hue); }
 .plots-editor-plot-number { min-width: 1.9em; padding: 1px 7px; border-radius: 999px; background: var(--plot-hue); color: #fff; font-size: 13px; font-weight: 700; text-align: center; }
 .plots-editor-plot-toolbar > .plots-editor-plot-title { flex: 1 1 12rem; margin: 0; font-size: 15px; }
-.plots-editor-plot-toolbar { cursor: pointer; }
+.plots-editor-plot-toolbar { cursor: pointer; border-top-right-radius: var(--radius-sm); }
+/* Collapsed cards end at the bar, so it rounds its bottom corner too. */
+.plots-editor-plot.collapsed > .plots-editor-plot-toolbar { border-bottom-right-radius: var(--radius-sm); }
 .plots-editor-plot-toolbar .button { cursor: pointer; }
 /* Chevron toggle, matching the setup panels: right when collapsed, down when open. */
 .plots-editor-plot-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
@@ -624,6 +796,24 @@ function ensureStyle() {
 .plots-editor-labels .field-hint { font-size: 12px; margin: 0 0 6px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
+.plots-editor-timeunit { position: relative; }
+.plots-editor-timeunit > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); cursor: pointer; list-style: none; font-size: 14px; }
+.plots-editor-timeunit > summary::-webkit-details-marker { display: none; }
+.plots-editor-timeunit > summary::after { content: ""; flex: none; width: 6px; height: 6px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); margin-top: -3px; }
+.plots-editor-timeunit-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plots-editor-timeunit.incomplete > summary { border-color: var(--err); }
+/* Following the axis unit: ticks and label are shown, but quieter than a unit of its own. */
+.plots-editor-timeunit.inheriting > summary { color: var(--muted); }
+.plots-editor-timeunit.inheriting .plots-editor-timeunit-parts input:checked, .plots-editor-timeunit.inheriting .field.inline input[type="checkbox"]:checked { opacity: .6; }
+.plots-editor-timeunit-panel { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; min-width: 16rem; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); box-shadow: 0 6px 18px rgb(0 0 0 / 0.15); }
+.plots-editor-timeunit-parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; margin-bottom: 6px; }
+.plots-editor-timeunit-panel .field { margin-bottom: 2px; }
+.plots-editor-timeunit-panel .field.inline .field-label { font-size: 13px; }
+/* A muted red: clearly a reset, without the alarm of a delete button. */
+.plots-editor-timeunit-clear { padding: 4px 14px; font-size: 13px; color: var(--err); color: color-mix(in srgb, var(--err) 70%, var(--muted)); }
+.plots-editor-timeunit-clear:hover:not(:disabled) { color: var(--err); border-color: var(--err); }
+.plots-editor-timeunit-status { margin: 6px 0; font-size: 12px; color: var(--muted); }
+.plots-editor-timeunit.incomplete .plots-editor-timeunit-status { color: var(--err); }
 .plots-editor-chips-caption { display: block; margin: 6px 0 3px; font-size: 12px; color: var(--muted); }
 .plots-editor-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 2.2rem; align-items: center; padding: 6px; border-radius: var(--radius-sm); border: 1px dashed transparent; }
 .plots-editor-chips-ordered { border-color: var(--border); background: var(--panel); }
@@ -943,6 +1133,14 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               const args = currentArgs();
               const placeholderInputs = new Map();
               const timeUnitFields = new Map();
+              const timeUnitSelects = new Map();
+              /** An empty tooltip time unit falls back to the axis one in ro-crate-plots. */
+              function timeUnitDefaultLabel(key, current) {
+                const axisKey = key.replace("Tooltip", "");
+                if (axisKey === key) return "None";
+                const axisUnit = current[axisKey];
+                return typeof axisUnit === "string" && axisUnit ? `Same as axis (${timeUnitLabel(axisUnit)})` : "Same as axis (none)";
+              }
               function refreshTimeUnits() {
                 let current;
                 try { current = currentArgs(); }
@@ -956,6 +1154,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 catch { return; }
                 const defaults = defaultPlaceholders(card.builder, current);
                 for (const [key, input] of placeholderInputs) input.placeholder = defaults[key] ?? "";
+                for (const picker of timeUnitSelects.values()) picker.refresh();
               }
               for (const [key, label, kind] of BUILDER_FIELDS[card.builder] || []) {
                 if (key === "title") continue;
@@ -1011,6 +1210,23 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   ], { value: raw });
                   control.setAttribute("aria-label", label);
                   control.title = "Rows with blank or unparseable values in the plotted fields. A warning above the plot counts them either way.";
+                } else if (kind === "time-unit") {
+                  // Not wrapped in a <label>: a click inside would be forwarded to its first checkbox.
+                  const picker = timeUnitPicker({
+                    label,
+                    value: args[key],
+                    defaultLabel: () => { try { return timeUnitDefaultLabel(key, currentArgs()); } catch { return "None"; } },
+                    onChange: (unit) => updateArgument(key, kind, unit),
+                    // Tooltip units fall back to the axis unit when left empty.
+                    inherit: key.includes("Tooltip")
+                      ? () => { try { return currentArgs()[key.replace("Tooltip", "")]; } catch { return ""; } }
+                      : undefined,
+                  });
+                  timeUnitSelects.set(key, picker);
+                  const fieldNode = element("div", { className: "field" }, [element("span", { className: "field-label", text: shortLabel }), picker.node]);
+                  timeUnitFields.set(key, fieldNode);
+                  group.inputs.append(fieldNode);
+                  continue;
                 } else if (kind === "boolean") {
                   control = element("select", { attrs: { "aria-label": label } }, [
                     element("option", { text: "Default", attrs: { value: "" } }),

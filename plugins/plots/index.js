@@ -185,6 +185,10 @@ export function createPlugin(deps = {}) {
 .plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
 .plots-view.vega-embed.has-actions { height:320px; }
 .plots-view.vega-embed > .chart-wrapper { width:100%; max-width:100%; }
+/* vega-embed stacks its "…" button at z-index 1000 and menu at 1001, above the host's
+   sticky header (20) and modals (50). Keep them just above neighbouring plots instead. */
+.plots-view.vega-embed summary { z-index:2; }
+.plots-view.vega-embed .vega-actions { z-index:3; }
 @media(max-width:900px) { .plots-grid-inner { grid-template-columns:repeat(2,minmax(0,1fr)); } .plots-card[style*="span 3"] { grid-column:span 2 !important; } }
 @media(max-width:600px) { .plots-grid-inner { grid-template-columns:1fr; } .plots-card { grid-column:span 1 !important; } }
 `;

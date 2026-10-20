@@ -2,8 +2,16 @@ import embed from "vega-embed";
 import { button, element, note } from "../../src/_panel.js";
 import { createDefaultConfig, embedOptions, generatePlotSpecs, layoutSpan, validatePlotsConfig } from "./model.js";
 import { openPlotsConfigEditor } from "./config/editor.js";
+import PACKAGE from "../../package.json" with { type: "json" };
 
 export const CONFIG_PATH = "_config/plots/config.json";
+
+/** The pinned ro-crate-plots commit, shortened, e.g. "github:org/ro-crate-plots#d53c3e0…" -> "d53c3e0". */
+export function libraryPin(spec = PACKAGE.dependencies?.["ro-crate-plots"]) {
+  if (!spec) return "unknown";
+  const ref = String(spec).split("#")[1];
+  return ref ? (/^[0-9a-f]{40}$/i.test(ref) ? ref.slice(0, 7) : ref) : spec;
+}
 
 function afterLayout() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -25,12 +33,18 @@ export function createPlugin(deps = {}) {
         const topbar = element("div", { className: "actions" }, [configure]);
         const empty = note("No plots configured yet. Choose Configure plots… to add a plot.");
         const loading = note("Loading plots configuration…");
+        const pin = element("p", {
+          className: "field-hint plots-library-pin",
+          text: `ro-crate-plots @ ${libraryPin()}`,
+          attrs: { title: `Pinned in collection2crate-plugins/package.json: ${PACKAGE.dependencies?.["ro-crate-plots"] || "not declared"}` },
+        });
 
         function show() {
           container.replaceChildren(
             element("h2", { text: "Plots" }),
             note("Create interactive Vega and Vega-Lite visualisations from tables loaded from this folder."),
             topbar,
+            pin,
             status,
             plotHost,
           );
@@ -72,13 +86,12 @@ export function createPlugin(deps = {}) {
           const grid = element("div", { className: "plots-grid-inner" });
           const pendingEmbeds = [];
           for (const result of plots) {
-            const card = element("section", { className: "plots-card" });
+            // No heading of our own: a plot's title is the one Vega draws from its spec, if any.
+            const specTitle = result.plot.makeSpec?.args?.title ?? result.plot.customSpec?.title;
+            const titleText = typeof specTitle === "object" && specTitle !== null && !Array.isArray(specTitle) ? specTitle.text : specTitle;
+            const label = (Array.isArray(titleText) ? titleText.join(" ") : String(titleText ?? "")).trim() || `Plot ${result.index + 1}`;
+            const card = element("section", { className: "plots-card", attrs: { "aria-label": label } });
             card.style.gridColumn = `span ${layoutSpan(result.plot)}`;
-            const title = result.plot.makeSpec?.args?.title
-              || result.plot.customSpec?.title
-              || result.plot.dataset?.name
-              || `Plot ${result.index + 1}`;
-            card.append(element("h3", { text: Array.isArray(title) ? title.join(" ") : String(title) }));
             if (result.error) {
               card.append(note(`Plot ${result.index + 1}: ${result.error}`));
             } else {
@@ -166,12 +179,16 @@ export function createPlugin(deps = {}) {
         const style = element("style", { attrs: { id: "plots-panel-style" } });
         style.textContent = `
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.plots-library-pin { margin:4px 0; font:11px var(--mono); opacity:0.7; }
 .plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
-.plots-card h3 { margin:0 0 8px; font-size:1rem; }
 .plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }
 .plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
 .plots-view.vega-embed.has-actions { height:320px; }
 .plots-view.vega-embed > .chart-wrapper { width:100%; max-width:100%; }
+/* vega-embed stacks its "…" button at z-index 1000 and menu at 1001, above the host's
+   sticky header (20) and modals (50). Keep them just above neighbouring plots instead. */
+.plots-view.vega-embed summary { z-index:2; }
+.plots-view.vega-embed .vega-actions { z-index:3; }
 @media(max-width:900px) { .plots-grid-inner { grid-template-columns:repeat(2,minmax(0,1fr)); } .plots-card[style*="span 3"] { grid-column:span 2 !important; } }
 @media(max-width:600px) { .plots-grid-inner { grid-template-columns:1fr; } .plots-card { grid-column:span 1 !important; } }
 `;

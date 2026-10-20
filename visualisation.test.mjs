@@ -25,11 +25,14 @@ import {
 } from "./plugins/topicdetector/index.js";
 import { chartGeometry } from "./plugins/chart/index.js";
 import {
-  BUILDER_NAMES, createDefaultConfig, datasetsForConfig, embedOptions,
+  BUILDER_NAMES, createDefaultConfig, dataLayer, datasetsForConfig, embedOptions,
   generatePlotSpecs, layoutSpan, mapRowsFromColumns, tableToRows, validatePlotsConfig,
 } from "./plugins/plots/model.js";
 import { projectMapPoints } from "./plugins/plots/map.js";
+import { libraryPin } from "./plugins/plots/index.js";
 import { REGISTRY } from "./index.js";
+import * as vega from "vega";
+import { compile as compileVegaLite } from "vega-lite";
 
 let failures = 0;
 const asyncChecks = [];
@@ -464,6 +467,13 @@ check("converts table rows to unique object keys", () => {
   assert.deepEqual(tableToRows({ header: ["name"], rows: [] }), []);
 });
 
+check("blank cells become null so the plots library counts them as missing", () => {
+  assert.deepEqual(tableToRows({ header: ["a", "b", "c"], rows: [["", "  ", "0"], ["x"]] }), [
+    { a: null, b: null, c: "0" },
+    { a: "x", b: null, c: null },
+  ]);
+});
+
 check("creates named datasets from loaded tables and validates config shape", () => {
   const tables = [
     { source: "_outputs/roctable/People.csv", header: ["name"], rows: [["Ada"]] },
@@ -523,8 +533,61 @@ checkAsync("a value-to-color palette becomes the color scale without mutating co
   });
   const { plots } = await generatePlotSpecs(config, [table]);
   assert.equal(plots[0].error, null);
-  assert.deepEqual(plots[0].spec.encoding.color.scale, { domain: ["Female", "Male"], range: ["#ff69b4", "#1e90ff"] });
+  assert.deepEqual(dataLayer(plots[0].spec).encoding.color.scale, { domain: ["Female", "Male"], range: ["#ff69b4", "#1e90ff"] });
   assert.deepEqual(config.plots.plotList[0].makeSpec.args.palette, palette);
+});
+
+checkAsync("bar and box plot category order reaches the plotted layer", async () => {
+  const table = { source: "people.csv", header: ["group", "age"], rows: [["A", "30"], ["B", "40"], ["C", "50"]] };
+  const config = createDefaultConfig([table]);
+  const name = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push(
+    { dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group", sort: "descending" } } },
+    { dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group", sort: ["C", "A"] } } },
+    { dataset: { name }, makeSpec: { plotFunction: "boxPlot", args: { xVar: "group", yVar: "age", yType: "quantitative", sort: ["B"] } } },
+  );
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.deepEqual(plots.map((result) => result.error), [null, null, null]);
+  assert.deepEqual(dataLayer(plots[0].spec).encoding.x.sort, { op: "count", field: "group", order: "descending" });
+  assert.deepEqual(dataLayer(plots[1].spec).encoding.x.sort, ["C", "A"]);
+  assert.deepEqual(dataLayer(plots[2].spec).encoding.x.sort, ["B"]);
+});
+
+checkAsync("hiding invalid values filters blank cells from the plotted layer and keeps the warning layer", async () => {
+  const table = { source: "people.csv", header: ["group"], rows: [["A"], [""]] };
+  const config = createDefaultConfig([table]);
+  const name = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push(
+    { dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group", invalidValues: "hide" } } },
+    { dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group" } } },
+  );
+  const { plots } = await generatePlotSpecs(config, [table]);
+  const [hidden, shown] = plots.map((result) => result.spec);
+  assert.deepEqual(hidden.data.values[1], { group: null });
+  const [filter] = dataLayer(hidden).transform;
+  assert.match(filter.filter, /group/, "the plotted layer filters on the X field");
+  assert.equal(dataLayer(shown).transform, undefined, "the default shows missing values");
+  for (const spec of [hidden, shown]) {
+    assert.ok(spec.layer.some((layer) => layer.description === "_missing_values_warning"));
+  }
+});
+
+checkAsync("generated specs run in Vega for column names that are not identifiers, like roctable's @id", async () => {
+  const table = { source: "objects.csv", header: ["@type", "speaker age", "schema:year"], rows: [["Person", "30", "1978"], ["", "41", ""]] };
+  const config = createDefaultConfig([table]);
+  const name = Object.keys(config.plots.datasets)[0];
+  for (const invalidValues of ["show", "hide"]) {
+    config.plots.plotList.push(
+      { dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "@type", invalidValues } } },
+      { dataset: { name }, makeSpec: { plotFunction: "scatterPlot", args: { xVar: "speaker age", yVar: "schema:year", colorVar: "@type", invalidValues } } },
+    );
+  }
+  const { plots } = await generatePlotSpecs(config, [table]);
+  for (const result of plots) {
+    assert.equal(result.error, null);
+    const view = new vega.View(vega.parse(compileVegaLite(result.spec).spec), { renderer: "none" });
+    await view.runAsync();
+  }
 });
 
 checkAsync("custom specs bind the selected in-memory dataset without mutating config", async () => {
@@ -549,6 +612,13 @@ checkAsync("unknown builder entries are preserved and reported per plot", async 
   assert.ok(BUILDER_NAMES.includes("plotMapHeatmap"));
 });
 
+check("the panel's library label shows the pinned ro-crate-plots commit", () => {
+  assert.equal(libraryPin("github:Language-Research-Technology/ro-crate-plots#d53c3e0bdafdb7ce5eaead455f01a8bd0e5bfe3c"), "d53c3e0");
+  assert.equal(libraryPin("github:Language-Research-Technology/ro-crate-plots#main"), "main");
+  assert.equal(libraryPin("file:../ro-crate-plots"), "file:../ro-crate-plots");
+  assert.match(libraryPin(), /^[0-9a-f]{7}$/, "package.json pins a commit");
+});
+
 check("projects map coordinates to image points", () => {
   assert.deepEqual(
     projectMapPoints([{ lat: 0, lon: 0, weight: 3 }], 2, 1, 1, 0, 0, 256),
@@ -560,9 +630,10 @@ check("maps selected source columns to map coordinates and reports invalid rows"
   assert.deepEqual(mapRowsFromColumns([
     { lat_col: "-33.8", lon_col: "151.2", count: "4" },
     { lat_col: "unknown", lon_col: "0", count: "2" },
+    { lat_col: null, lon_col: "", count: "1" },
   ], { latitudeField: "lat_col", longitudeField: "lon_col", weightField: "count" }), {
     data: [{ lat: -33.8, lon: 151.2, weight: 4 }],
-    invalidCoordinates: 1,
+    invalidCoordinates: 2,
   });
 });
 

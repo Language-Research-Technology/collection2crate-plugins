@@ -272,16 +272,17 @@ const INVALID_VALUE_CHOICES = [
   { value: "show", label: "Show and flag them" },
   { value: "hide", label: "Hide them" },
 ];
-const TRI_STATE = [{ value: "", label: "Inherit global" }, { value: "true", label: "On" }, { value: "false", label: "Off" }];
+// Themes bundled with vega-embed 7 (vega-themes 3).
+const VEGA_THEMES = [
+  ["dark", "Dark"], ["excel", "Excel"], ["fivethirtyeight", "FiveThirtyEight"], ["ggplot2", "ggplot2"],
+  ["googlecharts", "Google Charts"], ["latimes", "Los Angeles Times"], ["powerbi", "Power BI"], ["quartz", "Quartz"],
+  ["urbaninstitute", "Urban Institute"], ["vox", "Vox"], ["carbonwhite", "Carbon (white)"], ["carbong10", "Carbon (gray 10)"],
+  ["carbong90", "Carbon (gray 90, dark)"], ["carbong100", "Carbon (gray 100, dark)"],
+];
+// Per-plot Vega Embed overrides, matching the global options; other saved keys are kept as they are.
 const EMBED_CONTROLS = [
-  ["renderer", "Renderer", [{ value: "", label: "Inherit global" }, { value: "svg", label: "SVG" }, { value: "canvas", label: "Canvas" }]],
-  ["tooltip", "Tooltips", TRI_STATE],
-  ["defaultStyle", "Default chart styling", TRI_STATE],
+  ["theme", "Theme", [{ value: "", label: "Inherit global" }, ...VEGA_THEMES.map(([value, label]) => ({ value, label }))]],
   ["actions", "Action links", [{ value: "", label: "Inherit global" }, { value: "true", label: "Show" }, { value: "false", label: "Hide" }]],
-  ["logLevel", "Log level", [
-    { value: "", label: "Inherit global" }, { value: "0", label: "None" }, { value: "1", label: "Error" },
-    { value: "2", label: "Warning" }, { value: "3", label: "Info" }, { value: "4", label: "Debug" },
-  ]],
 ];
 
 /** What ro-crate-plots uses when a field is left empty, mirroring lib/plots.js and lib/mapplots.js. */
@@ -348,13 +349,12 @@ function embedControls(card, sync) {
     const currentValue = current === undefined ? "" : String(current);
     const known = options.some((option) => option.value === currentValue);
     const control = select(
-      known ? options : [...options, { value: "__keep", label: "Custom (unchanged)" }],
+      known ? options : [...options, { value: "__keep", label: `Custom: ${typeof current === "string" ? current : JSON.stringify(current)} (unchanged)` }],
       { value: known ? currentValue : "__keep" },
     );
     control.addEventListener("change", () => {
       if (control.value === "__keep") return;
       if (control.value === "") delete card.embed[key];
-      else if (key === "logLevel") card.embed[key] = Number(control.value);
       else if (control.value === "true" || control.value === "false") card.embed[key] = control.value === "true";
       else card.embed[key] = control.value;
       sync();
@@ -751,6 +751,7 @@ function createEditorState(config) {
 }
 
 // Distinct hues, readable with white text in light and dark themes, to tell plot cards apart at a glance.
+
 const PLOT_HUES = ["#2563eb", "#0f766e", "#c2410c", "#7c3aed", "#be123c", "#4d7c0f", "#a16207", "#0e7490"];
 const plotHues = new WeakMap();
 let nextPlotHue = 0;
@@ -765,10 +766,17 @@ function ensureStyle() {
   const style = element("style", { attrs: { id: "plots-editor-style" } });
   style.textContent = `
 .modal-panel.plots-config-modal { width: min(980px, 96vw); }
-.plots-editor-scroll { max-height: min(70vh, 760px); overflow: auto; padding-right: 4px; }
+/* No scrolling of its own: the host's modal body scrolls, so there is one scroll bar. */
+.plots-editor-scroll { min-width: 0; }
 .plots-editor-section { margin: 0 0 18px; }
 .plots-editor-section > h3 { margin: 0 0 8px; font-size: 15px; }
 .plots-editor-intro { margin: 0 0 10px; }
+/* Menu items sit under the "Show the action menu" checkbox they depend on. */
+.plots-editor-action-items { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 2px 0 4px 26px; padding-left: 10px; border-left: 2px solid var(--border); }
+.plots-editor-action-items .field { margin-bottom: 2px; }
+.plots-editor-action-items.disabled { opacity: .5; }
+.plots-editor-png-scale { margin: 6px 0 4px 26px; padding-left: 10px; border-left: 2px solid var(--border); max-width: 34rem; }
+.plots-editor-png-scale .field { margin-bottom: 2px; max-width: 14rem; }
 /* Setup rows: quiet, one line each until opened. */
 .plots-editor-setup { margin: 0 0 8px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--accent-soft); background: color-mix(in srgb, var(--text) 4%, var(--panel)); font-size: 13px; }
 .plots-editor-setup > summary { display: flex; gap: 8px; align-items: center; margin: 0 -12px; padding: 8px 12px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }
@@ -923,57 +931,64 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
         const actionOptions = originalActions && typeof originalActions === "object" ? originalActions : {};
         const exportOptions = actionOptions.export && typeof actionOptions.export === "object"
           ? actionOptions.export : {};
-        const actionEnabled = checkbox("Show Vega action links", { checked: originalActions !== false });
-        const exportEnabled = checkbox("Export actions", { checked: actionOptions.export !== false });
-        const exportPng = checkbox("PNG export", { checked: exportOptions.png !== false });
-        const exportSvg = checkbox("SVG export", { checked: exportOptions.svg !== false });
-        const sourceAction = checkbox("View source", { checked: actionOptions.source !== false });
-        const compiledAction = checkbox("View compiled Vega", { checked: actionOptions.compiled === true });
+        // The action menu and its items, named as vega-embed's "…" menu shows them.
+        const actionEnabled = checkbox("Show the action menu (the “…” button on each plot)", { checked: originalActions !== false });
+        const exportPng = checkbox("Save as PNG", { checked: actionOptions.export !== false && exportOptions.png !== false });
+        const exportSvg = checkbox("Save as SVG", { checked: actionOptions.export !== false && exportOptions.svg !== false });
+        const sourceAction = checkbox("View Source", { checked: actionOptions.source !== false });
+        const compiledAction = checkbox("View Compiled Vega", { checked: actionOptions.compiled === true });
         const editorAction = checkbox("Open in Vega Editor", { checked: actionOptions.editor !== false });
-        const rendererSelect = select([
-          { value: "", label: "Default" },
-          { value: "svg", label: "SVG" },
-          { value: "canvas", label: "Canvas" },
-        ], { value: state.globalOptions.renderer || "" });
-        const tooltipSelect = select([
-          { value: "", label: "Default" },
-          { value: "true", label: "On" },
-          { value: "false", label: "Off" },
-        ], { value: typeof state.globalOptions.tooltip === "boolean" ? String(state.globalOptions.tooltip) : "" });
-        const styleSelect = select([
-          { value: "", label: "Default" },
-          { value: "true", label: "On" },
-          { value: "false", label: "Off" },
-        ], { value: typeof state.globalOptions.defaultStyle === "boolean" ? String(state.globalOptions.defaultStyle) : "" });
-        const logLevelSelect = select([
-          { value: "", label: "Default (Warn)" },
-          { value: "0", label: "None" },
-          { value: "1", label: "Error" },
-          { value: "2", label: "Warning" },
-          { value: "3", label: "Info" },
-          { value: "4", label: "Debug" },
-        ], { value: state.globalOptions.logLevel == null ? "" : String(state.globalOptions.logLevel) });
-        const actionDetails = element("div", { className: "actions" }, [
-          exportEnabled.node, exportPng.node, exportSvg.node,
-          sourceAction.node, compiledAction.node, editorAction.node,
+        const actionItems = [exportPng, exportSvg, sourceAction, compiledAction, editorAction];
+        // Global options are limited to the theme and action links; other saved Vega Embed
+        // options (renderer, tooltip, …) have no control here but are kept as they are.
+        const savedTheme = typeof state.globalOptions.theme === "string" ? state.globalOptions.theme : "";
+        const themeSelect = select([
+          { value: "", label: "Default (Vega)" },
+          ...VEGA_THEMES.map(([value, label]) => ({ value, label })),
+          ...(savedTheme && !VEGA_THEMES.some(([value]) => value === savedTheme) ? [{ value: savedTheme, label: `${savedTheme} (not available)` }] : []),
+        ], { value: savedTheme });
+        const actionDetails = element("div", { className: "plots-editor-action-items" }, actionItems.map((item) => item.node));
+        // PNG size: vega-embed's scaleFactor, saved for PNG only (a number would also resize SVG).
+        const savedScale = state.globalOptions.scaleFactor;
+        const savedPngScale = typeof savedScale === "number" ? savedScale : savedScale?.png;
+        const knownScale = savedPngScale === undefined || [1, 2, 3, 4].includes(savedPngScale);
+        const pngScale = select([
+          { value: "", label: "1× (same as on screen)" },
+          { value: "2", label: "2×" }, { value: "3", label: "3×" }, { value: "4", label: "4×" },
+          ...(knownScale ? [] : [{ value: "__keep", label: `Custom: ${JSON.stringify(savedPngScale)} (unchanged)` }]),
+        ], { value: knownScale ? (savedPngScale > 1 ? String(savedPngScale) : "") : "__keep" });
+        pngScale.setAttribute("aria-label", "PNG size");
+        const pngScaleField = element("div", { className: "plots-editor-png-scale" }, [
+          field("PNG size", pngScale),
+          element("p", { className: "field-hint", text: "Save as PNG makes an image this many times the plot's on-screen width and height. 2× or more gives sharper images for slides and print, in larger files. SVG is unaffected; it stays sharp at any size." }),
         ]);
         const updateActionAvailability = () => {
-          actionDetails.hidden = !actionEnabled.input.checked;
-          exportPng.node.hidden = !actionEnabled.input.checked || !exportEnabled.input.checked;
-          exportSvg.node.hidden = !actionEnabled.input.checked || !exportEnabled.input.checked;
+          const on = actionEnabled.input.checked;
+          for (const item of actionItems) item.input.disabled = !on;
+          actionDetails.classList.toggle("disabled", !on);
+          // style, not hidden: the host's .field rule sets display and would override the attribute.
+          pngScaleField.style.display = on && exportPng.input.checked ? "" : "none";
         };
-        actionEnabled.input.addEventListener("change", updateActionAvailability);
-        exportEnabled.input.addEventListener("change", updateActionAvailability);
+        // The menu and its items stay consistent: an empty menu turns off, and turning
+        // the menu on with nothing ticked brings back the usual items.
+        actionEnabled.input.addEventListener("change", () => {
+          if (actionEnabled.input.checked && !actionItems.some((item) => item.input.checked)) {
+            for (const item of [exportPng, exportSvg, sourceAction, editorAction]) item.input.checked = true;
+          }
+          updateActionAvailability();
+        });
+        for (const item of actionItems) {
+          item.input.addEventListener("change", () => {
+            if (!actionItems.some((other) => other.input.checked)) actionEnabled.input.checked = false;
+            updateActionAvailability();
+          });
+        }
         updateActionAvailability();
         globalSection.append(
-          element("div", { className: "actions" }, [
-            field("Renderer", rendererSelect),
-            field("Tooltips", tooltipSelect),
-            field("Default chart styling", styleSelect),
-            field("Log level", logLevelSelect),
-          ]),
+          element("div", { className: "actions" }, [field("Theme", themeSelect)]),
           actionEnabled.node,
           actionDetails,
+          pngScaleField,
         );
 
         const datasetList = element("div");
@@ -1416,7 +1431,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               ? actionOptions.export : {};
             globalConfig.actions = {
               ...actionOptions,
-              export: exportEnabled.input.checked
+              export: exportPng.input.checked || exportSvg.input.checked
                 ? { ...priorExport, png: exportPng.input.checked, svg: exportSvg.input.checked }
                 : false,
               source: sourceAction.input.checked,
@@ -1424,10 +1439,20 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               editor: editorAction.input.checked,
             };
           } else globalConfig.actions = false;
-          if (rendererSelect.value) globalConfig.renderer = rendererSelect.value;
-          if (tooltipSelect.value) globalConfig.tooltip = tooltipSelect.value === "true";
-          if (styleSelect.value) globalConfig.defaultStyle = styleSelect.value === "true";
-          if (logLevelSelect.value) globalConfig.logLevel = Number(logLevelSelect.value);
+          if (themeSelect.value) globalConfig.theme = themeSelect.value;
+          else delete globalConfig.theme;
+          if (pngScale.value !== "__keep") {
+            // Keep any SVG part of the saved scaleFactor; a plain number used to cover both.
+            const svgScale = typeof savedScale === "number" ? savedScale : savedScale?.svg;
+            const scaleFactor = {
+              ...(savedScale && typeof savedScale === "object" ? savedScale : {}),
+              ...(svgScale !== undefined && svgScale !== 1 ? { svg: svgScale } : {}),
+            };
+            delete scaleFactor.png;
+            if (pngScale.value) scaleFactor.png = Number(pngScale.value);
+            if (Object.keys(scaleFactor).length) globalConfig.scaleFactor = scaleFactor;
+            else delete globalConfig.scaleFactor;
+          }
           next.plots.globalConfig = globalConfig;
           const datasets = {};
           for (const dataset of state.datasets) {
@@ -1471,7 +1496,6 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
         sections.append(globalSection, datasets, plots);
         renderDatasets();
         renderPlots();
-        body.append(scroll);
         saveConfig = () => {
           try { return { config: collectConfig() }; }
           catch (error) { return { invalid: error.message }; }

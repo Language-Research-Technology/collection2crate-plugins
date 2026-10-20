@@ -86,13 +86,12 @@ export function createPlugin(deps = {}) {
           const grid = element("div", { className: "plots-grid-inner" });
           const pendingEmbeds = [];
           for (const result of plots) {
-            const card = element("section", { className: "plots-card" });
+            // No heading of our own: a plot's title is the one Vega draws from its spec, if any.
+            const specTitle = result.plot.makeSpec?.args?.title ?? result.plot.customSpec?.title;
+            const titleText = typeof specTitle === "object" && specTitle !== null && !Array.isArray(specTitle) ? specTitle.text : specTitle;
+            const label = (Array.isArray(titleText) ? titleText.join(" ") : String(titleText ?? "")).trim() || `Plot ${result.index + 1}`;
+            const card = element("section", { className: "plots-card", attrs: { "aria-label": label } });
             card.style.gridColumn = `span ${layoutSpan(result.plot)}`;
-            const title = result.plot.makeSpec?.args?.title
-              || result.plot.customSpec?.title
-              || result.plot.dataset?.name
-              || `Plot ${result.index + 1}`;
-            card.append(element("h3", { text: Array.isArray(title) ? title.join(" ") : String(title) }));
             if (result.error) {
               card.append(note(`Plot ${result.index + 1}: ${result.error}`));
             } else {
@@ -182,7 +181,6 @@ export function createPlugin(deps = {}) {
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .plots-library-pin { margin:4px 0; font:11px var(--mono); opacity:0.7; }
 .plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
-.plots-card h3 { margin:0 0 8px; font-size:1rem; }
 .plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }
 .plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
 .plots-view.vega-embed.has-actions { height:320px; }

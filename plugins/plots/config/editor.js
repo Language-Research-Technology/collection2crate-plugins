@@ -323,6 +323,10 @@ function showTimeUnit(builder, args, key) {
   return type === "temporal";
 }
 
+const hasValue = (value) => value !== undefined && value !== null && value !== ""
+  && !(Array.isArray(value) && !value.length)
+  && !(typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length);
+
 /** The categorical field a box plot sorts, mirroring boxPlot's choice of which axis is nominal. */
 function boxPlotCategoryField(args) {
   const continuous = (type) => type === "quantitative" || type === "temporal";
@@ -359,6 +363,13 @@ function embedControls(card, sync) {
   });
 }
 
+/** A list sub-editor's heading with a count badge, so a filled-in list reads as its own block. */
+function subEditorHead(label) {
+  const count = element("span", { className: "plots-editor-sub-count" });
+  const node = element("div", { className: "plots-editor-sub-head" }, [element("strong", { text: label }), count]);
+  return { node, setCount: (n) => { count.textContent = n ? String(n) : ""; } };
+}
+
 /** Value-to-label rows, e.g. Female -> F, so long values do not crowd the plot. */
 function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
   const entries = Object.entries(labels && typeof labels === "object" ? labels : {});
@@ -370,12 +381,16 @@ function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
     const labelled = new Set(entries.map(([value]) => value));
     const available = getValues().filter((value) => !labelled.has(value));
     picker.replaceChildren(
-      element("option", { text: available.length ? "Choose a value…" : "No more values", attrs: { value: "" } }),
+      element("option", { text: available.length ? "Choose a value to add…" : "No more values", attrs: { value: "" } }),
       ...available.map((value) => element("option", { text: value, attrs: { value } })),
     );
-    add.disabled = !available.length;
+    picker.value = "";
+    picker.disabled = !available.length;
   }
+  const head = subEditorHead(label);
   function renderRows(focusIndex) {
+    head.setCount(entries.length);
+    wrap.classList.toggle("has-entries", entries.length > 0);
     rows.replaceChildren(...entries.map((entry, index) => {
       const valueInput = element("input", { attrs: { type: "text", value: entry[0], readonly: true, "aria-label": `${label}: value ${index + 1}` } });
       const labelInput = element("input", { attrs: { type: "text", value: entry[1], placeholder: kind === "color" ? "#ff69b4" : "Label shown", "aria-label": `${kind === "color" ? "Color" : "Label"} for ${entry[0]}` } });
@@ -395,22 +410,35 @@ function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
     }));
     refreshPicker();
   }
-  const add = button("+", {
-    title: "Add a label for the chosen value",
-    onClick: () => {
-      if (!picker.value) return;
-      entries.push([picker.value, ""]);
-      renderRows(entries.length - 1);
-    },
+  // Choosing a value adds it. Arrow keys (or typing) on a closed dropdown change its value
+  // with every keypress, so keyboard browsing only highlights, and Enter adds.
+  let keyboardBrowsing = false;
+  function addChosen() {
+    keyboardBrowsing = false;
+    if (!picker.value) return;
+    entries.push([picker.value, ""]);
+    renderRows(entries.length - 1);
+  }
+  picker.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addChosen();
+    } else if (!event.altKey && (event.key.startsWith("Arrow") || ["Home", "End", "PageUp", "PageDown"].includes(event.key)
+      || (event.key.length === 1 && event.key !== " "))) {
+      keyboardBrowsing = true;
+    }
   });
+  picker.addEventListener("change", () => { if (!keyboardBrowsing) addChosen(); });
+  picker.addEventListener("pointerdown", () => { keyboardBrowsing = false; refreshPicker(); });
   picker.addEventListener("focus", refreshPicker);
-  picker.addEventListener("pointerdown", refreshPicker);
+  // Leaving after browsing adds nothing, so the dropdown goes back to its prompt.
+  picker.addEventListener("blur", () => { if (keyboardBrowsing) { keyboardBrowsing = false; picker.value = ""; } });
   wrap.append(
-    element("strong", { text: label }),
+    head.node,
     element("p", { className: "field-hint", text: kind === "color"
-      ? "Pick a value, press +, then choose its color or type it as hex (for example #ff69b4) or a color name."
-      : "Pick a value, press +, then type the label to show on the plot, for example F for Female." }),
-    rows, element("div", { className: "actions" }, [picker, add]),
+      ? "Choose a value to add it, then pick its color or type it as hex (for example #ff69b4) or a color name."
+      : "Choose a value to add it, then type the label to show on the plot, for example F for Female." }),
+    rows, element("div", { className: "actions" }, [picker]),
   );
   renderRows();
   return wrap;
@@ -596,22 +624,32 @@ function sortEditor({ label, sort, byCount, getValues, onChange }) {
   ];
   const modeSelect = select(modes, { value: startMode });
   const body = element("div");
+  const head = subEditorHead(label);
+  const wrap = element("div", { className: "plots-editor-labels" }, [head.node, field("Order", modeSelect), body]);
+  const mark = (value) => {
+    head.setCount(Array.isArray(value) ? value.length : 0);
+    wrap.classList.toggle("has-entries", value !== undefined && !(Array.isArray(value) && !value.length));
+  };
   const renderBody = (mode) => {
     body.replaceChildren(...(mode === "custom"
-      ? [orderEditor({ values: Array.isArray(sort) ? sort : [], getValues, onChange: (values) => onChange(values.length ? values : undefined) })]
+      ? [orderEditor({
+        values: Array.isArray(sort) ? sort : [],
+        getValues,
+        onChange: (values) => { const value = values.length ? values : undefined; mark(value); onChange(value); },
+      })]
       : []));
   };
   modeSelect.addEventListener("change", () => {
     const mode = modeSelect.value;
     if (mode === "keep") return;
     sort = mode === "descending" || mode === "ascending" ? mode : undefined;
+    mark(sort);
     onChange(sort);
     renderBody(mode);
   });
   renderBody(startMode);
-  return element("div", { className: "plots-editor-labels" }, [
-    element("strong", { text: label }), field("Order", modeSelect), body,
-  ]);
+  mark(sort);
+  return wrap;
 }
 
 // Named color schemes built into Vega, grouped as in its documentation.
@@ -635,9 +673,12 @@ function paletteEditor({ palette, getValues, onChange, allowCustom }) {
   ];
   const modeSelect = select(modes, { value: startMode });
   const body = element("div");
-  const wrap = element("div", { className: "plots-editor-labels" }, [
-    element("strong", { text: "Palette" }), field("Colors", modeSelect), body,
-  ]);
+  const head = subEditorHead("Palette");
+  const wrap = element("div", { className: "plots-editor-labels" }, [head.node, field("Colors", modeSelect), body]);
+  const mark = (value) => wrap.classList.toggle("has-entries", value !== undefined && value !== "");
+  mark(palette);
+  const notify = onChange;
+  onChange = (value) => { mark(value && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length ? undefined : value); notify(value); };
 
   function renderBody(mode) {
     body.replaceChildren();
@@ -791,9 +832,23 @@ function ensureStyle() {
 .plots-editor-group-inputs > .field { min-width: 0; margin-bottom: 0; }
 .plots-editor-group-inputs > .field > :is(input, select) { width: 100%; box-sizing: border-box; }
 /* Sub-editors (value labels, palette, order) rank below their section's legend and above field labels. */
-.plots-editor-group .plots-editor-labels { margin: 10px 0 2px; padding-left: 10px; border-left: 2px solid var(--border); }
-.plots-editor-labels > strong { display: block; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+/* List sub-editors (labels, colors, order, palette) are inset cards on the panel background, so a
+   filled-in list stands apart from the section's plain fields; the stripe turns solid once set. */
+/* Customisations sit apart from the main fields: a gap, a divider, then cards side by side where there is room. */
+.plots-editor-group-editors { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 10px; align-items: start; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.plots-editor-group-editors:empty { display: none; }
+.plots-editor-group-editors > .plots-editor-labels { margin: 0; }
+.plots-editor-group .plots-editor-labels { margin: 10px 0 2px; padding: 8px 12px 10px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
+.plots-editor-group .plots-editor-labels.has-entries { border-left-color: var(--plot-hue, var(--accent)); box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); }
+/* The colour-per-value list inside the palette card is part of that card, not a card of its own. */
+.plots-editor-group .plots-editor-labels .plots-editor-labels { margin: 6px 0 0; padding: 0; border: 0; background: none; box-shadow: none; }
+.plots-editor-sub-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.plots-editor-sub-head > strong { font-size: 14px; font-weight: 600; color: var(--text); }
+.plots-editor-sub-count:not(:empty) { min-width: 1.6em; padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--plot-hue, var(--accent)) 16%, var(--panel)); color: var(--text); font-size: 12px; font-weight: 600; text-align: center; }
 .plots-editor-labels .field-hint { font-size: 12px; margin: 0 0 6px; }
+/* Once a list has entries the how-to hint has done its job. */
+.plots-editor-labels.has-entries > .field-hint { display: none; }
+.plots-editor-label-row + .plots-editor-label-row { border-top: 1px solid var(--border); padding-top: 4px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
 .plots-editor-timeunit { position: relative; }
@@ -1066,7 +1121,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 const name = argumentGroup(card.builder, key);
                 if (!groups.has(name)) {
                   const inputs = element("div", { className: "plots-editor-group-inputs" });
-                  const editors = element("div");
+                  const editors = element("div", { className: "plots-editor-group-editors" });
                   const node = element("fieldset", { className: "plots-editor-group" }, [groupLegend(name), inputs, editors]);
                   groups.set(name, { name, node, inputs, editors });
                 }
@@ -1129,10 +1184,23 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 argsText.value = card.argsText;
                 refreshPlaceholders();
                 refreshTimeUnits();
+                refreshDependents();
               }
               const args = currentArgs();
               const placeholderInputs = new Map();
               const timeUnitFields = new Map();
+              // List editors that only make sense once their field is chosen.
+              const dependentEditors = [];
+              function refreshDependents() {
+                let current;
+                try { current = currentArgs(); }
+                catch { return; }
+                for (const { node, show } of dependentEditors) node.style.display = show(current) ? "" : "none";
+                // A section whose editors are all hidden drops its divider and gap too.
+                for (const container of new Set(dependentEditors.map((editor) => editor.container))) {
+                  container.style.display = [...container.children].some((child) => child.style.display !== "none") ? "" : "none";
+                }
+              }
               const timeUnitSelects = new Map();
               /** An empty tooltip time unit falls back to the axis one in ro-crate-plots. */
               function timeUnitDefaultLabel(key, current) {
@@ -1161,12 +1229,15 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 const group = groupFor(key);
                 const shortLabel = groupedLabel(label, group.name);
                 if (key === "palette") {
-                  group.editors.append(paletteEditor({
+                  const editor = paletteEditor({
                     palette: args.palette,
                     allowCustom: card.builder !== "plotMapHeatmap",
                     getValues: () => { try { return distinctValues(currentArgs().colorVar); } catch { return []; } },
                     onChange: (value) => setArgValue("palette", value),
-                  }));
+                  });
+                  group.editors.append(editor);
+                  // Map heatmaps colour by density, not by a field, so their palette always applies.
+                  if (card.builder !== "plotMapHeatmap") dependentEditors.push({ node: editor, container: group.editors, show: (current) => hasValue(current.colorVar) || hasValue(current.palette) });
                   continue;
                 }
                 if (key === "sort") {
@@ -1174,22 +1245,29 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                     const current = currentArgs();
                     return card.builder === "boxPlot" ? boxPlotCategoryField(current) : current.xVar;
                   };
-                  group.editors.append(sortEditor({
+                  const editor = sortEditor({
                     label,
                     sort: args.sort,
                     byCount: kind === "sort-count",
                     getValues: () => { try { return distinctValues(categoryField()); } catch { return []; } },
                     onChange: (value) => setArgValue("sort", value),
-                  }));
+                  });
+                  group.editors.append(editor);
+                  dependentEditors.push({
+                    node: editor, container: group.editors,
+                    show: (current) => hasValue(card.builder === "boxPlot" ? boxPlotCategoryField(current) : current.xVar) || hasValue(current.sort),
+                  });
                   continue;
                 }
                 if (LABEL_SOURCES[key]) {
-                  group.editors.append(labelsEditor({
+                  const editor = labelsEditor({
                     label: shortLabel.replace(" (JSON)", ""),
                     labels: args[key],
                     getValues: () => { try { return distinctValues(currentArgs()[LABEL_SOURCES[key]]); } catch { return []; } },
                     onChange: (labels) => setLabels(key, labels),
-                  }));
+                  });
+                  group.editors.append(editor);
+                  dependentEditors.push({ node: editor, container: group.editors, show: (current) => hasValue(current[LABEL_SOURCES[key]]) || hasValue(current[key]) });
                   continue;
                 }
                 let control;
@@ -1245,6 +1323,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
               }
               refreshPlaceholders();
               refreshTimeUnits();
+              refreshDependents();
               argsText.addEventListener("change", () => {
                 card.argsText = argsText.value;
                 try { parseJson(card.argsText, `Plot ${index + 1} builder arguments`); renderPlots(); }

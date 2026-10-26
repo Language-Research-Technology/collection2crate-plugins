@@ -953,9 +953,10 @@ function ensureStyle() {
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
 .plots-editor-help { position: relative; display: inline-block; margin-left: 5px; vertical-align: 1px; }
-/* Quiet until wanted: a small muted circle that takes the accent colour on hover, focus, or when pinned open. */
+/* Quiet until wanted: a small muted circle that takes its plot's colour (the accent outside a plot) on hover,
+   focus, or when pinned open, nudged toward the text colour so it stays legible on either theme. */
 .plots-editor-help-toggle { display: block; width: 14px; height: 14px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font: italic 700 10px/12px Georgia, "Times New Roman", serif; text-align: center; cursor: help; opacity: .75; }
-.plots-editor-help-toggle:hover, .plots-editor-help-toggle:focus-visible, .plots-editor-help.open > .plots-editor-help-toggle { color: var(--accent); opacity: 1; }
+.plots-editor-help-toggle:hover, .plots-editor-help-toggle:focus-visible, .plots-editor-help.open > .plots-editor-help-toggle { color: var(--accent); color: color-mix(in srgb, var(--plot-hue, var(--accent)) 80%, var(--text)); opacity: 1; }
 .plots-editor-help-tip { display: none; position: absolute; z-index: 6; top: calc(100% + 6px); left: -10px; width: max-content; max-width: min(26rem, 80vw); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); box-shadow: 0 6px 18px rgb(0 0 0 / 0.15); color: var(--text); font-size: 13px; font-weight: 400; line-height: 1.4; white-space: normal; }
 /* Bridges the gap below the icon so the help stays open while the pointer moves onto it. */
 .plots-editor-help-tip::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }

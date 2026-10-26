@@ -44,8 +44,8 @@ const STACK_BARS_CHOICES = {
     choices: [["stack", "Stack"], ["side_by_side", "Side by side"]],
     tooltip: [
       "How bars are split by the color field:",
-      "Stack: one bar per X value, divided into colored segments.",
-      "Side by side: a separate bar for each color next to each other.",
+      "Stack: one bar per X value, counting its rows. Colors split the bar into sub-counts for each color value.",
+      "Side by side: a separate bar for each color value within each X value, counting its rows.",
     ],
   },
   barPlotPercent: {

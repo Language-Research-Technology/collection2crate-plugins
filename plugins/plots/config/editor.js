@@ -463,7 +463,7 @@ function subEditorHead(label) {
 /** Value-to-label rows, e.g. Female -> F, so long values do not crowd the plot. */
 function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
   const entries = Object.entries(labels && typeof labels === "object" ? labels : {});
-  const wrap = element("div", { className: "plots-editor-labels" });
+  const wrap = element("div", { className: `plots-editor-labels${kind === "color" ? "" : " plots-editor-value-labels"}` });
   const rows = element("div");
   const picker = element("select", { attrs: { "aria-label": `${label}: choose a value to label` } });
   const commit = () => onChange(Object.fromEntries(entries.filter(([, text]) => text !== "")));
@@ -936,6 +936,9 @@ function ensureStyle() {
 .plots-editor-group-editors { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 10px; align-items: start; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
 .plots-editor-group-editors:empty { display: none; }
 .plots-editor-group-editors > .plots-editor-labels { margin: 0; }
+/* Value labels need room to read both the value and its replacement, so their card takes the whole row. */
+.plots-editor-group-editors > .plots-editor-value-labels { grid-column: 1 / -1; }
+.plots-editor-value-labels > * { max-width: 48rem; }
 .plots-editor-group .plots-editor-labels { margin: 10px 0 2px; padding: 8px 12px 10px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
 .plots-editor-group .plots-editor-labels.has-entries { border-left-color: var(--plot-hue, var(--accent)); box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); }
 /* The colour-per-value list inside the palette card is part of that card, not a card of its own. */

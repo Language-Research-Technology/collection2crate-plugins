@@ -5,6 +5,24 @@ import {
 export const BUILDER_NAMES = ["barPlotCount", "barPlotPercent", "scatterPlot", "boxPlot", "histogramPlot", "plotMapHeatmap"];
 
 const builders = { barPlotCount, barPlotPercent, scatterPlot, boxPlot, histogramPlot };
+
+/** Histogram options ro-crate-plots no longer reads; saved values are kept but reported. */
+const DROPPED_HISTOGRAM_ARGS = ["maxbins", "minstep", "nice"];
+
+/**
+ * Problems the builders would otherwise turn into an unbinned plot or an opaque
+ * Vega-Lite crash; returns an error message, or null.
+ */
+function argumentError(functionName, args) {
+  if (functionName !== "histogramPlot") return null;
+  if (args.xType !== "quantitative" && args.xType !== "temporal") {
+    return "Set the X field type to quantitative or temporal: a histogram bins numbers or dates.";
+  }
+  if (args.xType === "temporal" && !args.xTimeUnit) {
+    return "Choose an X axis time unit (for example Year): a histogram of dates uses it as the bin size.";
+  }
+  return null;
+}
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -165,6 +183,12 @@ export async function generatePlotSpecs(config, tables) {
         args = mapOptions;
       }
       if (typeof builder !== "function") throw new Error(`Builder '${functionName}' is unavailable in this browser.`);
+      const problem = argumentError(functionName, args);
+      if (problem) throw new Error(problem);
+      if (functionName === "histogramPlot") {
+        const dropped = DROPPED_HISTOGRAM_ARGS.filter((key) => args[key] !== undefined);
+        if (dropped.length) warnings = [...warnings, `${dropped.join(", ")} no longer apply to histograms and are ignored; use the bin step instead.`];
+      }
       const spec = await builder({ ...args, data: builderData });
       const encoding = dataLayer(spec)?.encoding;
       if (colorMap && encoding?.color) {

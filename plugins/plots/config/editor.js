@@ -69,8 +69,8 @@ const BUILDER_FIELDS = {
   histogramPlot: [
     ...xFields,
     ...yFieldsWithoutTimeUnits.filter(([key]) => key !== "yVar" && key !== "yType"),
-    ["maxbins", "Maximum bins", "number"], ["minstep", "Minimum bin step", "number"],
-    ["step", "Bin step", "number"], ["nice", "Use nice bin boundaries", "boolean"],
+    // ro-crate-plots dropped maxbins, minstep and nice; saved values stay in the JSON.
+    ["step", "Bin step", "number"],
     ...colorFields, invalidValuesField, ...commonFields,
   ],
   plotMapHeatmap: [
@@ -341,7 +341,8 @@ function defaultPlaceholders(builder, args) {
     yTitle, yTooltipTitle: text(args.yTitle) || yTitle, yTimeUnit: "None", yTooltipTimeUnit: text(args.yTimeUnit) || "None",
     colorTitle: color, colorTooltipTitle: colorTitle,
     palette: builder === "plotMapHeatmap" ? "turbo" : "Default colors",
-    maxbins: "Auto", minstep: "Auto", step: "Auto",
+    // A temporal histogram steps in its time unit, e.g. 5 years per bin.
+    step: args.xType === "temporal" ? `1 (${args.xTimeUnit ? timeUnitLabel(args.xTimeUnit).toLowerCase() : "time unit"} per bin)` : "Auto",
     bandwidth: "Auto (-1)", nContours: "10", opacity: "0.5", zoom: "Auto", targetSizePx: "300",
     provider: "OpenStreetMap (default)",
     xType: builder === "scatterPlot" ? "quantitative" : "",
@@ -1393,8 +1394,14 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   control = element("select", { attrs: { "aria-label": label } });
                   const fallback = defaultPlaceholders(card.builder, args)[key];
                   control.append(element("option", { text: fallback ? `Default (${fallback})` : "(not set)", attrs: { value: "" } }));
-                  const values = kind === "column" ? fieldChoices() : ["quantitative", "temporal", "ordinal", "nominal"];
+                  // A histogram bins numbers or dates, so only those types are offered for its X field.
+                  const types = card.builder === "histogramPlot" && key === "xType"
+                    ? ["quantitative", "temporal"] : ["quantitative", "temporal", "ordinal", "nominal"];
+                  const values = kind === "column" ? fieldChoices() : types;
                   control.append(...values.map((value) => element("option", { text: value, attrs: { value } })));
+                  if (kind === "field-type" && raw && !types.includes(raw)) {
+                    control.append(element("option", { text: `${raw} (not usable here)`, attrs: { value: raw } }));
+                  }
                   control.value = raw;
                 } else if (kind === "stack-bars") {
                   const { fallback, choices, tooltip } = STACK_BARS_CHOICES[card.builder];

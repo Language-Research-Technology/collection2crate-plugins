@@ -607,6 +607,25 @@ checkAsync("bar plots of percentages render in every bar layout, with and withou
   }
 });
 
+checkAsync("histograms report a missing type or date bin size, and ignore dropped bin options", async () => {
+  const table = { source: "people.csv", header: ["born", "age"], rows: [["1978-03-01", "30"], ["1991-01-01", "41"]] };
+  const config = createDefaultConfig([table]);
+  const name = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push(
+    { dataset: { name }, makeSpec: { plotFunction: "histogramPlot", args: { xVar: "age" } } },
+    { dataset: { name }, makeSpec: { plotFunction: "histogramPlot", args: { xVar: "born", xType: "temporal" } } },
+    { dataset: { name }, makeSpec: { plotFunction: "histogramPlot", args: { xVar: "born", xType: "temporal", xTimeUnit: "year", step: 5 } } },
+    { dataset: { name }, makeSpec: { plotFunction: "histogramPlot", args: { xVar: "age", xType: "quantitative", maxbins: 10, nice: true } } },
+  );
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.match(plots[0].error, /quantitative or temporal/);
+  assert.match(plots[1].error, /time unit/);
+  assert.equal(plots[2].error, null);
+  assert.equal(plots[3].error, null);
+  assert.match(plots[3].warnings.join(" "), /maxbins, nice no longer apply/);
+  for (const result of plots.slice(2)) await new vega.View(vega.parse(compileVegaLite(result.spec).spec), { renderer: "none" }).runAsync();
+});
+
 checkAsync("custom specs bind the selected in-memory dataset without mutating config", async () => {
   const table = { source: "people.csv", header: ["name"], rows: [["Ada"]] };
   const config = createDefaultConfig([table]);

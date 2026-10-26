@@ -92,8 +92,8 @@ Preserve the ro-crate-plots configuration shape and all its current features:
   `description` is `_data_layer`, beside a warning layer. Anything the plugin
   adds to the generated encoding, such as a per-value color scale, targets that
   data layer.
-- `invalidValues` is offered for every non-map builder as **Show and flag
-  them** (`show`, the library default) or **Hide them** (`hide`). Either way
+- `invalidValues` is offered for every non-map builder as **Show and flag**
+  (`show`, the library default) or **Hide** (`hide`). Either way
   the library adds a warning above the plot counting rows with missing or
   invalid values in the X, Y, or color fields.
 - `stackBars` (**Bar layout**) is offered for `barPlotCount` (stacked, the

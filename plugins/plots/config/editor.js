@@ -301,8 +301,8 @@ function timeUnitPicker({ label, value, defaultLabel, onChange, inherit }) {
 
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
 const INVALID_VALUE_CHOICES = [
-  { value: "show", label: "Show and flag them" },
-  { value: "hide", label: "Hide them" },
+  { value: "show", label: "Show and flag" },
+  { value: "hide", label: "Hide" },
 ];
 // Themes bundled with vega-embed 7 (vega-themes 3).
 const VEGA_THEMES = [
@@ -1416,12 +1416,18 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 } else if (kind === "invalid-values") {
                   const known = INVALID_VALUE_CHOICES.some((choice) => choice.value === raw);
                   control = select([
-                    { value: "", label: "Default (show and flag them)" },
+                    { value: "", label: "Default (show and flag)" },
                     ...INVALID_VALUE_CHOICES,
                     ...(raw && !known ? [{ value: raw, label: `${raw} (not recognised)` }] : []),
                   ], { value: raw });
                   control.setAttribute("aria-label", label);
-                  control.title = "Rows with blank or unparseable values in the plotted fields. A warning above the plot counts them either way.";
+                  help = [
+                    "What to do with rows whose X, Y, or color value is blank or cannot be read as the specified field type (e.g., a letter in a quantitative field):",
+                    "Show and flag: keep the rows; missing values appear as their own category, in grey where possible. " +
+                      "Where numbers or dates are summarised (e.g., grouped into bins in a histogram, or into a box plot's quartiles), invalid values are always left out.",
+                    "Hide: leave the rows out of the plot.",
+                    "Either way, a red note above the plot gives the number of such rows.",
+                  ];
                 } else if (kind === "time-unit") {
                   // Not wrapped in a <label>: a click inside would be forwarded to its first checkbox.
                   const picker = timeUnitPicker({

@@ -80,8 +80,8 @@ Preserve the ro-crate-plots configuration shape and all its current features:
   and layout span. Preserve unknown fields when loading and saving so newer
   ro-crate-plots features are not erased by this editor.
 - Offer every currently exported builder from `ro-crate-plots/index.js`:
-  `barPlotCount`, `scatterPlot`, `boxPlot`, `histogramPlot`, and
-  `plotMapHeatmap`. Generate each builder's argument controls from its actual
+  `barPlotCount`, `barPlotPercent`, `scatterPlot`, `boxPlot`,
+  `histogramPlot`, and `plotMapHeatmap`. Generate each builder's argument controls from its actual
   supported arguments rather than presenting irrelevant fields for every plot
   type. Include data-field selectors populated from the selected dataset,
   field types, axis/tooltip titles and labels, temporal units, color field and
@@ -96,7 +96,12 @@ Preserve the ro-crate-plots configuration shape and all its current features:
   them** (`show`, the library default) or **Hide them** (`hide`). Either way
   the library adds a warning above the plot counting rows with missing or
   invalid values in the X, Y, or color fields.
-- `sort` controls category order. `barPlotCount` offers the default order,
+- `stackBars` (**Bar layout**) is offered for `barPlotCount` (stacked, the
+  default, or side by side) and `barPlotPercent` (stacked with every bar at
+  100%, the default; stacked with bars sized by their share of all rows; or
+  side by side). It only applies once a color field is chosen, so it is shown
+  then, or when a value is already saved.
+- `sort` controls category order. `barPlotCount` and `barPlotPercent` offer the default order,
   **Most frequent first** (`descending`), **Least frequent first**
   (`ascending`), or a custom order; `boxPlot` offers the default order or a
   custom order, applied to its categorical axis. A custom order is an array of

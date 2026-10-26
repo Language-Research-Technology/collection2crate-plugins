@@ -566,7 +566,7 @@ checkAsync("hiding invalid values filters blank cells from the plotted layer and
   assert.deepEqual(hidden.data.values[1], { group: null });
   const [filter] = dataLayer(hidden).transform;
   assert.match(filter.filter, /group/, "the plotted layer filters on the X field");
-  assert.equal(dataLayer(shown).transform, undefined, "the default shows missing values");
+  assert.ok(!(dataLayer(shown).transform || []).some((step) => step.filter), "the default shows missing values");
   for (const spec of [hidden, shown]) {
     assert.ok(spec.layer.some((layer) => layer.description === "_missing_values_warning"));
   }
@@ -587,6 +587,23 @@ checkAsync("generated specs run in Vega for column names that are not identifier
     assert.equal(result.error, null);
     const view = new vega.View(vega.parse(compileVegaLite(result.spec).spec), { renderer: "none" });
     await view.runAsync();
+  }
+});
+
+checkAsync("bar plots of percentages render in every bar layout, with and without a color field", async () => {
+  const table = { source: "people.csv", header: ["group", "sex"], rows: [["A", "F"], ["A", "M"], ["B", "F"], ["B", ""]] };
+  const config = createDefaultConfig([table]);
+  const name = Object.keys(config.plots.datasets)[0];
+  config.plots.plotList.push({ dataset: { name }, makeSpec: { plotFunction: "barPlotPercent", args: { xVar: "group" } } });
+  for (const stackBars of [undefined, "stack", "side_by_side", "stack_and_normalize"]) {
+    config.plots.plotList.push({ dataset: { name }, makeSpec: { plotFunction: "barPlotPercent", args: { xVar: "group", colorVar: "sex", stackBars } } });
+  }
+  config.plots.plotList.push({ dataset: { name }, makeSpec: { plotFunction: "barPlotCount", args: { xVar: "group", colorVar: "sex", stackBars: "side_by_side" } } });
+  const { plots } = await generatePlotSpecs(config, [table]);
+  assert.ok(BUILDER_NAMES.includes("barPlotPercent"));
+  for (const result of plots) {
+    assert.equal(result.error, null);
+    await new vega.View(vega.parse(compileVegaLite(result.spec).spec), { renderer: "none" }).runAsync();
   }
 });
 

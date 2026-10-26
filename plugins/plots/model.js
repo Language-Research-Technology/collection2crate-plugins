@@ -1,10 +1,10 @@
 import {
-  barPlotCount, boxPlot, histogramPlot, scatterPlot,
+  barPlotCount, barPlotPercent, boxPlot, histogramPlot, scatterPlot,
 } from "ro-crate-plots/lib/plots.js";
 
-export const BUILDER_NAMES = ["barPlotCount", "scatterPlot", "boxPlot", "histogramPlot", "plotMapHeatmap"];
+export const BUILDER_NAMES = ["barPlotCount", "barPlotPercent", "scatterPlot", "boxPlot", "histogramPlot", "plotMapHeatmap"];
 
-const builders = { barPlotCount, scatterPlot, boxPlot, histogramPlot };
+const builders = { barPlotCount, barPlotPercent, scatterPlot, boxPlot, histogramPlot };
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const clone = (value) => JSON.parse(JSON.stringify(value));
 

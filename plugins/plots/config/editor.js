@@ -31,15 +31,46 @@ const colorFields = [
 // Only scatterPlot takes Y time units; boxPlot and histogramPlot ignore them.
 const yFieldsWithoutTimeUnits = yFields.filter(([key]) => key !== "yTimeUnit" && key !== "yTooltipTimeUnit");
 const invalidValuesField = ["invalidValues", "Missing or invalid values", "invalid-values"];
+// Bar plots of counts and of percentages share their arguments; ro-crate-plots draws X as nominal.
+const barFields = [
+  ...xFields.filter(([key]) => key !== "xType"),
+  ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"], ["yTooltipTitle", "Y tooltip title", "text"],
+  ["sort", "Bar order", "sort-count"], ...colorFields,
+];
+/** stackBars choices per bar builder; only meaningful with a color field, which splits each bar. */
+const STACK_BARS_CHOICES = {
+  barPlotCount: {
+    fallback: "stack",
+    choices: [["stack", "Stack"], ["side_by_side", "Side by side"]],
+    tooltip: [
+      "How bars are split by the color field:",
+      "Stack: one bar per X value, counting its rows. Colors split the bar into sub-counts for each color value.",
+      "Side by side: a separate bar for each color value within each X value, counting its rows.",
+    ],
+  },
+  barPlotPercent: {
+    fallback: "stack_and_normalize",
+    choices: [["stack_and_normalize", "Stack and normalize"], ["stack", "Stack"], ["side_by_side", "Side by side"]],
+    tooltip: [
+      "How bars are split by the color field:",
+      "Stack and normalize: every bar reaches 100%, showing the color shares within each X value (colors sum to 100% within each bar).",
+      "Stack: each bar's height is the proportion of its X value in the entire data (all bars sum to 100%). " +
+        "Colors show the proportion of each color value within the bar (colors sum to 100% within each bar).",
+      "Side by side: a separate bar for each color value, showing its proportion within the X value " +
+        "(bars sum to 100% within each X value).",
+    ],
+  },
+};
 const BUILDER_FIELDS = {
-  barPlotCount: [...xFields.filter(([key]) => key !== "xType"), ["yTitle", "Y-axis title", "text"], ["yLabels", "Y-axis labels (JSON)", "json"], ["yTooltipTitle", "Y tooltip title", "text"], ["sort", "Bar order", "sort-count"], ...colorFields, invalidValuesField, ...commonFields],
+  barPlotCount: [...barFields, ["stackBars", "Bar layout", "stack-bars"], invalidValuesField, ...commonFields],
+  barPlotPercent: [...barFields, ["stackBars", "Bar layout", "stack-bars"], invalidValuesField, ...commonFields],
   scatterPlot: [...xFields, ...yFields, ...colorFields, invalidValuesField, ...commonFields],
   boxPlot: [...xFields, ...yFieldsWithoutTimeUnits, ["sort", "Category order", "sort-order"], ...colorFields, invalidValuesField, ...commonFields],
   histogramPlot: [
     ...xFields,
     ...yFieldsWithoutTimeUnits.filter(([key]) => key !== "yVar" && key !== "yType"),
-    ["maxbins", "Maximum bins", "number"], ["minstep", "Minimum bin step", "number"],
-    ["step", "Bin step", "number"], ["nice", "Use nice bin boundaries", "boolean"],
+    // ro-crate-plots dropped maxbins, minstep and nice; saved values stay in the JSON.
+    ["step", "Bin step", "number"],
     ...colorFields, invalidValuesField, ...commonFields,
   ],
   plotMapHeatmap: [
@@ -60,7 +91,8 @@ function argumentGroup(builder, key) {
     if (["zoom", "targetSizePx", "provider"].includes(key)) return "Base map";
     return "Other";
   }
-  if (key === "sort") return builder === "barPlotCount" ? "X axis" : "Other";
+  if (key === "sort") return builder === "barPlotCount" || builder === "barPlotPercent" ? "X axis" : "Other";
+  if (key === "stackBars") return "Color";
   if (/^x[A-Z]/.test(key)) return "X axis";
   if (/^y[A-Z]/.test(key)) return "Y axis";
   if (/^color[A-Z]/.test(key) || key === "palette") return "Color";
@@ -92,7 +124,7 @@ function groupedLabel(label, group) {
 
 /** Readable names for the builders; the config keeps the function names. */
 const PLOT_TYPE_LABELS = {
-  barPlotCount: "Bar plot (counts)", scatterPlot: "Scatter plot", boxPlot: "Box plot",
+  barPlotCount: "Bar plot (counts)", barPlotPercent: "Bar plot (percentages)", scatterPlot: "Scatter plot", boxPlot: "Box plot",
   histogramPlot: "Histogram", plotMapHeatmap: "Map heatmap",
 };
 const plotTypeOption = (name) => element("option", { text: PLOT_TYPE_LABELS[name] || name, attrs: { value: name } });
@@ -269,8 +301,8 @@ function timeUnitPicker({ label, value, defaultLabel, onChange, inherit }) {
 
 const LABEL_SOURCES = { xLabels: "xVar", yLabels: "yVar", colorLabels: "colorVar" };
 const INVALID_VALUE_CHOICES = [
-  { value: "show", label: "Show and flag them" },
-  { value: "hide", label: "Hide them" },
+  { value: "show", label: "Show and flag" },
+  { value: "hide", label: "Hide" },
 ];
 // Themes bundled with vega-embed 7 (vega-themes 3).
 const VEGA_THEMES = [
@@ -294,14 +326,23 @@ function defaultPlaceholders(builder, args) {
   const xTitle = text(args.xTitle) || x;
   const colorTitle = text(args.colorTitle) || color;
   const counted = builder === "barPlotCount" || builder === "histogramPlot";
-  const yTitle = counted ? `Count of ${xTitle || "the X field"}` : y;
+  const stackBars = args.stackBars || STACK_BARS_CHOICES[builder]?.fallback;
+  // Mirrors the Y titles ro-crate-plots generates for bar plots with and without a color field.
+  let yTitle = counted ? `Count of ${xTitle || "the X field"}` : y;
+  if (builder === "barPlotCount" && color && stackBars === "side_by_side") yTitle = `Count of ${colorTitle}`;
+  if (builder === "barPlotPercent") {
+    yTitle = !color ? `Percent of ${xTitle || "the X field"}`
+      : stackBars === "stack_and_normalize" ? "None"
+        : stackBars === "side_by_side" ? `Percent of ${colorTitle}` : `Percent of ${xTitle || "the X field"}`;
+  }
   return {
     title: "No title", subtitle: "No subtitle",
     xTitle: x, xTooltipTitle: xTitle, xTimeUnit: "None", xTooltipTimeUnit: text(args.xTimeUnit) || "None",
     yTitle, yTooltipTitle: text(args.yTitle) || yTitle, yTimeUnit: "None", yTooltipTimeUnit: text(args.yTimeUnit) || "None",
     colorTitle: color, colorTooltipTitle: colorTitle,
     palette: builder === "plotMapHeatmap" ? "turbo" : "Default colors",
-    maxbins: "Auto", minstep: "Auto", step: "Auto",
+    // A temporal histogram steps in its time unit, e.g. 5 years per bin.
+    step: args.xType === "temporal" ? `1 (${args.xTimeUnit ? timeUnitLabel(args.xTimeUnit).toLowerCase() : "time unit"} per bin)` : "Auto",
     bandwidth: "Auto (-1)", nContours: "10", opacity: "0.5", zoom: "Auto", targetSizePx: "300",
     provider: "OpenStreetMap (default)",
     xType: builder === "scatterPlot" ? "quantitative" : "",
@@ -317,8 +358,8 @@ function showTimeUnit(builder, args, key) {
   const axis = TIME_UNIT_AXES[key];
   if (!axis) return true;
   if (args[key] !== undefined && args[key] !== "") return true;
-  // barPlotCount takes no xType and always draws its X field as nominal.
-  const type = builder === "barPlotCount" && axis === "x"
+  // Bar plots take no xType and always draw their X field as nominal.
+  const type = (builder === "barPlotCount" || builder === "barPlotPercent") && axis === "x"
     ? "nominal"
     : args[`${axis}Type`] || defaultPlaceholders(builder, args)[`${axis}Type`];
   return type === "temporal";
@@ -341,6 +382,55 @@ function boxPlotCategoryField(args) {
 const advanced = (summary, control) => element("details", { className: "plots-editor-advanced" }, [
   element("summary", { text: summary }), control,
 ]);
+
+let helpOutsideClick = false;
+let helpCount = 0;
+
+/**
+ * A field whose label ends in a small ⓘ button explaining the control. The
+ * help shows on hover or keyboard focus; a click pins it open, since touch
+ * screens have no hover. Lines shaped "Term: text" get the term in bold.
+ */
+function helpField(labelText, control, lines) {
+  if (!helpOutsideClick) {
+    helpOutsideClick = true;
+    document.addEventListener("pointerdown", (event) => {
+      for (const open of document.querySelectorAll(".plots-editor-help.open")) {
+        if (!open.contains(event.target)) open.classList.remove("open");
+      }
+    });
+  }
+  const id = `plots-editor-help-${++helpCount}`;
+  const tip = element("div", { className: "plots-editor-help-tip", attrs: { id, role: "tooltip" } }, lines.map((line) => {
+    const [, term, rest] = line.match(/^([^:]+): (.+)$/s) || [];
+    return term ? element("p", {}, [element("strong", { text: term }), document.createTextNode(`: ${rest}`)]) : element("p", { text: line });
+  }));
+  const toggle = element("button", {
+    className: "plots-editor-help-toggle", text: "i",
+    attrs: { type: "button", "aria-label": `About ${labelText}`, "aria-expanded": "false", "aria-describedby": id },
+  });
+  const help = element("span", { className: "plots-editor-help" }, [toggle, tip]);
+  const setOpen = (open) => {
+    help.classList.toggle("open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  };
+  toggle.addEventListener("click", () => setOpen(!help.classList.contains("open")));
+  // Escape hides help that is showing without closing the editor; it returns on the next hover or focus.
+  help.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || help.classList.contains("dismissed")) return;
+    event.stopPropagation();
+    setOpen(false);
+    help.classList.add("dismissed");
+  });
+  const undismiss = () => help.classList.remove("dismissed");
+  help.addEventListener("pointerleave", undismiss);
+  help.addEventListener("focusout", undismiss);
+  control.setAttribute("aria-describedby", id);
+  return element("div", { className: "field" }, [
+    element("span", { className: "field-label" }, [document.createTextNode(labelText), help]),
+    control,
+  ]);
+}
 
 /** Dropdowns for one plot's Vega Embed overrides; unknown keys are left untouched. */
 function embedControls(card, sync) {
@@ -373,7 +463,7 @@ function subEditorHead(label) {
 /** Value-to-label rows, e.g. Female -> F, so long values do not crowd the plot. */
 function labelsEditor({ label, labels, getValues, onChange, kind = "text" }) {
   const entries = Object.entries(labels && typeof labels === "object" ? labels : {});
-  const wrap = element("div", { className: "plots-editor-labels" });
+  const wrap = element("div", { className: `plots-editor-labels${kind === "color" ? "" : " plots-editor-value-labels"}` });
   const rows = element("div");
   const picker = element("select", { attrs: { "aria-label": `${label}: choose a value to label` } });
   const commit = () => onChange(Object.fromEntries(entries.filter(([, text]) => text !== "")));
@@ -846,6 +936,9 @@ function ensureStyle() {
 .plots-editor-group-editors { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 10px; align-items: start; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
 .plots-editor-group-editors:empty { display: none; }
 .plots-editor-group-editors > .plots-editor-labels { margin: 0; }
+/* Value labels need room to read both the value and its replacement, so their card takes the whole row. */
+.plots-editor-group-editors > .plots-editor-value-labels { grid-column: 1 / -1; }
+.plots-editor-value-labels > * { max-width: 48rem; }
 .plots-editor-group .plots-editor-labels { margin: 10px 0 2px; padding: 8px 12px 10px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
 .plots-editor-group .plots-editor-labels.has-entries { border-left-color: var(--plot-hue, var(--accent)); box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); }
 /* The colour-per-value list inside the palette card is part of that card, not a card of its own. */
@@ -859,6 +952,18 @@ function ensureStyle() {
 .plots-editor-label-row + .plots-editor-label-row { border-top: 1px solid var(--border); padding-top: 4px; }
 .plots-editor-labels { margin: 10px 0; }
 .plots-editor-label-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin: 4px 0; }
+.plots-editor-help { position: relative; display: inline-block; margin-left: 5px; vertical-align: 1px; }
+/* Quiet until wanted: a small muted circle that takes its plot's colour (the accent outside a plot) on hover,
+   focus, or when pinned open, nudged toward the text colour so it stays legible on either theme. */
+.plots-editor-help-toggle { display: block; width: 14px; height: 14px; padding: 0; border: 1px solid currentColor; border-radius: 50%; background: transparent; color: var(--muted); font: italic 700 10px/12px Georgia, "Times New Roman", serif; text-align: center; cursor: help; opacity: .75; }
+.plots-editor-help-toggle:hover, .plots-editor-help-toggle:focus-visible, .plots-editor-help.open > .plots-editor-help-toggle { color: var(--accent); color: color-mix(in srgb, var(--plot-hue, var(--accent)) 80%, var(--text)); opacity: 1; }
+.plots-editor-help-tip { display: none; position: absolute; z-index: 6; top: calc(100% + 6px); left: -10px; width: max-content; max-width: min(26rem, 80vw); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); box-shadow: 0 6px 18px rgb(0 0 0 / 0.15); color: var(--text); font-size: 13px; font-weight: 400; line-height: 1.4; white-space: normal; }
+/* Bridges the gap below the icon so the help stays open while the pointer moves onto it. */
+.plots-editor-help-tip::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+.plots-editor-help-tip p { margin: 0; }
+.plots-editor-help-tip p + p { margin-top: 4px; }
+.plots-editor-help:hover > .plots-editor-help-tip, .plots-editor-help:focus-within > .plots-editor-help-tip, .plots-editor-help.open > .plots-editor-help-tip { display: block; }
+.plots-editor-help.dismissed > .plots-editor-help-tip { display: none; }
 .plots-editor-timeunit { position: relative; }
 .plots-editor-timeunit > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); cursor: pointer; list-style: none; font-size: 14px; }
 .plots-editor-timeunit > summary::-webkit-details-marker { display: none; }
@@ -1183,6 +1288,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                 let args;
                 try { args = currentArgs(); }
                 catch (error) { state.error = error.message; return; }
+                if (raw === "__keep") return;
                 if (raw === "") delete args[key];
                 else if (kind === "number") {
                   const value = Number(raw);
@@ -1286,23 +1392,46 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   continue;
                 }
                 let control;
+                let help;
                 const raw = args[key] === undefined ? "" : typeof args[key] === "object" ? jsonText(args[key]) : String(args[key]);
                 if (kind === "column" || kind === "field-type") {
                   control = element("select", { attrs: { "aria-label": label } });
                   const fallback = defaultPlaceholders(card.builder, args)[key];
                   control.append(element("option", { text: fallback ? `Default (${fallback})` : "(not set)", attrs: { value: "" } }));
-                  const values = kind === "column" ? fieldChoices() : ["quantitative", "temporal", "ordinal", "nominal"];
+                  // A histogram bins numbers or dates, so only those types are offered for its X field.
+                  const types = card.builder === "histogramPlot" && key === "xType"
+                    ? ["quantitative", "temporal"] : ["quantitative", "temporal", "ordinal", "nominal"];
+                  const values = kind === "column" ? fieldChoices() : types;
                   control.append(...values.map((value) => element("option", { text: value, attrs: { value } })));
+                  if (kind === "field-type" && raw && !types.includes(raw)) {
+                    control.append(element("option", { text: `${raw} (not usable here)`, attrs: { value: raw } }));
+                  }
                   control.value = raw;
+                } else if (kind === "stack-bars") {
+                  const { fallback, choices, tooltip } = STACK_BARS_CHOICES[card.builder];
+                  const known = !raw || choices.some(([value]) => value === raw);
+                  control = select([
+                    { value: "", label: `Default (${choices.find(([value]) => value === fallback)[1]})` },
+                    ...choices.map(([value, text]) => ({ value, label: text })),
+                    ...(known ? [] : [{ value: "__keep", label: `Custom: ${raw} (unchanged)` }]),
+                  ], { value: known ? raw : "__keep" });
+                  control.setAttribute("aria-label", label);
+                  help = tooltip;
                 } else if (kind === "invalid-values") {
                   const known = INVALID_VALUE_CHOICES.some((choice) => choice.value === raw);
                   control = select([
-                    { value: "", label: "Default (show and flag them)" },
+                    { value: "", label: "Default (show and flag)" },
                     ...INVALID_VALUE_CHOICES,
                     ...(raw && !known ? [{ value: raw, label: `${raw} (not recognised)` }] : []),
                   ], { value: raw });
                   control.setAttribute("aria-label", label);
-                  control.title = "Rows with blank or unparseable values in the plotted fields. A warning above the plot counts them either way.";
+                  help = [
+                    "What to do with rows whose X, Y, or color value is blank or cannot be read as the specified field type (e.g., a letter in a quantitative field):",
+                    "Show and flag: keep the rows; missing values appear as their own category, in grey where possible. " +
+                      "Where numbers or dates are summarised (e.g., grouped into bins in a histogram, or into a box plot's quartiles), invalid values are always left out.",
+                    "Hide: leave the rows out of the plot.",
+                    "Either way, a red note above the plot gives the number of such rows.",
+                  ];
                 } else if (kind === "time-unit") {
                   // Not wrapped in a <label>: a click inside would be forwarded to its first checkbox.
                   const picker = timeUnitPicker({
@@ -1332,8 +1461,10 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
                   placeholderInputs.set(key, control);
                 }
                 control.addEventListener("change", () => updateArgument(key, kind, control.value));
-                const fieldNode = field(shortLabel, control);
+                const fieldNode = help ? helpField(shortLabel, control, help) : field(shortLabel, control);
                 if (TIME_UNIT_AXES[key]) timeUnitFields.set(key, fieldNode);
+                // Bar layout only splits bars once a color field is chosen.
+                if (key === "stackBars") dependentEditors.push({ node: fieldNode, container: group.inputs, show: (current) => hasValue(current.colorVar) || hasValue(current.stackBars) });
                 group.inputs.append(fieldNode);
               }
               refreshPlaceholders();

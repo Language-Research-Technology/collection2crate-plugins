@@ -13,6 +13,22 @@ export function libraryPin(spec = PACKAGE.dependencies?.["ro-crate-plots"]) {
   return ref ? (/^[0-9a-f]{40}$/i.test(ref) ? ref.slice(0, 7) : ref) : spec;
 }
 
+/** A small pencil button that opens the config editor at one plot's settings. */
+function editPlotButton(index, onClick) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z");
+  svg.append(path);
+  const node = element("button", {
+    className: "plots-card-edit",
+    attrs: { type: "button", title: "Edit this plot's settings", "aria-label": `Edit plot ${index + 1} settings` },
+  }, [svg]);
+  node.addEventListener("click", onClick);
+  return node;
+}
+
 function afterLayout() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -50,12 +66,13 @@ export function createPlugin(deps = {}) {
           );
         }
 
-        async function editConfig() {
+        /** Open the config editor; focusPlot, a plotList index, opens it at that plot's settings. */
+        async function editConfig(focusPlot) {
           if (!openModal) {
             status.textContent = "The host did not provide its configuration editor API.";
             return;
           }
-          const edited = await openPlotsConfigEditor({ config, tables, openModal });
+          const edited = await openPlotsConfigEditor({ config, tables, openModal, focusPlot });
           if (!edited) return;
           try {
             const checked = validatePlotsConfig(edited);
@@ -92,6 +109,7 @@ export function createPlugin(deps = {}) {
             const label = (Array.isArray(titleText) ? titleText.join(" ") : String(titleText ?? "")).trim() || `Plot ${result.index + 1}`;
             const card = element("section", { className: "plots-card", attrs: { "aria-label": label } });
             card.style.gridColumn = `span ${layoutSpan(result.plot)}`;
+            card.append(editPlotButton(result.index, () => editConfig(result.index)));
             if (result.error) {
               card.append(note(`Plot ${result.index + 1}: ${result.error}`));
             } else {
@@ -180,7 +198,12 @@ export function createPlugin(deps = {}) {
         style.textContent = `
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .plots-library-pin { margin:4px 0; font:11px var(--mono); opacity:0.7; }
-.plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
+.plots-card { position:relative; min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:30px 12px 12px; }
+/* The edit button sits in a strip of its own above the plot, so it never covers Vega's title or "…" menu. */
+/* An outlined square with an accent-coloured pencil, so it reads as a button at a glance; hover fills it. */
+.plots-card-edit { position:absolute; top:3px; left:7px; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--panel); color:var(--accent); cursor:pointer; }
+.plots-card-edit svg { width:16px; height:16px; fill:currentColor; }
+.plots-card-edit:hover, .plots-card-edit:focus-visible { border-color:var(--accent); background:var(--accent-soft); }
 .plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }
 .plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
 .plots-view.vega-embed.has-actions { height:320px; }

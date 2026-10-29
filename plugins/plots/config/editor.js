@@ -909,6 +909,10 @@ function ensureStyle() {
 .plots-editor-plot.collapsed .plots-editor-plot-toggle::before { transform: rotate(-45deg); margin: 0 0 0 -3px; }
 .plots-editor-plot-toggle:hover { border-color: var(--plot-hue); background: var(--panel); }
 .plots-editor-plot.collapsed { padding-bottom: 0; }
+/* A plot opened from the panel glows briefly in its own colour. */
+.plots-editor-plot.flash { animation: plots-editor-flash 1.6s ease-out; }
+@keyframes plots-editor-flash { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--plot-hue) 45%, transparent); } to { box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); } }
+@media (prefers-reduced-motion: reduce) { .plots-editor-plot.flash { animation-duration: 0.01s; } }
 .plots-editor-plot.collapsed > .plots-editor-plot-toolbar { margin-bottom: 0; border-bottom-color: transparent; }
 .plots-editor-plot.collapsed > .plots-editor-plot-body { display: none; }
 .plots-editor-plot-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1004,11 +1008,16 @@ function ensureStyle() {
   document.head.append(style);
 }
 
-/** Edit a plots config; null means the modal was cancelled. */
-export async function openPlotsConfigEditor({ config, tables, openModal }) {
+/**
+ * Edit a plots config; null means the modal was cancelled. focusPlot, a
+ * plotList index, opens the editor at that plot's settings.
+ */
+export async function openPlotsConfigEditor({ config, tables, openModal, focusPlot }) {
   ensureStyle();
   nextPlotHue = 0; // each opening colours plots by their saved order
   const state = createEditorState(config);
+  const focused = state.cards[focusPlot];
+  if (focused) Object.assign(focused, { collapsed: false, focusOnOpen: true });
   const tableSources = [...new Set((tables || []).map((table) => table.source))];
 
   while (true) {
@@ -1505,6 +1514,17 @@ export async function openPlotsConfigEditor({ config, tables, openModal }) {
             if (card.scrollIntoView) {
               delete card.scrollIntoView;
               queueMicrotask(() => cardNode.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+            }
+            // Opened from a plot in the panel: bring its card to the top, put the cursor in its
+            // title, and flash it so it is clear which plot this is. Waits a frame for the modal to mount.
+            if (card.focusOnOpen) {
+              delete card.focusOnOpen;
+              requestAnimationFrame(() => {
+                cardNode.scrollIntoView?.({ block: "start", behavior: "smooth" });
+                titleInput.focus({ preventScroll: true });
+                cardNode.classList.add("flash");
+                cardNode.addEventListener("animationend", () => cardNode.classList.remove("flash"), { once: true });
+              });
             }
           });
 

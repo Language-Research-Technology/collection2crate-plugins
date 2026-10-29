@@ -13,6 +13,22 @@ export function libraryPin(spec = PACKAGE.dependencies?.["ro-crate-plots"]) {
   return ref ? (/^[0-9a-f]{40}$/i.test(ref) ? ref.slice(0, 7) : ref) : spec;
 }
 
+/** A small pencil button that opens the config editor at one plot's settings. */
+function editPlotButton(index, onClick) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z");
+  svg.append(path);
+  const node = element("button", {
+    className: "plots-card-edit",
+    attrs: { type: "button", title: "Edit this plot's settings", "aria-label": `Edit plot ${index + 1} settings` },
+  }, [svg]);
+  node.addEventListener("click", onClick);
+  return node;
+}
+
 function afterLayout() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -31,7 +47,7 @@ export function createPlugin(deps = {}) {
         const plotHost = element("div", { className: "plots-grid" });
         const configure = button("Configure plots…", { primary: true, onClick: () => editConfig() });
         const topbar = element("div", { className: "actions" }, [configure]);
-        const empty = note("No plots configured yet. Choose Configure plots… to add a plot.");
+        const empty = note("No plots configured yet. Choose Add a plot below to create one.");
         const loading = note("Loading plots configuration…");
         const pin = element("p", {
           className: "field-hint plots-library-pin",
@@ -50,12 +66,13 @@ export function createPlugin(deps = {}) {
           );
         }
 
-        async function editConfig() {
+        /** Open the config editor; focus is a plotList index (that plot's settings) or "add" (Add a plot). */
+        async function editConfig(focus) {
           if (!openModal) {
             status.textContent = "The host did not provide its configuration editor API.";
             return;
           }
-          const edited = await openPlotsConfigEditor({ config, tables, openModal });
+          const edited = await openPlotsConfigEditor({ config, tables, openModal, focus });
           if (!edited) return;
           try {
             const checked = validatePlotsConfig(edited);
@@ -73,11 +90,21 @@ export function createPlugin(deps = {}) {
           }
         }
 
+        // A dashed tile after the last plot that opens the editor at Add a plot.
+        const addTile = () => {
+          const tile = element("button", {
+            className: "plots-add-tile",
+            attrs: { type: "button", title: "Open Configure plots at Add a plot" },
+          }, [element("span", { className: "plots-add-tile-icon", text: "＋", attrs: { "aria-hidden": "true" } }), element("span", { text: "Add a plot" })]);
+          tile.addEventListener("click", () => editConfig("add"));
+          return tile;
+        };
+
         async function renderPlots() {
           plotHost.replaceChildren();
           const { plots, missing } = await generatePlotSpecs(config, tables);
           if (!plots.length) {
-            plotHost.append(empty);
+            plotHost.append(empty, element("div", { className: "plots-grid-inner" }, [addTile()]));
             if (missing.length) status.textContent = `Configured datasets not currently loaded: ${missing.map((item) => item.name).join(", ")}.`;
             else if (!tables.length) status.textContent = "No tables loaded. Select an output folder containing roctable CSVs, then configure plots.";
             else status.textContent = "No plots configured yet.";
@@ -92,6 +119,7 @@ export function createPlugin(deps = {}) {
             const label = (Array.isArray(titleText) ? titleText.join(" ") : String(titleText ?? "")).trim() || `Plot ${result.index + 1}`;
             const card = element("section", { className: "plots-card", attrs: { "aria-label": label } });
             card.style.gridColumn = `span ${layoutSpan(result.plot)}`;
+            card.append(editPlotButton(result.index, () => editConfig(result.index)));
             if (result.error) {
               card.append(note(`Plot ${result.index + 1}: ${result.error}`));
             } else {
@@ -102,6 +130,7 @@ export function createPlugin(deps = {}) {
             }
             grid.append(card);
           }
+          grid.append(addTile());
           plotHost.append(grid);
           // Vega's container sizing needs the plot targets to be attached and
           // laid out; embedding while detached makes autosize measure zero.
@@ -180,7 +209,16 @@ export function createPlugin(deps = {}) {
         style.textContent = `
 .plots-grid-inner { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .plots-library-pin { margin:4px 0; font:11px var(--mono); opacity:0.7; }
-.plots-card { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; }
+.plots-card { position:relative; min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:30px 12px 12px; }
+/* The edit button sits in a strip of its own above the plot, so it never covers Vega's title or "…" menu. */
+/* An outlined square with an accent-coloured pencil, so it reads as a button at a glance; hover fills it. */
+.plots-card-edit { position:absolute; top:3px; left:7px; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--panel); color:var(--accent); cursor:pointer; }
+.plots-card-edit svg { width:16px; height:16px; fill:currentColor; }
+.plots-card-edit:hover, .plots-card-edit:focus-visible { border-color:var(--accent); background:var(--accent-soft); }
+/* Dashed and quiet beside the plots, turning accent on hover, like the editor's Add a plot panel. */
+.plots-add-tile { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; min-height:120px; border:1px dashed var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--muted); font:inherit; font-size:14px; font-weight:600; cursor:pointer; transition:border-color .15s ease, color .15s ease, background .15s ease; }
+.plots-add-tile-icon { font-size:24px; font-weight:400; line-height:1; }
+.plots-add-tile:hover, .plots-add-tile:focus-visible { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
 .plots-view { display:block; width:100%; min-width:0; min-height:220px; overflow:auto; }
 .plots-view.vega-embed { display:block; box-sizing:border-box; width:100%; max-width:100%; }
 .plots-view.vega-embed.has-actions { height:320px; }

@@ -42,6 +42,9 @@ user data in the selected collection folder and must survive rebuilds.
   action menu. It opens the same config editor with that plot's settings
   expanded, scrolled into view, its title focused, and the card briefly
   highlighted; the other plots stay collapsed.
+- After the last plot (or on its own when there are none), a dashed **Add a
+  plot** tile opens the config editor at its Add a plot section, scrolled into
+  view, with the plot type focused and the section briefly highlighted.
 - Use the host's modal and folder read/write APIs, following roctable's
   `config-tree-ui.js` and `openConfigTreeEditor` approach. The host passes the
   selected `dirHandle` in `ctx`; the plugin receives `openModal`,

@@ -909,10 +909,10 @@ function ensureStyle() {
 .plots-editor-plot.collapsed .plots-editor-plot-toggle::before { transform: rotate(-45deg); margin: 0 0 0 -3px; }
 .plots-editor-plot-toggle:hover { border-color: var(--plot-hue); background: var(--panel); }
 .plots-editor-plot.collapsed { padding-bottom: 0; }
-/* A plot opened from the panel glows briefly in its own colour. */
-.plots-editor-plot.flash { animation: plots-editor-flash 1.6s ease-out; }
-@keyframes plots-editor-flash { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--plot-hue) 45%, transparent); } to { box-shadow: 0 1px 4px rgb(0 0 0 / 0.08); } }
-@media (prefers-reduced-motion: reduce) { .plots-editor-plot.flash { animation-duration: 0.01s; } }
+/* A plot (or Add a plot) opened from the panel glows briefly in its own colour, then settles to its usual shadow. */
+.plots-editor-plot.flash, .plots-editor-add.flash { animation: plots-editor-flash 1.6s ease-out; }
+@keyframes plots-editor-flash { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--plot-hue, var(--accent)) 45%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .plots-editor-plot.flash, .plots-editor-add.flash { animation-duration: 0.01s; } }
 .plots-editor-plot.collapsed > .plots-editor-plot-toolbar { margin-bottom: 0; border-bottom-color: transparent; }
 .plots-editor-plot.collapsed > .plots-editor-plot-body { display: none; }
 .plots-editor-plot-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1009,15 +1009,17 @@ function ensureStyle() {
 }
 
 /**
- * Edit a plots config; null means the modal was cancelled. focusPlot, a
- * plotList index, opens the editor at that plot's settings.
+ * Edit a plots config; null means the modal was cancelled. focus opens the
+ * editor at one place: a plotList index for that plot's settings, or "add"
+ * for the Add a plot section.
  */
-export async function openPlotsConfigEditor({ config, tables, openModal, focusPlot }) {
+export async function openPlotsConfigEditor({ config, tables, openModal, focus }) {
   ensureStyle();
   nextPlotHue = 0; // each opening colours plots by their saved order
   const state = createEditorState(config);
-  const focused = state.cards[focusPlot];
+  const focused = typeof focus === "number" ? state.cards[focus] : undefined;
   if (focused) Object.assign(focused, { collapsed: false, focusOnOpen: true });
+  let focusAdd = focus === "add";
   const tableSources = [...new Set((tables || []).map((table) => table.source))];
 
   while (true) {
@@ -1555,7 +1557,7 @@ export async function openPlotsConfigEditor({ config, tables, openModal, focusPl
             },
           });
           addPlotButton.disabled = !state.datasets.length;
-          plots.append(element("section", { className: "plots-editor-add", attrs: { "aria-label": "Add a plot" } }, [
+          const addSection = element("section", { className: "plots-editor-add", attrs: { "aria-label": "Add a plot" } }, [
             element("h4", { className: "plots-editor-add-title", text: "Add a plot" }),
             element("div", { className: "plots-editor-add-row" }, [
               field("Plot type", addType),
@@ -1563,7 +1565,18 @@ export async function openPlotsConfigEditor({ config, tables, openModal, focusPl
               addPlotButton,
             ]),
             ...(state.datasets.length ? [] : [element("p", { className: "field-hint", text: "Add a dataset above first." })]),
-          ]));
+          ]);
+          plots.append(addSection);
+          // Opened from the panel's Add a plot tile: same treatment as a plot opened from its card.
+          if (focusAdd) {
+            focusAdd = false;
+            requestAnimationFrame(() => {
+              addSection.scrollIntoView?.({ block: "center", behavior: "smooth" });
+              addType.focus({ preventScroll: true });
+              addSection.classList.add("flash");
+              addSection.addEventListener("animationend", () => addSection.classList.remove("flash"), { once: true });
+            });
+          }
         }
 
         function movePlot(index, amount) {
